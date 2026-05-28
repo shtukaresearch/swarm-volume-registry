@@ -37,6 +37,7 @@ Separate chunk-signer addresses (owner ≠ signer) are supported but considered 
 
 - [`docs/usage.md`](./docs/usage.md) — integration reference. Role profiles, setup commands, API reference, event catalogue, retirement and revocation semantics, cost estimation, Bee upload guide.
 - [`docs/DESIGN.md`](./docs/DESIGN.md) — architecture. Data model, invariants, threat model, trigger semantics, survival-floor derivation, Postage constraints.
+- [`contracts/test/README.md`](./contracts/test/README.md) — testing strategy, mapping from `DESIGN.md` sections and invariants to test files, fork-test setup, coverage notes.
 
 ## Repository layout
 

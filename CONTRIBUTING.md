@@ -24,6 +24,11 @@ FOUNDRY_FORK_URL=$SEPOLIA_RPC forge test \
     --match-path test/fork/ForkRegistry.t.sol
 ```
 
+See [`contracts/test/README.md`](./contracts/test/README.md) for the
+testing strategy, how each section of `DESIGN.md` maps to test files,
+and the file-level breakdown of the example, invariant, and fork
+suites.
+
 Format check (also enforced in CI):
 
 ```sh

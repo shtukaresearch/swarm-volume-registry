@@ -159,9 +159,19 @@ per suite.
 
 ### Fork tests
 
-[`fork/ForkRegistry.t.sol`](fork/ForkRegistry.t.sol). Skipped unless
-`FOUNDRY_FORK_URL` (or `SEPOLIA_RPC_URL`) is set; tests no-op via a
-`forkOnly` modifier when `block.chainid != 11155111`.
+[`fork/ForkRegistry.t.sol`](fork/ForkRegistry.t.sol). Chain-agnostic;
+configure the target via environment variables:
+
+| Var | Required? | Purpose |
+|---|---|---|
+| `FORK_POSTAGE_STAMP` | yes | Live `PostageStamp` address on the forked chain. |
+| `FORK_BZZ` | yes | Live `BZZ` ERC20 address on the forked chain. |
+| `FORK_MULTICALL3` | optional | Defaults to the canonical `0xcA11bde05977b3631167028862bE2a173976CA11`. |
+| `FORK_GRACE_BLOCKS` | optional | Registry constructor arg. Defaults to `PostageStamp.minimumValidityBlocks()` on the target chain. |
+
+The `forkOnly` modifier skips every test when `FORK_POSTAGE_STAMP` is
+unset or has no code at the resolved address — so plain `forge test`
+against the hermetic EVM is a silent skip rather than a failure.
 
 Fork-safe subset:
 
@@ -173,8 +183,9 @@ Fork-safe subset:
 
 Parity assertions at `setUp` (run on every fork test):
 
-- Code present at the canonical Multicall3 address.
-- `PostageStamp.minimumValidityBlocks() == 12`.
+- Code present at `FORK_POSTAGE_STAMP`.
+- Code present at `FORK_MULTICALL3` (canonical address by default).
+- `FORK_GRACE_BLOCKS ≥ PostageStamp.minimumValidityBlocks()` on the target chain.
 - `PostageStamp.priceOracle()` resolves to a non-zero address.
 
 ## Running
@@ -183,9 +194,13 @@ Parity assertions at `setUp` (run on every fork test):
 cd contracts
 forge test                                # all L1 (unit + invariant)
 forge test --no-match-path 'test/fork/*'  # L1 only, skip fork
-FOUNDRY_FORK_URL=$SEPOLIA_RPC forge test \
+FORK_POSTAGE_STAMP=0x... FORK_BZZ=0x... \
+    forge test --fork-url $RPC_URL \
     --match-path test/fork/ForkRegistry.t.sol
 ```
+
+See `docs/usage.md` §2 for current `FORK_POSTAGE_STAMP` / `FORK_BZZ`
+values per chain.
 
 Clean-cache L1 run: ~5 min (Solc + invariant fuzzing). Subsequent runs
 cache-hit.

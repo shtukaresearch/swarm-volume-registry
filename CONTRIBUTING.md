@@ -17,12 +17,19 @@ forge build
 forge test
 ```
 
-Fork tests against live Sepolia (skipped without the env var):
+Fork tests against a live chain. Configured via env vars; silently
+skipped when `FORK_POSTAGE_STAMP` is unset or has no code at the
+configured address.
 
 ```sh
-FOUNDRY_FORK_URL=$SEPOLIA_RPC forge test \
+FORK_POSTAGE_STAMP=0x... FORK_BZZ=0x... \
+    forge test --fork-url $RPC_URL \
     --match-path test/fork/ForkRegistry.t.sol
 ```
+
+See [`contracts/test/README.md`](./contracts/test/README.md#fork-tests)
+for the full env-var list (`FORK_MULTICALL3`, `FORK_GRACE_BLOCKS`) and
+[`docs/usage.md`](./docs/usage.md) §2 for current addresses per chain.
 
 See [`contracts/test/README.md`](./contracts/test/README.md) for the
 testing strategy, how each section of `DESIGN.md` maps to test files,

@@ -5,12 +5,25 @@ import {Test} from "forge-std/Test.sol";
 
 import {VolumeRegistry} from "../../src/VolumeRegistry.sol";
 
-/// @notice Fork-mode subset against live Sepolia.
+/// @notice Fork-mode subset against a live chain.
 ///
-/// Skipped unless `FOUNDRY_FORK_URL` (or `SEPOLIA_RPC_URL`) is set in the
-/// environment. Purpose: catch ABI/parameter drift between our vendored
-/// artifacts and the actual live Sepolia contracts. Correctness coverage
-/// stays in L1.
+/// Purpose: catch ABI/parameter drift between the pinned storage-incentives
+/// submodule and the actual live PostageStamp/BZZ bytecode. Correctness
+/// coverage stays in L1.
+///
+/// Requires both a fork URL (`forge test --fork-url $RPC`) and addresses
+/// for the contracts under test:
+///
+///   - `FORK_POSTAGE_STAMP` (required) — live PostageStamp address.
+///   - `FORK_BZZ` (required)           — live BZZ ERC20 address.
+///   - `FORK_MULTICALL3` (optional)    — defaults to the canonical
+///                                       0xcA11bde05977b3631167028862bE2a173976CA11.
+///   - `FORK_GRACE_BLOCKS` (optional)  — registry constructor arg;
+///                                       defaults to PostageStamp.minimumValidityBlocks().
+///
+/// All tests no-op if `FORK_POSTAGE_STAMP` is unset or its address has no
+/// code on the active chain (i.e. plain `forge test` against a hermetic
+/// EVM is a silent skip).
 ///
 /// Fork-safe subset:
 ///   - test_createVolume_happy
@@ -38,13 +51,16 @@ interface IPostageStamp {
 }
 
 contract ForkRegistryTest is Test {
-    // Sepolia addresses; see docs/usage.md §2.
-    address internal constant SEP_POSTAGE = 0xcdfdC3752caaA826fE62531E0000C40546eC56A6;
-    address internal constant SEP_BZZ = 0x543dDb01Ba47acB11de34891cD86B675F04840db;
-    address internal constant MULTICALL3 = 0xcA11bde05977b3631167028862bE2a173976CA11;
+    // Canonical Multicall3 (deterministic deployment, same address on every
+    // EVM chain that has it). Used only as the default when FORK_MULTICALL3
+    // is unset.
+    address internal constant CANONICAL_MULTICALL3 = 0xcA11bde05977b3631167028862bE2a173976CA11;
 
-    // Matches the grace-blocks value of the live Sepolia VolumeRegistry deployment.
-    uint64 internal constant FORK_GRACE_BLOCKS = 12;
+    // Populated from env in setUp when the fork is active.
+    address internal postageAddr;
+    address internal bzzAddr;
+    address internal multicall3Addr;
+    uint64 internal graceBlocks;
 
     VolumeRegistry internal registry;
     IERC20 internal bzz;
@@ -59,36 +75,46 @@ contract ForkRegistryTest is Test {
 
     modifier forkOnly() {
         if (!_forkActive()) {
-            emit log("fork test skipped - no FOUNDRY_FORK_URL");
+            emit log("fork test skipped - FORK_POSTAGE_STAMP unset or no code at address");
             return;
         }
         _;
     }
 
     function _forkActive() internal view returns (bool) {
-        // foundry sets block.chainid correctly against the fork; sepolia = 11155111.
-        return block.chainid == 11155111;
+        address p = vm.envOr("FORK_POSTAGE_STAMP", address(0));
+        return p != address(0) && p.code.length > 0;
     }
 
     function setUp() public {
         if (!_forkActive()) return;
 
-        bzz = IERC20(SEP_BZZ);
-        stamp = IPostageStamp(SEP_POSTAGE);
+        postageAddr = vm.envAddress("FORK_POSTAGE_STAMP");
+        bzzAddr = vm.envAddress("FORK_BZZ");
+        multicall3Addr = vm.envOr("FORK_MULTICALL3", CANONICAL_MULTICALL3);
 
-        // Parity: Multicall3 bytecode present.
-        assertGt(SEP_POSTAGE.code.length, 0, "PostageStamp code missing on fork");
-        assertGt(MULTICALL3.code.length, 0, "Multicall3 missing at canonical address");
-        // Parity: minimumValidityBlocks == 12.
-        assertEq(stamp.minimumValidityBlocks(), uint64(12), "Sepolia minValidityBlocks drift");
-        // Parity: PriceOracle discoverable.
+        bzz = IERC20(bzzAddr);
+        stamp = IPostageStamp(postageAddr);
+
+        // FORK_GRACE_BLOCKS defaults to the chain's minimumValidityBlocks
+        // (smallest value the registry constructor will accept).
+        graceBlocks = uint64(vm.envOr("FORK_GRACE_BLOCKS", uint256(stamp.minimumValidityBlocks())));
+
+        // Parity assertions.
+        assertGt(postageAddr.code.length, 0, "PostageStamp code missing on fork");
+        assertGt(multicall3Addr.code.length, 0, "Multicall3 missing at configured address");
+        assertGe(
+            uint256(graceBlocks),
+            uint256(stamp.minimumValidityBlocks()),
+            "FORK_GRACE_BLOCKS below chain's minimumValidityBlocks"
+        );
         address oracle = stamp.priceOracle();
         assertTrue(oracle != address(0), "PriceOracle not discoverable");
 
-        registry = new VolumeRegistry(SEP_POSTAGE, SEP_BZZ, FORK_GRACE_BLOCKS);
+        registry = new VolumeRegistry(postageAddr, bzzAddr, graceBlocks);
 
         // Fund + activate.
-        deal(SEP_BZZ, payer, 1e30);
+        deal(bzzAddr, payer, 1e30);
         vm.prank(payer);
         bzz.approve(address(registry), type(uint256).max);
         vm.prank(owner);
@@ -98,7 +124,7 @@ contract ForkRegistryTest is Test {
     }
 
     function _charge() internal view returns (uint256) {
-        return uint256(stamp.lastPrice()) * FORK_GRACE_BLOCKS * (uint256(1) << DEFAULT_DEPTH);
+        return uint256(stamp.lastPrice()) * graceBlocks * (uint256(1) << DEFAULT_DEPTH);
     }
 
     function test_fork_createVolume_happy() public forkOnly {

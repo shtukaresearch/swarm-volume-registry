@@ -255,7 +255,7 @@ No admin role, no upgradeability. Fresh deploy per chain. Target chain: **Gnosis
 
 `graceBlocks` is the runway, in Postage per-chunk-balance-at-current-price units, that the registry charges up front and tops up to. If price stayed flat, a freshly-topped-up volume would survive exactly `graceBlocks` more blocks before its batch dies. Under a rising price, the realised runway is shorter. This section bounds the worst-case shortfall.
 
-**Guarantee we document to users.** If the altruistic gas-boy never returns after a top-up, the batch dies at block `t0 + T`, where `T / graceBlocks ≥ f` in the worst case permitted by Swarm's `PriceOracle`.
+**Guarantee we document to users.** If no keeper ever calls `trigger` again after a top-up, the batch dies at block `t0 + T`, where `T / graceBlocks ≥ f` in the worst case permitted by Swarm's `PriceOracle`.
 
 **Derivation.** At top-up, per-chunk balance is `graceBlocks × p0`, where `p0` is the oracle price at that moment. Drain to time `T` is `∫_0^T p(s) ds`. Swarm's `PriceOracle` (`ethersphere/storage-incentives/src/PriceOracle.sol`) raises price by at most factor `K_max` per round of `U` blocks; skipped rounds apply `K_max` retroactively to each skipped round, so the compound ceiling is genuine. Bounding the drain by a continuous exponential `p(t) ≤ p0 × e^(λt)` with `λ = ln(K_max)/U`:
 
@@ -291,7 +291,7 @@ So the registry guarantees that a volume whose last successful top-up was at blo
 
 The registry exposes a permissionless keeper surface (see §7.3): `trigger(volumeId)`, `trigger(bytes32[])`, `reap(volumeId)`, plus the `getActiveVolumes` view for enumeration. Any caller may drive it; the contract makes no assumptions about who runs a keeper, how often, or what policy they apply.
 
-The specific altruistic-operator service that this project ships (Cloudflare-hosted, cron-driven, chain and filter policy) is out of scope for this document and is described in its own design note. That service is one of possibly many keepers; the registry is neutral infrastructure.
+Specific keeper implementations (cron schedule, chain and filter policy, alerting) are out of scope for this document. The registry is neutral infrastructure and is designed to support many concurrent keepers without coordination.
 
 ## 12. Symmetries captured
 

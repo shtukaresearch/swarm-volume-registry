@@ -51,3 +51,7 @@ docs/             Design and integration documentation
 ```
 
 See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for build, test, and deploy instructions.
+
+## Contributors
+
+The `VolumeRegistry` contract and the L1 / L2 test suite were originally implemented by [@talentlessguy](https://github.com/talentlessguy). See the [contributors graph](https://github.com/shtukaresearch/swarm-volume-registry/graphs/contributors) for everyone who has pushed to this repo.

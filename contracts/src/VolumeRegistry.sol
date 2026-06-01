@@ -332,8 +332,7 @@ contract VolumeRegistry {
         // Step 2 — read Postage batch.
         (
             address bOwner,
-            uint8 bDepth,
-            , // bucketDepth
+            uint8 bDepth,, // bucketDepth
             , // immutableFlag
             uint256 bNormalisedBalance,
         ) = postage.batches(volumeId);

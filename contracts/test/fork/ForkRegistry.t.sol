@@ -43,10 +43,7 @@ interface IPostageStamp {
     function minimumValidityBlocks() external view returns (uint64);
     function lastPrice() external view returns (uint64);
     function priceOracle() external view returns (address);
-    function batches(bytes32)
-        external
-        view
-        returns (address, uint8, uint8, bool, uint256, uint256);
+    function batches(bytes32) external view returns (address, uint8, uint8, bool, uint256, uint256);
     function currentTotalOutPayment() external view returns (uint256);
 }
 

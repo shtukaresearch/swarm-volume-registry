@@ -74,7 +74,12 @@ contract SurvivalFloorTest is RegistryFixture {
     ///      Requires a starting price large enough that
     ///      `p * kNum / kDen > p` (≳ 1248 given kNum/kDen≈1.000802), else
     ///      integer truncation flattens growth. Survival tests coerce this.
-    function _runWorstCasePriceHarness(bytes32 id, uint64, /* graceBlocks */ uint256 safetyCap)
+    function _runWorstCasePriceHarness(
+        bytes32 id,
+        uint64,
+        /* graceBlocks */
+        uint256 safetyCap
+    )
         internal
         returns (uint256 T)
     {

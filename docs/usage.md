@@ -39,7 +39,7 @@ The contract does not custody BZZ, does not sign chunks, is not upgradeable, and
 
 | Contract | Address |
 |---|---|
-| `VolumeRegistry` | `0x0000000000000000000000000000000000000000` (placeholder; not yet deployed) |
+| `VolumeRegistry` | `0x9639ae4c7a8fa9efe585738d516a3915ddd02aad` |
 | `PostageStamp` | `0x45a1502382541Cd610CC9068e88727426b696293` |
 | `BZZ` | `0xdBF3Ea6F5beE45c02255B2c26a16F300502F68da` |
 | `PriceOracle` | `0x47EeF336e7fE5bED98499A4696bce8f28c1B0a8b` |

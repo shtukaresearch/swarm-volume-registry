@@ -8,7 +8,7 @@ The contract does not custody BZZ, does not sign chunks, has no admin role, and 
 
 | Chain | `VolumeRegistry` | `graceBlocks` |
 |---|---|---|
-| Gnosis (chain 100) | *not yet deployed* | `17280` (≈ 24 h at 5-second blocks) |
+| Gnosis (chain 100) | `0x9639ae4c7a8fa9efe585738d516a3915ddd02aad` | `17280` (≈ 24 h at 5-second blocks) |
 | Sepolia (chain 11155111) | `0x3a99b4b52a4bd75760667219ea93c627051b1af8` | `12` (≈ 2.4 min at 12-second blocks) |
 
 Companion-contract addresses (`PostageStamp`, `BZZ`, `PriceOracle`) and runtime discovery snippets are in [`docs/usage.md`](./docs/usage.md) §2. `graceBlocks` is constructor-immutable; a different runway target requires a fresh deployment.

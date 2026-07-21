@@ -28,8 +28,8 @@ from .model import (
     Snapshot,
 )
 
-#: Artifact-structure version (``docs/SCHEMA.md`` §2). Semver; synced fleet-wide.
-SCHEMA_VERSION = "1.0.0"
+#: Artifact-structure version (``docs/SCHEMA.md`` §2). ``major.minor``; synced fleet-wide.
+SCHEMA_VERSION = "1.0"
 
 
 def _iso(dt: datetime) -> str:

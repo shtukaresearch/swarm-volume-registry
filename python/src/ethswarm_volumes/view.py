@@ -1,7 +1,7 @@
 """The client read path: fold an artifact entry into the resolved summary (``docs/SCHEMA.md`` §4).
 
 Web3-free and network-free — the dashboard and the CLI both build this same view-model from
-the single fetched artifact (``docs/ARCHITECTURE.md`` §7, ADR-0009). :func:`resolve_view`
+the single fetched artifact (``docs/CLIENT.md``, ADR-0009). :func:`resolve_view`
 produces the ``--json`` object; :func:`render_text` renders the human table over it.
 
 Folds follow the flow-vs-stock split: fee volume (a flow) sums across a bucket; capacity and
@@ -26,7 +26,7 @@ _BINARY_UNITS = (("TiB", 2**40), ("GiB", 2**30), ("MiB", 2**20), ("KiB", 2**10),
 
 @dataclass(frozen=True)
 class ViewOptions:
-    """Resolved ``stat`` options (``docs/ARCHITECTURE.md`` §7)."""
+    """Resolved ``stat`` options (``docs/CLIENT.md``)."""
 
     bucket_width: str = "1d"
     bucket_count: int = 30
@@ -62,7 +62,7 @@ def resolve_view(entry: ArtifactEntry, opts: ViewOptions) -> dict:
     """Fold ``entry`` into the ``docs/SCHEMA.md`` §4 view-model under ``opts``.
 
     Raises ``ValueError`` if ``opts.fiat`` names a currency the artifact did not bake
-    (``fiat_currencies`` bounds the choice — ``docs/ARCHITECTURE.md`` §7).
+    (``fiat_currencies`` bounds the choice — ``docs/CLIENT.md``).
     """
     if opts.fiat is not None and opts.fiat not in entry.fiat_currencies:
         raise ValueError(

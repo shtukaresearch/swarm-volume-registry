@@ -1,8 +1,8 @@
 """The web3 acquisition layer: fetch + filter logs up to ``finalized``.
 
-Part of the isolated web3 layer (``docs/ARCHITECTURE.md`` §4.1). Reads only to the
+Part of the isolated web3 layer (``docs/ARCHITECTURE.md`` §2). Reads only to the
 chain's ``finalized`` block, so there is no reorg handling. The acquisition filter
-(``docs/ARCHITECTURE.md`` §4.3) is: all registry events, plus BZZ ``Transfer`` logs
+(``docs/data-model/event-log.md``) is: all registry events, plus BZZ ``Transfer`` logs
 with ``from == registry`` and ``to == postage``. Logs are acquired per event type
 (topic-filtered) and, once decoded, stored that way — one log per type
 (:class:`~ethswarm_volumes.model.EventLog`), never merged into a single relation.
@@ -69,7 +69,8 @@ def acquire_logs(
 ) -> list[dict[str, Any]]:
     """Fetch the filtered raw logs from ``from_block`` up to the head block.
 
-    Range-chunked by ``chunk_size``. Applies the §4.3 acquisition filter — every registry
+    Range-chunked by ``chunk_size``. Applies the ``docs/data-model/event-log.md`` acquisition
+    filter — every registry
     event (no topic filter on the registry address), plus the canonical fee leg: BZZ
     ``Transfer`` logs with ``from == registry`` and ``to == postage`` (server-side topic
     filter).

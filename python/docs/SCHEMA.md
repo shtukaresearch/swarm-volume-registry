@@ -1,49 +1,28 @@
 # Volume Registry Data API — Artifact Schema
 
-This document specifies the wire format the indexer writes and the clients read. It is
-the contract referenced by [`ARCHITECTURE.md`](./ARCHITECTURE.md). Two formats are
-defined: the **published artifact** (one file) and the client's **`--json` summary**
-(the resolved view-model).
+This document specifies the wire format the indexer writes and the clients read. It is the contract referenced by [`ARCHITECTURE.md`](./ARCHITECTURE.md). Two formats are defined: the **published artifact** (one file) and the client's **`--json` summary** (the resolved view-model).
 
 ## 1. Conventions
 
-- **One file.** All deployments live in a single JSON document. `schema_version` and
-  `generated_at` appear once at the top; each deployment is a self-contained entry.
-- **Full daily history from genesis.** Each entry carries every UTC day from the
-  deployment's genesis day through `as_of` — the artifact is not pre-windowed. Clients
-  slice and fold locally, so "since deployment", arbitrary windows, and any
-  `--bucket-width` / `--bucket-count` are all answered without refetching. Size is small
-  (days × a few fields).
+- **One file.** All deployments live in a single JSON document. `schema_version` and `generated_at` appear once at the top; each deployment is a self-contained entry.
+- **Full daily history from genesis.** Each entry carries every UTC day from the deployment's genesis day through `as_of` — the artifact is not pre-windowed. Clients slice and fold locally, so "since deployment", arbitrary windows, and any `--bucket-width` / `--bucket-count` are all answered without refetching. Size is small (days × a few fields).
 - **UTC calendar day.** `date` is `"YYYY-MM-DD"`; a day boundary is UTC midnight.
-- **Amounts are plain JSON numbers in BZZ.** Not PLUR, not strings. Floating point is
-  fine; rounding is fine; precision below ~1 BZZ/day is not guaranteed. Byte counts are
-  likewise plain numbers.
-- **Partial edges.** The genesis day and the final day (up to `as_of.ts`) are partial.
-  The final `date` equals `as_of`'s UTC day; clients should treat the last bucket as
-  in-progress.
-- **Fiat is baked, historical, per day.** `price_daily` gives fiat per **1 BZZ** for each
-  UTC day; fee-volume-in-fiat is the per-day product summed over the slice. Clients need
-  no network access and no "current" rate.
+- **Amounts are plain JSON numbers in BZZ.** Not PLUR, not strings. Floating point is fine; rounding is fine; precision below ~1 BZZ/day is not guaranteed. Byte counts are likewise plain numbers.
+- **Partial edges.** The genesis day and the final day (up to `as_of.ts`) are partial. The final `date` equals `as_of`'s UTC day; clients should treat the last bucket as in-progress.
+- **Fiat is baked, historical, per day.** `price_daily` gives fiat per **1 BZZ** for each UTC day; fee-volume-in-fiat is the per-day product summed over the slice. Clients need no network access and no "current" rate.
 
 ## 2. Versioning
 
-- `schema_version` (top level) versions the **artifact structure** and follows semver:
-  **major** = breaking kernel change; **minor** = additive optional section; **patch** =
-  non-structural. It is synced fleet-wide (every entry is regenerated at the current
-  version each publish).
-- `registry_version` (per entry) names the **contract** variant. It is orthogonal to
-  `schema_version` and heterogeneous across deployments.
-- The **kernel** — `snapshot` plus the four daily series — is stable across contract
-  versions. Version-specific facts appear only under `extra` and as additive optional
-  sections.
-- Clients accept an equal major, ignore unknown keys (forward-compatible on minor), and
-  refuse a higher major.
+- `schema_version` (top level) versions the **artifact structure** as `major.minor`: **major** = breaking kernel change; **minor** = additive optional section. There is no patch level — a structure has only these two client-relevant states. It is synced fleet-wide (every entry is regenerated at the current version each publish).
+- `registry_version` (per entry) names the **contract** variant. It is orthogonal to `schema_version` and heterogeneous across deployments.
+- The **kernel** — `snapshot` plus the four daily series — is stable across contract versions. Version-specific facts appear only under `extra` and as additive optional sections.
+- Clients accept an equal major, ignore unknown keys (forward-compatible on minor), and refuse a higher major.
 
 ## 3. Published artifact
 
 ```jsonc
 {
-  "schema_version": "1.0.0",                 // semver; artifact structure; synced fleet-wide
+  "schema_version": "1.0",                   // major.minor; artifact structure; synced fleet-wide
   "generated_at": "2026-06-09T12:00:00Z",    // UTC ISO 8601; publish time
 
   "deployments": [
@@ -102,7 +81,7 @@ defined: the **published artifact** (one file) and the client's **`--json` summa
 
 | Path | Type | Notes |
 |---|---|---|
-| `schema_version` | string (semver) | artifact structure version; synced fleet-wide |
+| `schema_version` | string (`major.minor`) | artifact structure version; synced fleet-wide |
 | `generated_at` | string (UTC ISO 8601) | publish time |
 | `deployments[]` | array | one self-contained entry per deployment |
 | `…label` | string | human selector; unique within the file |
@@ -124,9 +103,7 @@ defined: the **published artifact** (one file) and the client's **`--json` summa
 
 ## 4. Client `--json` summary (resolved view-model)
 
-`ethswarm-volumes stat --json` emits the resolved summary after applying the options — the same
-numbers the human view renders, and the same view-model the dashboard builds. `unit`
-flips to `"BZZ"` and the `fiat` fields drop when `--fiat none`.
+`ethswarm-volumes stat --json` emits the resolved summary after applying the options — the same numbers the human view renders, and the same view-model the dashboard builds. `unit` flips to `"BZZ"` and the `fiat` fields drop when `--fiat none`.
 
 ```jsonc
 {
@@ -160,11 +137,7 @@ flips to `"BZZ"` and the `fiat` fields drop when `--fiat none`.
 
 Resolution rules (all client-side, against §3):
 
-- **Fee volume window/total** — sum `fee_volume_daily.bzz` over the slice; in fiat, sum
-  `bzz × price_daily[ccy]` per day (historical per-bucket).
-- **Capacity** — `basis` selects `nominal_bytes` or `effective_bytes`; `display` formats
-  `bytes` per `capacity_unit`; series samples `capacity_daily` at bucket edges.
-- **Accounts** — `authorized` from `snapshot` / `accounts_daily`; `paid_in_window` copied
-  through from `snapshot` (fixed N, not derived from the bucket options).
-- **Folds** — flows (fee volume) sum across a bucket; stocks (capacity, accounts) sample
-  the bucket's right edge.
+- **Fee volume window/total** — sum `fee_volume_daily.bzz` over the slice; in fiat, sum `bzz × price_daily[ccy]` per day (historical per-bucket).
+- **Capacity** — `basis` selects `nominal_bytes` or `effective_bytes`; `display` formats `bytes` per `capacity_unit`; series samples `capacity_daily` at bucket edges.
+- **Accounts** — `authorized` from `snapshot` / `accounts_daily`; `paid_in_window` copied through from `snapshot` (fixed N, not derived from the bucket options).
+- **Folds** — flows (fee volume) sum across a bucket; stocks (capacity, accounts) sample the bucket's right edge.

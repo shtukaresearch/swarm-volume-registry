@@ -1,7 +1,8 @@
 """The ``event_log`` cache: append-only JSONLines under a configurable store directory.
 
-The persisted store is a **cache**, not a source of truth (``docs/ARCHITECTURE.md``
-§4.3.1): one append-only JSONLines file per ``(deployment, event_type)`` plus a
+The persisted store is a **cache**, not a source of truth
+(``docs/data-model/event-log.md``): one append-only JSONLines file per
+``(deployment, event_type)`` plus a
 ``head.json`` per deployment, all under a store directory. It is fully reconstructible by
 re-syncing from genesis, so loss or corruption is non-fatal. There is no database — the
 data is small and append-only and the projector folds it linearly in Python.
@@ -86,7 +87,8 @@ def _row_to_json(row: EventLogRow) -> dict:
     """One ``EventLogRow`` as a JSON-serializable dict (``block_ts`` as ISO 8601).
 
     ``deployment_id`` and ``event_name`` are written too so a line is self-describing,
-    though on load they are taken from the file's path (the partition key, §4.3).
+    though on load they are taken from the file's path (the partition key,
+    ``docs/data-model/event-log.md``).
     """
     return {
         "deployment_id": list(row.deployment_id),

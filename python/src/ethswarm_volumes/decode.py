@@ -1,8 +1,8 @@
-"""The web3 decode layer: raw logs -> ``EventLogRow`` (``docs/ARCHITECTURE.md`` §4.1).
+"""The web3 decode layer: raw logs -> ``EventLogRow`` (``docs/ARCHITECTURE.md`` §2).
 
 The *mechanical* ABI decode (topics/data split, field order, types) is delegated to a
 trusted ABI library (web3.py's :func:`get_event_data`) driven by the **compiled contract
-ABI** — see ``ARCHITECTURE.md`` §4.1 for the build dependency that implies. Nothing
+ABI** — see ``ARCHITECTURE.md`` §2 for the build dependency that implies. Nothing
 bespoke there.
 
 The bespoke, tested part is :func:`map_event_args` — a per-version mapping from the
@@ -13,7 +13,7 @@ fixtures.
 
 Decode is per-log: each :func:`decode_log` yields one :class:`~ethswarm_volumes.model.EventLogRow`.
 The rows land in the per-event-type ``event_log`` (``EventLog.from_rows``;
-``docs/ARCHITECTURE.md`` §4.3), grouped by ``event_name`` — this layer does no merging.
+``docs/data-model/event-log.md``), grouped by ``event_name`` — this layer does no merging.
 
 The event ABIs below are the **version-pinned reference data** the architecture calls a
 build dependency: they are the events ABI of ``contracts/out/VolumeRegistry.sol`` plus the

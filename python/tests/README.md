@@ -29,7 +29,8 @@ Run: `uv run --group dev pytest`. Needs `anvil` + `forge build` artifacts (`cont
 
 `test_decoder.py::test_decoded_rows_conform_to_schema` — drives `drive_basic`, acquires the real
 logs, decodes them, and asserts each `EventLogRow`: known `event_name`, exact `args` keys per the
-§4.3 catalogue, enum→name, lowercased addresses, integer amounts, tz-aware `block_ts`.
+[`data-model/event-log.md`](../docs/data-model/event-log.md) catalogue, enum→name, lowercased
+addresses, integer amounts, tz-aware `block_ts`.
 
 ### Tier 2 — decoder + projector vs node state (`docs/TESTING.md` §3)
 

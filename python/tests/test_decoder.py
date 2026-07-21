@@ -2,7 +2,7 @@
 
 Drives a real timeline on the node, pulls the registry + fee-leg logs through the production
 acquisition path (real ``eth_getLogs``), decodes each, and validates that the decoded
-``EventLogRow`` conforms to the ``event_log`` schema (``ARCHITECTURE.md`` §4.3). There is no
+``EventLogRow`` conforms to the ``event_log`` schema (``data-model/event-log.md``). There is no
 value oracle for a decoder in isolation — schema conformance is the ceiling — so that is what
 this tier asserts; the *values* are checked end-to-end against node state in tier 2.
 
@@ -17,7 +17,7 @@ from ethswarm_volumes import acquire, decode
 
 import harness as H
 
-#: event_name -> the exact ``args`` key set (ARCHITECTURE.md §4.3 catalogue).
+#: event_name -> the exact ``args`` key set (data-model/event-log.md catalogue).
 CATALOGUE = {
     "VolumeCreated": {"volume_id", "owner", "chunk_signer", "depth", "ttl_expiry"},
     "VolumeRetired": {"volume_id", "reason"},

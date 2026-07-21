@@ -1,6 +1,6 @@
 """The deployment registry: which ``VolumeRegistry`` deployments to index.
 
-A deployment entry is a **reduced artifact** (``docs/ARCHITECTURE.md`` §4.2): the
+A deployment entry is a **reduced artifact** (``docs/data-model/deployment-registry.md``): the
 contract-agnostic identity only — ``label``, ``chain_id``, ``registry``,
 ``registry_version`` and the deployment ``genesis_block``. Everything else in the artifact
 is sync output: the ``extra`` wiring (``postage`` / ``bzz`` / ``price_oracle`` /
@@ -27,7 +27,8 @@ from .model import DeploymentId
 
 @dataclass(frozen=True)
 class DeploymentSpec:
-    """Identity of one deployment to index — the reduced-artifact entry (§4.2).
+    """Identity of one deployment to index — the reduced-artifact entry
+    (``docs/data-model/deployment-registry.md``).
 
     ``genesis_block`` is the contract-creation block (the first block to index); ``None``
     means "discover it on first sync". The contract-resolved ``extra`` wiring and the
@@ -101,7 +102,7 @@ def select(specs: tuple[DeploymentSpec, ...], selector: str | None) -> Deploymen
 
     ``selector`` matches a ``label`` first, then ``chain:address`` (case-insensitive).
     ``None`` returns the sole deployment when there is exactly one, else ``None`` (the
-    caller lists the choices — ``docs/ARCHITECTURE.md`` §7).
+    caller lists the choices — ``docs/CLIENT.md``).
     """
     if selector is None:
         return specs[0] if len(specs) == 1 else None

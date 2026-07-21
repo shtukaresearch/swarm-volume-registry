@@ -1,4 +1,4 @@
-"""The pure projector: ``event_log`` rows -> artifact (``docs/ARCHITECTURE.md`` §4.4).
+"""The pure projector: ``event_log`` rows -> artifact (``docs/data-model/projection.md``).
 
 Everything here is web3-free. The top-level entry point is :func:`project_entry`;
 its derived facts live in the sub-functions below (fee volume, capacity, accounts,
@@ -200,7 +200,7 @@ def _owner_timeline(events: EventLog) -> dict[str, list[tuple[int, str]]]:
 
     The initial owner comes from ``VolumeCreated``; each ``VolumeOwnershipTransferred``
     appends the new owner. Keyed by ``block_number`` only: ownership is resolved *up to the
-    payment block* (``docs/ARCHITECTURE.md`` §4.4), and the create that establishes a
+    payment block* (``docs/data-model/projection.md``), and the create that establishes a
     volume's first owner is emitted in the same tx as — but at a higher ``log_index`` than —
     its own create-fee ``Transfer``, so a (block, log_index) cut would miss it.
     """

@@ -59,7 +59,7 @@ class Stack:
 
 
 class Web3RpcClient:
-    """The real ``acquire.RpcClient`` (``ARCHITECTURE.md`` §4.1), backed by web3.
+    """The real ``acquire.RpcClient`` (``ARCHITECTURE.md`` §2), backed by web3.
 
     This is the production seam under test — log acquisition goes through genuine
     ``eth_getLogs`` against the node, returning the real RPC log shape to ``decode``.

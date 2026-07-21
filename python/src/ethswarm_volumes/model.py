@@ -1,7 +1,7 @@
 """Web3-free data types shared across the indexer's projection layer.
 
 These are plain data carriers — no behaviour, no web3 knowledge. ``EventLogRow``
-is the decoded boundary record (``docs/ARCHITECTURE.md`` §4.3); the ``Artifact*``
+is the decoded boundary record (``docs/data-model/event-log.md``); the ``Artifact*``
 types mirror the wire format in ``docs/SCHEMA.md`` §3.
 
 Amounts in ``EventLogRow.args`` are *faithful integer atomic units* (PLUR); the
@@ -29,7 +29,7 @@ class EventLogRow:
     strings, amounts as integer PLUR, enums as their names). No topics, no bytes.
 
     The store partitions these into one log per ``event_name`` (see :class:`EventLog`
-    and ``docs/ARCHITECTURE.md`` §4.3). The field is retained on the row so a merged,
+    and ``docs/data-model/event-log.md``). The field is retained on the row so a merged,
     cross-type stream stays self-describing for the projector's folds.
     """
 
@@ -48,7 +48,7 @@ class EventLogRow:
 class EventLog:
     """The persisted event store — partitioned into one log per event type.
 
-    The data model (``docs/ARCHITECTURE.md`` §4.3) keeps a separate log per
+    The data model (``docs/data-model/event-log.md``) keeps a separate log per
     ``event_name`` rather than one merged table, matching how the web3 layer acquires
     each type (its own topic-filtered ``getLogs``). No projection needs every type in
     one stream: each fold pulls only the logs it cares about via :meth:`of` and the
@@ -110,7 +110,7 @@ class EventLog:
 class Deployment:
     """Generic deployment identity plus the version-specific ``extra`` bag.
 
-    Mirrors the deployment registry (``docs/ARCHITECTURE.md`` §4.2) joined with
+    Mirrors the deployment registry (``docs/data-model/deployment-registry.md``) joined with
     the artifact entry's identity/``extra`` fields (``docs/SCHEMA.md`` §3).
     """
 

@@ -1,10 +1,12 @@
 """CLI entry point: ``ethswarm-volumes sync`` and ``ethswarm-volumes stat``.
 
-Two verbs over the one data contract (``docs/ARCHITECTURE.md`` §7):
+Two verbs over the one data contract (``docs/CLIENT.md``):
 
 - ``sync`` — the write path. For each registry deployment on the connected chain: acquire
-  logs to ``finalized``, decode them across the ``event_log`` boundary, append to the cache,
-  project, bake fiat, and write/merge the single artifact file.
+  the delta to ``finalized``, decode it across the ``event_log`` boundary, feed the fresh
+  rows plus the cached prior history straight to the projector, bake fiat, and write/merge
+  the single artifact file. The delta is also appended to the JSONLines cache so the next
+  resync can resume — the cache is off the projector's data path (``docs/ARCHITECTURE.md`` §1).
 - ``stat`` — the read path. Load the artifact, fold one deployment per the bucket / capacity
   / fiat options, and render it as text or ``--json`` (``docs/SCHEMA.md`` §4).
 
@@ -23,7 +25,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import acquire, decode, node, prices, registry, serialize, store, view
-from .model import Artifact, Deployment
+from .model import Artifact, Deployment, EventLog
+from .project import project_entry
 
 DEFAULT_ARTIFACT_NAME = "artifact.json"
 RPC_ENV = "GNO_RPC_URL"
@@ -34,8 +37,15 @@ RPC_ENV = "GNO_RPC_URL"
 # ---------------------------------------------------------------------------
 
 
-def _sync_one(w3, rpc, store_dir: Path, spec: registry.DeploymentSpec, head_block: int) -> None:
-    """Sync one deployment into the cache up to ``head_block`` (the resolved head)."""
+def _sync_and_project(w3, rpc, store_dir: Path, spec: registry.DeploymentSpec, head_block: int):
+    """Sync one deployment's delta and project its artifact entry.
+
+    Fresh decoded rows feed the projector directly; the JSONLines cache is off the data
+    path (``docs/ARCHITECTURE.md`` §1). The cache supplies the prior history and the
+    resume head, so a resync acquires only ``(head, head_block]`` and no freshly-decoded
+    row round-trips through disk before projection. The delta is appended to the cache
+    afterwards, purely so the next resync can resume.
+    """
     dep_id = spec.deployment_id
     genesis_block = spec.genesis_block
     if genesis_block is None:
@@ -43,9 +53,13 @@ def _sync_one(w3, rpc, store_dir: Path, spec: registry.DeploymentSpec, head_bloc
         print(f"  discovered genesis block {genesis_block}", file=sys.stderr)
 
     extra = node.resolve_extra(w3, spec.registry)
+
+    # Prior history + resume head from the cache (the cache branch of the diagram).
+    prior = store.load_event_log(store_dir, dep_id)
     head = store.load_head(store_dir, dep_id)
     from_block = head + 1 if head is not None else genesis_block
 
+    # Acquire + decode only the delta.
     raw = acquire.acquire_logs(
         rpc,
         deployment_id=dep_id,
@@ -55,10 +69,10 @@ def _sync_one(w3, rpc, store_dir: Path, spec: registry.DeploymentSpec, head_bloc
         from_block=from_block,
         to_block=head_block,
     )
-
+    fresh: list = []
     if raw:
         ts_by_block = node.block_timestamps(w3, {int(log["blockNumber"]) for log in raw})
-        rows = [
+        fresh = [
             decode.decode_log(
                 log,
                 deployment_id=dep_id,
@@ -67,21 +81,15 @@ def _sync_one(w3, rpc, store_dir: Path, spec: registry.DeploymentSpec, head_bloc
             )
             for log in raw
         ]
-        store.append_rows(store_dir, rows)
+        store.append_rows(store_dir, fresh)  # persist the delta for the next resync only
     store.save_head(store_dir, dep_id, head_block)
     print(f"  synced [{from_block}, {head_block}] — {len(raw)} new logs", file=sys.stderr)
 
+    # Feed prior history + the fresh delta straight to the projector — no reload.
+    events = EventLog.from_rows([*prior.merged(), *fresh])
 
-def _build_entry(w3, store_dir: Path, spec: registry.DeploymentSpec):
-    """Project one deployment's cached log into its artifact entry."""
-    dep_id = spec.deployment_id
-    genesis_block = spec.genesis_block or node.find_genesis_block(w3, spec.registry)
-    extra = node.resolve_extra(w3, spec.registry)
-
-    finalized = store.load_head(store_dir, dep_id)
-    as_of_ts = node.block_timestamp(w3, finalized)
+    as_of_ts = node.block_timestamp(w3, head_block)
     genesis_ts = node.block_timestamp(w3, genesis_block)
-
     price_daily = prices.fetch_price_daily(
         spec.chain_id, extra["bzz"], start_ts=genesis_ts, end_ts=as_of_ts
     )
@@ -96,10 +104,7 @@ def _build_entry(w3, store_dir: Path, spec: registry.DeploymentSpec):
         fiat_currencies=fiat_currencies,
         extra=extra,
     )
-    events = store.load_event_log(store_dir, dep_id)
-    from .project import project_entry
-
-    return project_entry(deployment, events, price_daily, as_of_block=finalized, as_of_ts=as_of_ts)
+    return project_entry(deployment, events, price_daily, as_of_block=head_block, as_of_ts=as_of_ts)
 
 
 def _artifact_path(args, store_dir: Path) -> Path:
@@ -145,8 +150,7 @@ def cmd_sync(args) -> int:
     entries = []
     for spec in targets:
         print(f"sync {spec.label} (chain {spec.chain_id})", file=sys.stderr)
-        _sync_one(w3, rpc, store_dir, spec, head_block)
-        entries.append(_build_entry(w3, store_dir, spec))
+        entries.append(_sync_and_project(w3, rpc, store_dir, spec, head_block))
 
     # Merge into the single artifact: replace synced entries, keep the rest.
     existing = _load_existing(_artifact_path(args, store_dir))

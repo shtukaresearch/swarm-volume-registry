@@ -1,8 +1,6 @@
 # Architecture Decision Records
 
-The rationale behind the decisions that [`../ARCHITECTURE.md`](../ARCHITECTURE.md) states
-declaratively. ARCHITECTURE.md says *what* the design is; each record here says *why*, with
-the alternatives weighed and the consequences accepted.
+The rationale behind the decisions that the design docs ([`../README.md`](../README.md), [`../ARCHITECTURE.md`](../ARCHITECTURE.md), [`../data-model/`](../data-model/), [`../CLIENT.md`](../CLIENT.md), [`../VERSIONING.md`](../VERSIONING.md)) state declaratively. Those docs say *what* the design is; each record here says *why*, with the alternatives weighed and the consequences accepted.
 
 Format per record: **Context** → **Decision** → **Consequences**.
 

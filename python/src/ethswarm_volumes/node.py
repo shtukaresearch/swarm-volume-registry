@@ -1,4 +1,4 @@
-"""Production web3 layer: the live-node side of the indexer (``docs/ARCHITECTURE.md`` §4.1).
+"""Production web3 layer: the live-node side of the indexer (``docs/ARCHITECTURE.md`` §2).
 
 This is the only module the ``sync`` path uses to touch a chain. It holds:
 
@@ -48,7 +48,7 @@ class Web3RpcClient:
     """The production :class:`~ethswarm_volumes.acquire.RpcClient`, backed by web3.
 
     ``finalized_block_number`` reads the chain's ``finalized`` tag, so acquisition never
-    reads past a reorg-safe head (``docs/ARCHITECTURE.md`` §4.1 / ADR-0002).
+    reads past a reorg-safe head (``docs/ARCHITECTURE.md`` §2 / ADR-0002).
     """
 
     def __init__(self, w3: Web3) -> None:

@@ -15,3 +15,4 @@ Format per record: **Context** → **Decision** → **Consequences**.
 | [0007](./0007-static-artifact-delivery.md) | Single static artifact via CDN; no live read-API in v1 |
 | [0008](./0008-version-axes.md) | Two version axes; fleet-wide schema sync |
 | [0009](./0009-client-side-folding.md) | Clients fold locally; `paid_in_window` pre-baked |
+| [0010](./0010-extensional-contract-versions.md) | `registry_version` names a deployed release; fixtures pinned per version |

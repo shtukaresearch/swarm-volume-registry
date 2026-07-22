@@ -1,0 +1,18 @@
+{
+  "registry_version": "v1",
+  "description": "Pinned contract fixtures for registry_version v1: slim (abi + creation bytecode) Foundry build artifacts the integration-test harness deploys from. VolumeRegistry is the versioned contract; PostageStamp / PriceOracle / TestToken are vendored test-support contracts (the live deployments wire to the production postage stack, not these).",
+  "source": {
+    "commit": "0219d02d43cd8e96305f31dac83cfd060d51e297",
+    "tag": null,
+    "solc": "0.8.19+commit.7dd6d404",
+    "optimizer": {"enabled": true, "runs": 200, "via_ir": true}
+  },
+  "verified_against": {
+    "date": "2026-07-23",
+    "method": "eth_getCode runtime bytecode vs this build's deployedBytecode, immutable references masked; runtime body matched byte-for-byte on both deployments (metadata hash differs: post-deploy source-text drift, same solc)",
+    "deployments": [
+      {"label": "gnosis", "chain_id": 100, "registry": "0x9639ae4c7a8fa9efe585738d516a3915ddd02aad"},
+      {"label": "sepolia", "chain_id": 11155111, "registry": "0x3a99b4b52a4bd75760667219ea93c627051b1af8"}
+    ]
+  }
+}

@@ -16,9 +16,12 @@ The rows land in the per-event-type ``event_log`` (``EventLog.from_rows``;
 ``docs/data-model/event-log.md``), grouped by ``event_name`` — this layer does no merging.
 
 The event ABIs below are the **version-pinned reference data** the architecture calls a
-build dependency: they are the events ABI of ``contracts/out/VolumeRegistry.sol`` plus the
-ERC-20 ``Transfer`` of the BZZ token (the fee leg). Pinning them per ``registry_version``
-keeps the package self-contained — the decode is still mechanical, driven by these ABIs.
+build dependency: they are the events ABI of the *deployed* ``VolumeRegistry`` for each
+``registry_version`` plus the ERC-20 ``Transfer`` of the BZZ token (the fee leg). Pinning
+them per ``registry_version`` keeps the package self-contained — the decode is still
+mechanical, driven by these ABIs. Each pin is cross-checked against the frozen build
+fixture at ``tests/fixtures/<registry_version>/`` (``test_decoder``), so the keys here
+double as fixture directory names.
 """
 
 from __future__ import annotations
@@ -37,7 +40,7 @@ from .model import DeploymentId, EventLogRow
 # Version-pinned reference data
 # ---------------------------------------------------------------------------
 
-#: The ``VolumeRegistry`` (v1) events ABI, verbatim from Foundry's build output, plus the
+#: The deployed ``VolumeRegistry`` (v1) events ABI, verbatim, plus the
 #: ERC-20 ``Transfer`` ABI used to decode the captured BZZ fee leg. Driving
 #: :func:`get_event_data` with these is the whole of the mechanical decode.
 _V1_EVENT_ABIS: list[dict[str, Any]] = [

@@ -5,14 +5,13 @@ a live node** (Anvil) driving the real contracts, with no pure-Python unit tier.
 
 ## Status
 
-A **TDD red suite**: the tests are written against the interface stubs in
-`src/ethswarm_volumes/` (the `acquire` / `decode` / `project` bodies raise `NotImplementedError`).
-Each test boots a node, deploys, drives a real timeline, and reads node-state oracles — all of
-which works today — then calls the production pipeline, which is still a stub. So the suite is red
-at `acquire.acquire_logs` and goes green as the stubs are filled in.
+Green. Originally written as a TDD red suite against the interface stubs; the implementation
+has since filled in.
 
-Run: `uv run --group dev pytest`. Needs `anvil` + `forge build` artifacts (`contracts/out`);
-**skips** cleanly when either is absent.
+Run: `uv run --group dev pytest`. Needs `anvil`; **skips** the node tiers cleanly when it is
+absent. The contract artifacts the harness deploys are the pinned per-version fixtures in
+`fixtures/<registry_version>/` (committed — no `forge build` needed); see `docs/TESTING.md` §2a
+and each fixture dir's `provenance.json`.
 
 ## Layout
 
@@ -31,6 +30,9 @@ Run: `uv run --group dev pytest`. Needs `anvil` + `forge build` artifacts (`cont
 logs, decodes them, and asserts each `EventLogRow`: known `event_name`, exact `args` keys per the
 [`data-model/event-log.md`](../docs/data-model/event-log.md) catalogue, enum→name, lowercased
 addresses, integer amounts, tz-aware `block_ts`.
+
+`test_decoder.py::test_pinned_abis_match_version_fixture` — pure unit: for every
+`registry_version`, the decode-layer pinned event ABIs match the frozen fixture build verbatim.
 
 ### Tier 2 — decoder + projector vs node state (`docs/TESTING.md` §3)
 

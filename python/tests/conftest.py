@@ -2,8 +2,9 @@
 
 The contract-derived tiers run against a real chain (``docs/TESTING.md``). A session-scoped
 Anvil subprocess is started on a free port; each test gets a clean chain (``anvil_reset``) with
-a fresh deployment. Tests are skipped when the ``anvil`` binary or the compiled contract
-artifacts are absent (so a node-less environment doesn't fail the suite).
+a fresh deployment from the pinned per-version fixtures (``tests/fixtures/``). Tests are
+skipped when the ``anvil`` binary is absent (so a node-less environment doesn't fail the
+suite); no Foundry build is needed.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ import time
 import pytest
 from web3 import Web3
 
-from harness import deploy_stack, Chain, _OUT
+from harness import deploy_stack, Chain
 
 
 def _free_port() -> int:
@@ -32,8 +33,6 @@ def node():
     """A session-scoped Anvil node; yields a connected ``Web3``."""
     if shutil.which("anvil") is None:
         pytest.skip("anvil not installed (integration tier needs a node)")
-    if not (_OUT / "VolumeRegistry.sol" / "VolumeRegistry.json").exists():
-        pytest.skip("contract artifacts missing; run `forge build` in contracts/")
 
     port = _free_port()
     proc = subprocess.Popen(

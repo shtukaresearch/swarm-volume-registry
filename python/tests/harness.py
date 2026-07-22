@@ -12,7 +12,11 @@ of real transactions, and exposes:
   (``getActiveVolumeCount`` / ``getActiveVolumes`` / ``getAccount`` / ``balanceOf`` at any
   historical block) used as the independent source of truth.
 
-ABI + bytecode come from Foundry's build output (``contracts/out``); run ``forge build`` once.
+ABI + bytecode come from the **pinned per-version fixtures** (``tests/fixtures/<version>/``):
+slim Foundry build artifacts frozen at the deployed contract release (see ``provenance.json``
+there). The harness therefore tests each ``registry_version`` against the contracts actually
+deployed under that version — contracts ``HEAD`` can drift without touching this suite, and
+no Foundry toolchain is needed to run it (only ``anvil``).
 """
 
 from __future__ import annotations
@@ -30,7 +34,12 @@ ONE_DAY = 86400
 #: node's (real-clock) deploy blocks is always monotonic. Calendar date is irrelevant.
 GENESIS = 1893456000  # 2030-01-01T00:00:00Z
 
-_OUT = Path(__file__).resolve().parents[2] / "contracts" / "out"
+_FIXTURES = Path(__file__).resolve().parent / "fixtures"
+
+#: The registry version this harness drives. The ``Chain`` driver's function signatures and
+#: oracle reads are as version-specific as the fixture bytecode, so a future version with
+#: changed semantics gets its own fixture dir *and* driver variant.
+REGISTRY_VERSION = "v1"
 
 # Fixture constants mirroring RegistryFixture.sol.
 MIN_BUCKET_DEPTH = 16
@@ -41,9 +50,9 @@ VALIDITY_BLOCKS = 12
 ONE_BZZ_PLUR = 10**16  # TestToken has 16 decimals
 
 
-def load_artifact(name: str) -> tuple[list, str]:
-    """Return ``(abi, bytecode)`` for a contract from Foundry's build output."""
-    doc = json.loads((_OUT / f"{name}.sol" / f"{name}.json").read_text())
+def load_artifact(name: str, version: str = REGISTRY_VERSION) -> tuple[list, str]:
+    """Return ``(abi, bytecode)`` for a contract from the pinned ``version`` fixtures."""
+    doc = json.loads((_FIXTURES / version / f"{name}.json").read_text())
     return doc["abi"], doc["bytecode"]["object"]
 
 
@@ -188,7 +197,7 @@ class Chain:
             "label": "anvil",
             "chain_id": self.w3.eth.chain_id,
             "registry": self.s.registry.address,
-            "registry_version": "v1",
+            "registry_version": REGISTRY_VERSION,
             "genesis_ts": datetime.fromtimestamp(GENESIS, tz=timezone.utc),
             "fiat_currencies": [],
             "extra": {

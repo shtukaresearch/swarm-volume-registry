@@ -59,6 +59,37 @@ def _decoded_rows(chain):
     return rows
 
 
+def test_pinned_abis_match_version_fixture():
+    """The two pinned copies of each version agree (pure unit, no node).
+
+    ``decode._VERSIONS[v]`` (the package's decode reference data) and
+    ``tests/fixtures/<v>/`` (the frozen build the harness deploys) are independent pins of
+    the same deployed contract; this ties them together. The pinned event set must be
+    exactly the fixture ``VolumeRegistry``'s events plus the ERC-20 ``Transfer`` (the fee
+    leg), each ABI verbatim (name, inputs, indexed flags) — the version key doubles as the
+    fixture directory name, so an entry without a fixture (or vice versa) also fails here.
+    """
+
+    def by_name(abi):
+        return {e["name"]: e for e in abi if e["type"] == "event"}
+
+    def shape(e):
+        return (
+            e["name"],
+            e.get("anonymous", False),
+            tuple((i["name"], i["type"], i["indexed"]) for i in e["inputs"]),
+        )
+
+    for version, ref in decode._VERSIONS.items():
+        registry_events = by_name(H.load_artifact("VolumeRegistry", version)[0])
+        erc20_events = by_name(H.load_artifact("TestToken", version)[0])
+        pinned = by_name(ref["abis"])
+        assert set(pinned) == set(registry_events) | {"Transfer"}, version
+        for name, event in pinned.items():
+            compiled = erc20_events[name] if name == "Transfer" else registry_events[name]
+            assert shape(event) == shape(compiled), f"{version}:{name}"
+
+
 def test_decoded_rows_conform_to_schema(chain):
     H.drive_basic(chain)
     rows = _decoded_rows(chain)

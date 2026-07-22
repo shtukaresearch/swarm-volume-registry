@@ -8,17 +8,23 @@ The thing under test pulls logs from a chain RPC (`eth_getLogs`) and reads block
 
 There are **no pure-Python unit tests** in the suite to start. A decoder or projector tested in isolation has no independent oracle for event values without re-encoding them, which is circular. Correctness is established end-to-end against the node instead (§3). (If pure-Python projector unit tests are wanted later, craft them with a one-time Foundry export of synthetic event + state cases — hand-authored, no simulation; §6.)
 
-Requirements: the `anvil` binary and the compiled contract artifacts (`contracts/out`, via `forge build`). The suite **skips** cleanly when either is absent, so a node-less environment does not fail.
+Requirements: the `anvil` binary only. The contract artifacts the harness deploys are **pinned per-version fixtures** committed under `tests/fixtures/<registry_version>/` (§2a) — no Foundry toolchain is needed. The suite **skips** cleanly when `anvil` is absent, so a node-less environment does not fail.
 
 ## 2. The harness
 
 `tests/harness.py` + `tests/conftest.py` provide the live-node rig:
 
 - **Node lifecycle** (`conftest.py`) — a session-scoped Anvil subprocess on a free port; each test gets a clean chain (`anvil_reset`) and a fresh deployment.
-- **Deploy** (`harness.deploy_stack`) — deploys the vendored `PostageStamp` / `PriceOracle` / `TestToken` + a fresh `VolumeRegistry` from the Foundry build artifacts, mirroring `contracts/test/fixtures/RegistryFixture.sol` (the one `.sol` fixture still needed).
+- **Deploy** (`harness.deploy_stack`) — deploys the vendored `PostageStamp` / `PriceOracle` / `TestToken` + a fresh `VolumeRegistry` from the pinned fixture artifacts (§2a), mirroring `contracts/test/fixtures/RegistryFixture.sol` (the one `.sol` fixture still needed).
 - **Timeline driver** (`harness.Chain`) — drives real transactions with controlled time: `set_day(n)` moves the cursor to a UTC day; each action (`activate` / `create` / `delete` / `revoke` / …) mines one block at the next cursor second via Anvil's `evm_setNextBlockTimestamp`, from the appropriate actor account, with an explicit gas limit.
 - **Oracle reads** (`harness.Chain` + `harness.oracle`) — `getActiveVolumeCount` / `getActiveVolumes` / `getAccount` and the postage BZZ balance, read at any historical block via `eth_call`.
 - **Real RPC client** (`harness.Web3RpcClient`) — the production `acquire.RpcClient` (`ARCHITECTURE.md` §2, the web3-isolation boundary) backed by web3, so acquisition goes through genuine `eth_getLogs`.
+
+### 2a. Pinned per-version fixtures
+
+The suite tests each `registry_version` against **the contracts actually deployed under that version**, not against contracts `HEAD`. `tests/fixtures/<registry_version>/` holds slim (abi + creation bytecode) Foundry build artifacts frozen at the deployed release, with a `provenance.json` recording the source commit/tag, compiler settings, and the on-chain verification (runtime bytecode vs `eth_getCode`, immutable references masked). The harness deploys from these; `decode.py`'s pinned event ABIs are cross-checked against them by a pure unit in `test_decoder.py` (the `registry_version` string doubles as the fixture directory name).
+
+Consequences: contracts `HEAD` can change without touching this suite — a new contract version is *absorbed*, not *tracked*, by adding a new fixture dir + decode reference data + (if semantics changed) driver variants and scenarios (the `registry_version` axis — [`VERSIONING.md`](./VERSIONING.md)). The `Chain` driver's function signatures and oracle reads are as version-specific as the bytecode, so a semantics-changing version gets its own driver variant rather than edits to the existing one.
 
 **Why a Python (web3) driver, not forge.** A `forge script` collects its broadcast transactions and submits them as a batch *after* the script body runs, while `vm.rpc` cheats fire *during* it — so a single forge run cannot interleave "set the clock → send tx → set the clock → send tx" and can't place transactions on different days. web3 holds Anvil's account keys and interleaves time-control with transactions directly, which is both simpler and the only thing that actually works for a time-controlled, multi-actor scenario.
 

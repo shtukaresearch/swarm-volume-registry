@@ -3,8 +3,10 @@ name: Publish Python package
 # Builds the ethswarm-volumes package and publishes it to PyPI when a change
 # under python/ lands on main (i.e. a merged PR). The publish job is gated on
 # the full Python test suite: the test job runs the integration tiers against
-# a real Anvil node and freshly-compiled contract artifacts, so a publish
-# cannot happen unless those pass.
+# a real Anvil node, deploying from the pinned per-version contract fixtures
+# committed under python/tests/fixtures/ (no forge build — the suite tests
+# the deployed contract versions, not contracts HEAD), so a publish cannot
+# happen unless those pass.
 #
 # Uploads are idempotent: skip-existing means merges that do not bump the
 # version in python/pyproject.toml are no-ops rather than failures, so
@@ -29,19 +31,14 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-          submodules: recursive
 
-      # Foundry provides both `forge` (to compile the contract artifacts the
-      # test harness deploys from) and `anvil` (the node the integration
-      # tiers run against). Without these the node tiers silently skip.
+      # Foundry provides `anvil`, the node the integration tiers run against
+      # (the contract artifacts themselves are the committed fixtures — no
+      # `forge` needed). Without anvil the node tiers silently skip.
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
         with:
           version: stable
-
-      - name: Build contract artifacts
-        working-directory: contracts
-        run: forge build
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5

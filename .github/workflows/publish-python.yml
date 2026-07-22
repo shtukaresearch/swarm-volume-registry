@@ -1,0 +1,81 @@
+name: Publish Python package
+
+# Builds the ethswarm-volumes package and publishes it to PyPI when a change
+# under python/ lands on main (i.e. a merged PR). The publish job is gated on
+# the full Python test suite: the test job runs the integration tiers against
+# a real Anvil node and freshly-compiled contract artifacts, so a publish
+# cannot happen unless those pass.
+#
+# Uploads are idempotent: skip-existing means merges that do not bump the
+# version in python/pyproject.toml are no-ops rather than failures, so
+# publishing only actually happens on the merge that raises the version.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'python/**'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  test:
+    name: Python test suite
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      # Foundry provides both `forge` (to compile the contract artifacts the
+      # test harness deploys from) and `anvil` (the node the integration
+      # tiers run against). Without these the node tiers silently skip.
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Build contract artifacts
+        working-directory: contracts
+        run: forge build
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Run test suite
+        working-directory: python
+        run: uv run --group dev python -m pytest -q
+
+  publish:
+    name: Build and publish to PyPI
+    needs: test
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/ethswarm-volumes/
+    permissions:
+      contents: read
+      id-token: write # OIDC token for PyPI trusted publishing
+    defaults:
+      run:
+        working-directory: python
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Build sdist and wheel
+        run: uv build
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: python/dist/
+          skip-existing: true

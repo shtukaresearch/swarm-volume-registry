@@ -47,6 +47,10 @@ contracts/         Foundry project — VolumeRegistry contract and tests
   test/            Unit, fork, and invariant tests
   script/          Deployment scripts
   lib/             Submodules: forge-std, storage-incentives
+python/            ethswarm-volumes — data API and CLI for VolumeRegistry deployments
+  src/             Package sources
+  tests/           Test suite
+  docs/            Package documentation
 docs/             Design and integration documentation
 ```
 

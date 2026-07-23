@@ -1,9 +1,9 @@
 """The web3 decode layer: raw logs -> ``EventLogRow`` (``docs/ARCHITECTURE.md`` §2).
 
 The *mechanical* ABI decode (topics/data split, field order, types) is delegated to a
-trusted ABI library (web3.py's :func:`get_event_data`) driven by the **compiled contract
-ABI** — see ``ARCHITECTURE.md`` §2 for the build dependency that implies. Nothing
-bespoke there.
+trusted ABI library (web3.py's public ``ContractEvent.process_log``) driven by the
+**compiled contract ABI** — see ``ARCHITECTURE.md`` §2 for the build dependency that
+implies. Nothing bespoke there.
 
 The bespoke, tested part is :func:`map_event_args` — a per-version mapping from the
 library's decoded event (ABI param names, raw enum ints) to our ``event_log`` ``args``
@@ -32,7 +32,6 @@ from typing import Any
 
 from hexbytes import HexBytes
 from web3 import Web3
-from web3._utils.events import get_event_data
 
 from .model import DeploymentId, EventLogRow
 
@@ -42,7 +41,7 @@ from .model import DeploymentId, EventLogRow
 
 #: The deployed ``VolumeRegistry`` (v1) events ABI, verbatim, plus the
 #: ERC-20 ``Transfer`` ABI used to decode the captured BZZ fee leg. Driving
-#: :func:`get_event_data` with these is the whole of the mechanical decode.
+#: web3's event decoder with these is the whole of the mechanical decode.
 _V1_EVENT_ABIS: list[dict[str, Any]] = [
     {
         "type": "event",
@@ -160,7 +159,7 @@ _VERSIONS = {
     "v1": {"abis": _V1_EVENT_ABIS, "enums": _V1_ENUMS},
 }
 
-_CODEC = Web3().codec
+_W3 = Web3()
 
 
 def _event_signature(event_abi: dict[str, Any]) -> str:
@@ -169,14 +168,21 @@ def _event_signature(event_abi: dict[str, Any]) -> str:
     return f"{event_abi['name']}({types})"
 
 
-def _topic_index(registry_version: str) -> dict[bytes, dict[str, Any]]:
-    """``topic0`` (32 raw bytes) -> event ABI, for one registry version."""
+def _topic_index(registry_version: str) -> dict[bytes, tuple[dict[str, Any], Any]]:
+    """``topic0`` (32 raw bytes) -> ``(event ABI, ContractEvent decoder)``, per version.
+
+    The decoders come from an address-less contract factory over the version's pinned
+    ABIs — web3's public decode surface (``ContractEvent.process_log``).
+    """
     abis = _VERSIONS[registry_version]["abis"]
-    return {bytes(Web3.keccak(text=_event_signature(a))): a for a in abis}
+    events = _W3.eth.contract(abi=abis).events
+    return {bytes(Web3.keccak(text=_event_signature(a))): (a, events[a["name"]]()) for a in abis}
 
 
-#: Memoised ``topic0 -> event ABI`` index per registry version.
-_TOPIC_INDEX: dict[str, dict[bytes, dict[str, Any]]] = {v: _topic_index(v) for v in _VERSIONS}
+#: Memoised ``topic0 -> (event ABI, decoder)`` index per registry version.
+_TOPIC_INDEX: dict[str, dict[bytes, tuple[dict[str, Any], Any]]] = {
+    v: _topic_index(v) for v in _VERSIONS
+}
 
 #: ``camelCase`` / ``PascalCase`` -> ``snake_case`` for ABI param names.
 _CAMEL_RE = re.compile(r"(?<!^)(?=[A-Z])")
@@ -243,8 +249,8 @@ def decode_log(
     ``block_ts`` is supplied by the caller (resolved from the block).
     """
     topic0 = bytes(HexBytes(raw_log["topics"][0]))
-    event_abi = _TOPIC_INDEX[registry_version][topic0]
-    decoded = get_event_data(_CODEC, event_abi, raw_log)
+    event_abi, decoder = _TOPIC_INDEX[registry_version][topic0]
+    decoded = decoder.process_log(raw_log)
 
     abi_args = {
         i["name"]: _normalize_value(i["type"], decoded["args"][i["name"]])

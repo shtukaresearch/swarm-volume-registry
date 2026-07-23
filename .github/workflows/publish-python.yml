@@ -35,10 +35,13 @@ jobs:
       # Foundry provides `anvil`, the node the integration tiers run against
       # (the contract artifacts themselves are the committed fixtures — no
       # `forge` needed). Without anvil the node tiers silently skip.
+      # Pinned: the harness leans on specific anvil behaviour
+      # (evm_setNextBlockTimestamp, anvil_reset, instant finality), so a
+      # toolchain release must not change the test environment underneath us.
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
         with:
-          version: stable
+          version: v1.5.1
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5

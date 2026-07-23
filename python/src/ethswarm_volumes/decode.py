@@ -154,10 +154,18 @@ _V1_ENUMS: dict[tuple[str, str], dict[int, str]] = {
     ("TopupSkipped", "reason"): _V1_SKIP_REASONS,
 }
 
-#: All version-specific reference data, keyed by ``registry_version``.
+#: All version-specific reference data, keyed by ``registry_version``. Adding a key here
+#: is the act that makes a contract version *supported* — the single claim site gating
+#: registration (ADR-0011). A release with an unchanged indexer surface aliases its
+#: predecessor's entry.
 _VERSIONS = {
     "v1": {"abis": _V1_EVENT_ABIS, "enums": _V1_ENUMS},
 }
+
+
+def supported_versions() -> frozenset[str]:
+    """The ``registry_version`` values this package build can decode."""
+    return frozenset(_VERSIONS)
 
 _W3 = Web3()
 

@@ -11,8 +11,13 @@ series / snapshot from the projector.
 ``genesis_block`` is optional: it is expensive to query, so a known value is recorded here,
 but when absent the indexer discovers the contract-creation block once on first sync.
 
-The built-in :data:`DEFAULT_REGISTRY` covers the live fleet; ``load_registry`` lets an
-operator override it with a JSON file of the same shape.
+The built-in :data:`DEFAULT_REGISTRY` covers the live fleet. It is loaded from the
+package-data document ``deployments.json`` — same shape as an operator ``--config`` file,
+one loader for both. That document is **derived, not hand-written**: registration is a
+manually triggered run of ``scripts/derive_deployments.py``, which proposes entries from
+the committed deployment artifacts (``contracts/broadcast/``) gated on version support
+(ADR-0011). ``load_registry`` lets an operator override the fleet with a JSON file of the
+same shape.
 """
 
 from __future__ import annotations
@@ -20,6 +25,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
+from importlib.resources import files
 from pathlib import Path
 
 from .model import DeploymentId
@@ -53,26 +59,6 @@ class DeploymentSpec:
         return (self.chain_id, self.registry)
 
 
-#: The live fleet (addresses from ``docs/usage.md`` §2). ``genesis_block`` is recorded
-#: per deployment so the first sync needs no historical state: discovery binary-searches
-#: ``eth_getCode`` over past blocks, which a pruned (non-archive) node cannot serve, so an
-#: unset value would break ``sync`` on an ordinary RPC. Creation blocks are from Blockscout.
-DEFAULT_REGISTRY: tuple[DeploymentSpec, ...] = (
-    DeploymentSpec(
-        label="gnosis",
-        chain_id=100,
-        registry="0x9639ae4c7a8fa9efe585738d516a3915ddd02aad",
-        genesis_block=45822122,
-    ),
-    DeploymentSpec(
-        label="sepolia",
-        chain_id=11155111,
-        registry="0x3a99b4b52a4bd75760667219ea93c627051b1af8",
-        genesis_block=10715515,
-    ),
-)
-
-
 def _spec_from_dict(obj: dict) -> DeploymentSpec:
     """Parse one ``DeploymentSpec`` from a registry-file entry."""
     return DeploymentSpec(
@@ -82,6 +68,20 @@ def _spec_from_dict(obj: dict) -> DeploymentSpec:
         registry_version=obj.get("registry_version", "v1"),
         genesis_block=obj.get("genesis_block"),
     )
+
+
+def _load_default() -> tuple[DeploymentSpec, ...]:
+    """Load the built-in fleet from the ``deployments.json`` package data."""
+    doc = json.loads(files(__package__).joinpath("deployments.json").read_text("utf-8"))
+    return tuple(_spec_from_dict(e) for e in doc["deployments"])
+
+
+#: The live fleet, from the derived ``deployments.json`` (module docstring; ADR-0011).
+#: ``genesis_block`` is recorded per deployment so the first sync needs no historical
+#: state: discovery binary-searches ``eth_getCode`` over past blocks, which a pruned
+#: (non-archive) node cannot serve, so an unset value would break ``sync`` on an
+#: ordinary RPC.
+DEFAULT_REGISTRY: tuple[DeploymentSpec, ...] = _load_default()
 
 
 def load_registry(path: str | os.PathLike[str] | None = None) -> tuple[DeploymentSpec, ...]:

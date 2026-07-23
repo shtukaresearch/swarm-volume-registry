@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 
-from ethswarm_volumes import registry
+from ethswarm_volumes import cli, decode, registry
 from ethswarm_volumes.model import Deployment
 
 
@@ -33,6 +33,23 @@ def test_spec_and_model_deployment_ids_agree():
 def test_default_registry_is_the_live_fleet():
     labels = {s.label for s in registry.DEFAULT_REGISTRY}
     assert {"gnosis", "sepolia"} <= labels
+
+
+def test_default_registry_is_closed_over_supported_versions():
+    """Support closure (ADR-0011): every shipped registry entry's ``registry_version``
+    has decode reference data behind it. This gates publishing — a released package can
+    never carry an entry it cannot decode."""
+    for spec in registry.DEFAULT_REGISTRY:
+        assert spec.registry_version in decode.supported_versions(), spec.label
+
+
+def test_sync_guard_flags_unsupported_versions():
+    """The runtime guard for operator ``--config`` files, which bypass the test gate."""
+    ok = registry.DeploymentSpec(label="ok", chain_id=1, registry="0xa")
+    future = registry.DeploymentSpec(
+        label="future", chain_id=1, registry="0xb", registry_version="v99"
+    )
+    assert cli._unsupported([ok, future]) == [future]
 
 
 def test_load_registry_override(tmp_path):

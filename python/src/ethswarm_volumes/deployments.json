@@ -1,0 +1,18 @@
+{
+  "deployments": [
+    {
+      "label": "gnosis",
+      "chain_id": 100,
+      "registry": "0x9639ae4c7a8fa9efe585738d516a3915ddd02aad",
+      "registry_version": "v1",
+      "genesis_block": 45822122
+    },
+    {
+      "label": "sepolia",
+      "chain_id": 11155111,
+      "registry": "0x3a99b4b52a4bd75760667219ea93c627051b1af8",
+      "registry_version": "v1",
+      "genesis_block": 10715515
+    }
+  ]
+}

@@ -107,6 +107,17 @@ def _sync_and_project(w3, rpc, store_dir: Path, spec: registry.DeploymentSpec, h
     return project_entry(deployment, events, price_daily, as_of_block=head_block, as_of_ts=as_of_ts)
 
 
+def _unsupported(targets: list[registry.DeploymentSpec]) -> list[registry.DeploymentSpec]:
+    """The sync targets whose ``registry_version`` this package build cannot decode.
+
+    The built-in fleet is closed over supported versions by construction (a unit test
+    gates every release), but an operator ``--config`` bypasses that gate — so ``sync``
+    checks its targets and refuses clearly rather than failing with a ``KeyError`` at
+    decode time.
+    """
+    return [t for t in targets if t.registry_version not in decode.supported_versions()]
+
+
 def _artifact_path(args, store_dir: Path) -> Path:
     return Path(args.output) if args.output else store_dir / DEFAULT_ARTIFACT_NAME
 
@@ -146,6 +157,18 @@ def cmd_sync(args) -> int:
         if not targets:
             print(f"error: no registry deployment on chain {chain_id}", file=sys.stderr)
             return 2
+
+    bad = _unsupported(targets)
+    if bad:
+        supported = ", ".join(sorted(decode.supported_versions()))
+        for spec in bad:
+            print(
+                f"error: deployment {spec.label!r} has registry_version"
+                f" {spec.registry_version!r}, which this package build does not support"
+                f" (supported: {supported})",
+                file=sys.stderr,
+            )
+        return 2
 
     entries = []
     for spec in targets:

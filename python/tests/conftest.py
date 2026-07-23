@@ -9,6 +9,7 @@ suite); no Foundry build is needed.
 
 from __future__ import annotations
 
+import os
 import shutil
 import socket
 import subprocess
@@ -32,6 +33,10 @@ def _free_port() -> int:
 def node():
     """A session-scoped Anvil node; yields a connected ``Web3``."""
     if shutil.which("anvil") is None:
+        # A node-less laptop skips cleanly, but CI must never go green while
+        # silently testing nothing (GitHub Actions always sets CI=true).
+        if os.environ.get("CI"):
+            pytest.fail("anvil is required in CI: the node tiers must run, not skip")
         pytest.skip("anvil not installed (integration tier needs a node)")
 
     port = _free_port()

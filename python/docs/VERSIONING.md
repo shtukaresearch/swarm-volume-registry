@@ -30,7 +30,7 @@ Contracts `HEAD` carries **no** version: it is the next release in development, 
 
 ## Releasing a new contract version
 
-Nothing here can break an existing install: until step 5 ships, the new deployment simply does not exist for the indexer.
+Nothing here can break an existing install: until step 5 ships, the new deployment simply does not exist for the indexer. (Operational runbook with the concrete commands: repo-root [`RELEASING.md`](../../RELEASING.md).)
 
 1. **Deploy** from the release commit (`forge script`); **commit** the broadcast records; **tag** that commit `vN` (tag after the broadcast commit, so the tag's tree contains its own deployment record).
 2. **Pin the fixture**: slim abi + creation bytecode at `tests/fixtures/vN/`, with `provenance.json` (source commit/tag, compiler settings) recording an on-chain verification — deployed runtime bytecode vs the build's, immutable references masked.

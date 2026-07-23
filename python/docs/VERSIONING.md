@@ -36,7 +36,9 @@ Nothing here can break an existing install: until step 5 ships, the new deployme
 2. **Pin the fixture**: slim abi + creation bytecode at `tests/fixtures/vN/`, with `provenance.json` (source commit/tag, compiler settings) recording an on-chain verification — deployed runtime bytecode vs the build's, immutable references masked.
 3. **Add the decode reference data**: `decode._VERSIONS["vN"]` — a new events ABI + enum tables if the surface changed, an alias of the predecessor if not. The pinning unit in `test_decoder.py` enforces that this and the fixture agree.
 4. **Extend the suite** only if semantics changed: a `Chain` driver variant + scenarios for the new behaviour.
-5. **Register the deployments**: registry entries (label, chain, address, genesis block — all read from the broadcast records) and a Python package release carrying them.
+5. **Register the deployments**: run the derivation script (`scripts/derive_deployments.py`), which proposes registry entries for broadcast-recorded deployments of supported versions (label, chain, address, genesis block — all read from the facts, never hand-transcribed; [ADR-0011](./adr/0011-derived-deployment-registry.md)); review the diff, commit, and make a Python package release carrying it.
+
+Steps 1–2 produce **facts** (safely automatable, inert until named); steps 3–5 are **claims** — the manual acknowledgements that the package understands the new version ([ADR-0011](./adr/0011-derived-deployment-registry.md)). Automatic propagation stops at step 3, the first claim.
 
 ## Sync publishing
 

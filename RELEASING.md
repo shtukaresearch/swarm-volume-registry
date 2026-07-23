@@ -70,9 +70,20 @@ the fixture it deploys. See [`python/docs/TESTING.md`](python/docs/TESTING.md) �
 
 ### 5. Register the deployments; release the package
 
-- Add the new deployments to the registry (`python/src/ethswarm_volumes/registry.py`) —
-  label, chain id, address, `registry_version: "vN"`, and `genesis_block` (the creation
-  block, in the broadcast receipts).
+- Derive the registry entries from the broadcast facts
+  ([ADR-0011](python/docs/adr/0011-derived-deployment-registry.md) — nothing is
+  hand-transcribed):
+
+  ```sh
+  uv run --project python scripts/derive_deployments.py --version vN
+  ```
+
+  This proposes entries for broadcast-recorded deployments whose version is in
+  `_VERSIONS` and not yet registered, updating
+  `python/src/ethswarm_volumes/deployments.json`. Pass `--label CHAIN_ID=NAME` for a
+  chain the built-in name table doesn't know (or a second deployment on one chain), and
+  `--exclude CHAIN_ID:ADDRESS` to keep a deployment out of the fleet. Review the diff and
+  commit.
 - Bump `version` in `python/pyproject.toml`.
 - PR to `main`. On merge, the publish workflow
   ([`.github/workflows/publish-python.yml`](.github/workflows/publish-python.yml)) runs

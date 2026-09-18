@@ -77,7 +77,7 @@ curl https://keeper-sepolia.<subdomain>.workers.dev/health
 
 `GET /health` returns the wallet address to fund (and `503` with every validation problem if the configuration is invalid, without making RPC calls). Fund it with Sepolia ETH or xDAI — it pays gas only, never holds BZZ.
 
-Finally, configure CI for all later deploys (so you never deploy from a laptop again): in repository settings create Environments `sepolia` and `gnosis` (give `gnosis` required reviewers, restrict to tags), add repository/Environment secret `CLOUDFLARE_API_TOKEN` (from the *Edit Cloudflare Workers* token template) and variable `CLOUDFLARE_ACCOUNT_ID`, and set `KEEPER_DEPLOY_SEPOLIA_ON_MERGE=true` to auto-deploy Sepolia on merge to `main` (unset = merges deploy nothing; Gnosis always manual).
+Finally, configure CI for all later deploys (so you never deploy from a laptop again): in repository settings create Environments `sepolia` and `gnosis` (give `gnosis` required reviewers), add repository/Environment secret `CLOUDFLARE_API_TOKEN` (from the *Edit Cloudflare Workers* token template) and variable `CLOUDFLARE_ACCOUNT_ID`. From then on every `push` to `main` auto-deploys `keeper-sepolia`; `keeper-gnosis` deploys only by manual `workflow_dispatch` of `keeper-deploy`.
 
 ### Worker code update
 
@@ -93,15 +93,13 @@ Finally, configure CI for all later deploys (so you never deploy from a laptop a
 
    If you changed `wrangler.jsonc`, run `bun run types` and commit the regenerated `worker-configuration.d.ts` (CI fails if stale).
 
-3. Push to a branch — `keeper-ci.yml` runs install/typecheck/test/dry-run for both `sepolia` and `gnosis` envs.
-4. Merge to `main`: if `KEEPER_DEPLOY_SEPOLIA_ON_MERGE=true`, `keeper-deploy.yml` deploys `keeper-sepolia` automatically. Otherwise deploy by hand:
+3. Push to a branch — `keeper-ci.yml` runs install/typecheck/test/dry-run for both `sepolia` and `gnosis` envs (and `keeper-deploy.yml` never runs a keeper cycle — it only deploys; Cloudflare Cron Triggers are the only scheduler).
+4. Push/merge to `main` auto-deploys `keeper-sepolia` via `keeper-deploy.yml`. Deploy `keeper-gnosis` by manual `workflow_dispatch` (choose `gnosis` under *Run workflow*), after Environment required reviewers approve. Or deploy by hand:
 
    ```bash
    bunx wrangler deploy --env sepolia
-   bunx wrangler deploy --env gnosis   # only from a release tag, after Environment approval
+   bunx wrangler deploy --env gnosis   # after manual approval
    ```
-
-Gnosis ships **only** by manual dispatch of `keeper-deploy` from a release tag, after required reviewers approve.
 
 ### Secret rotation
 

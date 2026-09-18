@@ -58,25 +58,82 @@ Variables, in `wrangler.jsonc` per env: `DEPLOYMENT_NAME`, `CHAIN_ID`, `REGISTRY
 
 Needs Workers Paid: a run signs and sends transactions, which the Free plan's 10 ms CPU and 50 subrequests per invocation do not cover.
 
-1. **First deploy, from your machine.** A new Worker cannot take `wrangler secret put` before it exists, and `secrets.required` blocks deploying without them — so the first deploy carries them:
+### Initial worker deployment
+
+A new Worker cannot take `wrangler secret put` before it exists, and `secrets.required` blocks deploying without them — so the first deploy carries secrets inline:
+
+```bash
+cd services/keeper && bun install
+printf 'PRIVATE_KEY=0x…\nRPC_URL=https://…,https://…\nTELEGRAM_BOT_TOKEN=…\n' > .secrets.sepolia
+bunx wrangler deploy --env sepolia --secrets-file .secrets.sepolia
+rm .secrets.sepolia
+```
+
+Then fund the wallet:
+
+```bash
+curl https://keeper-sepolia.<subdomain>.workers.dev/health
+```
+
+`GET /health` returns the wallet address to fund (and `503` with every validation problem if the configuration is invalid, without making RPC calls). Fund it with Sepolia ETH or xDAI — it pays gas only, never holds BZZ.
+
+Finally, configure CI for all later deploys (so you never deploy from a laptop again): in repository settings create Environments `sepolia` and `gnosis` (give `gnosis` required reviewers, restrict to tags), add repository/Environment secret `CLOUDFLARE_API_TOKEN` (from the *Edit Cloudflare Workers* token template) and variable `CLOUDFLARE_ACCOUNT_ID`, and set `KEEPER_DEPLOY_SEPOLIA_ON_MERGE=true` to auto-deploy Sepolia on merge to `main` (unset = merges deploy nothing; Gnosis always manual).
+
+### Worker code update
+
+1. Edit `services/keeper/src/**` (cycle logic lives in `src/keeper/`, Worker wiring in `src/index.ts`/`src/config.ts`/`src/client.ts`/`src/reporting.ts`).
+2. Verify locally:
 
    ```bash
-   cd services/keeper && bun install
-   printf 'PRIVATE_KEY=0x…\nRPC_URL=https://…,https://…\nTELEGRAM_BOT_TOKEN=…\n' > .secrets.sepolia
-   bunx wrangler deploy --env sepolia --secrets-file .secrets.sepolia
-   rm .secrets.sepolia
+   bun install
+   bun test               # includes whole scheduled runs against mock-chain
+   bun run typecheck
+   bun run check:deploy   # wrangler deploy --dry-run for both envs
    ```
 
-   Later changes: `bunx wrangler secret put RPC_URL --env sepolia`.
+   If you changed `wrangler.jsonc`, run `bun run types` and commit the regenerated `worker-configuration.d.ts` (CI fails if stale).
 
-2. **Fund the wallet.** `curl https://keeper-sepolia.<subdomain>.workers.dev/health` returns its address — and `503` with the problems if the configuration is invalid. It makes no RPC calls.
+3. Push to a branch — `keeper-ci.yml` runs install/typecheck/test/dry-run for both `sepolia` and `gnosis` envs.
+4. Merge to `main`: if `KEEPER_DEPLOY_SEPOLIA_ON_MERGE=true`, `keeper-deploy.yml` deploys `keeper-sepolia` automatically. Otherwise deploy by hand:
 
-3. **Let CI deploy from then on.** In repository settings:
-   - Environments `sepolia` and `gnosis`. Give `gnosis` required reviewers, and restrict it to tags.
-   - Secret `CLOUDFLARE_API_TOKEN` (from the *Edit Cloudflare Workers* token template) and variable `CLOUDFLARE_ACCOUNT_ID`, on the repository or on each environment.
-   - Variable `KEEPER_DEPLOY_SEPOLIA_ON_MERGE=true` to deploy Sepolia on every merge to `main`. Unset, merges deploy nothing.
+   ```bash
+   bunx wrangler deploy --env sepolia
+   bunx wrangler deploy --env gnosis   # only from a release tag, after Environment approval
+   ```
 
-   Gnosis ships only by running **keeper-deploy** by hand, from a release tag, after approval.
+Gnosis ships **only** by manual dispatch of `keeper-deploy` from a release tag, after required reviewers approve.
+
+### Secret rotation
+
+Secrets are never in `wrangler.jsonc` or git — they live in Cloudflare Workers Secrets per env (`secrets.required: PRIVATE_KEY, RPC_URL, TELEGRAM_BOT_TOKEN`).
+
+Rotate one value without redeploying code:
+
+```bash
+# single value
+bunx wrangler secret put PRIVATE_KEY --env sepolia
+bunx wrangler secret put RPC_URL --env sepolia          # comma-separated, independent providers
+bunx wrangler secret put TELEGRAM_BOT_TOKEN --env gnosis
+
+# or atomically via file (avoids typing a key into shell history)
+printf 'PRIVATE_KEY=0x…\nRPC_URL=https://…,https://…\nTELEGRAM_BOT_TOKEN=…\n' > .secrets.sepolia
+bunx wrangler deploy --env sepolia --secrets-file .secrets.sepolia
+rm .secrets.sepolia
+```
+
+Validate immediately:
+
+```bash
+curl https://keeper-sepolia.<subdomain>.workers.dev/health   # 200 + wallet if ok, 503 with every problem if not
+bunx wrangler tail --env sepolia   # then force a cycle: curl "localhost:8787/cdn-cgi/local/scheduled?format=json" in dev, or wait one cron tick
+```
+
+Notes:
+
+* `wrangler deploy` refuses if any `secrets.required` entry is missing; the Worker itself re-validates shape (e.g. `PRIVATE_KEY` is `0x`-hex, `RPC_URL` parses) and **fails the run and alerts** rather than reporting `ok` with no work — a bad rotation is never silent.
+* `HEALTH` is unauthenticated and reveals only the wallet address, not secret values.
+* Keep `PRIVATE_KEY` per deployment (Sepolia vs Gnosis keys never shared) and keep `TELEGRAM_CHAT_ID` as a non-secret var — the bot token alone is the secret.
+* After rotation, the next cron tick uses the new value; no Workers restart needed. Old secrets are overwritten in place — delete the local `.secrets.*` file after.
 
 ## Working on it
 

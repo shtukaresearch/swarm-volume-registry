@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { decodeErrorResult, encodeErrorResult, encodeFunctionData } from "viem";
-import { registryAbi } from "../src/abi.js";
+import { registryAbi } from "../src/keeper/abi.js";
 
 // `forge inspect VolumeRegistry methodIdentifiers`, run against
 // contracts/src/VolumeRegistry.sol. The hand-written ABI has to encode the same

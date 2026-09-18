@@ -32,10 +32,10 @@ import {
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { sepolia } from "viem/chains";
-import { registryAbi } from "../src/abi.js";
+import { registryAbi } from "../src/keeper/abi.js";
 
 /**
- * PostageStamp lives only here. The package carries no PostageStamp ABI — the
+ * PostageStamp lives only here. The keeper carries no PostageStamp ABI — the
  * contract decides what a volume needs — so the mock serves this surface purely
  * so that `postageReads` stays a live assertion: re-introduce a client-side
  * read and the cycle tests fail rather than quietly passing.
@@ -123,6 +123,8 @@ export interface MockChainOptions {
   revertTx?: boolean;
   /** Never return a receipt, to model a stuck transaction. */
   dropReceipts?: boolean;
+  /** What eth_chainId answers. Default Sepolia — set it to model a wrong network. */
+  chainId?: number;
 }
 
 /**
@@ -131,7 +133,7 @@ export interface MockChainOptions {
  * Error instead makes viem re-probe optional methods (`eth_fillTransaction`)
  * with backoff on every transaction.
  */
-class MethodNotFound extends Error {
+export class MethodNotFound extends Error {
   readonly code = -32601;
   constructor(method: string) {
     super(`the method ${method} does not exist/is not available`);
@@ -356,83 +358,88 @@ export function mockChain(options: MockChainOptions = {}) {
     ];
   }
 
-  const transport = custom({
-    async request({ method, params }: { method: string; params?: unknown }) {
-      calls.push(method);
-      if (options.failWith) throw new Error(options.failWith);
-      const args = (params ?? []) as unknown[];
+  /**
+   * The JSON-RPC surface itself. Behind a `custom` transport for the cycle
+   * tests; test/worker.test.ts serves it over a stubbed `fetch` instead, so the
+   * Worker's own `http` transports are what get exercised.
+   */
+  async function request({ method, params }: { method: string; params?: unknown }) {
+    calls.push(method);
+    if (options.failWith) throw new Error(options.failWith);
+    const args = (params ?? []) as unknown[];
 
-      switch (method) {
-        case "eth_chainId":
-          return numberToHex(sepolia.id);
-        case "eth_blockNumber":
-          return numberToHex(blockNumber);
-        case "eth_getBlockByNumber":
-        case "eth_getBlockByHash":
-          return {
-            number: numberToHex(blockNumber),
-            timestamp: numberToHex(timestamp),
-            hash: keccak256(toHex("block")),
-            parentHash: keccak256(toHex("parent")),
-            baseFeePerGas: numberToHex(1_000_000_000n),
-            gasLimit: numberToHex(30_000_000n),
-            gasUsed: "0x0",
-            transactions: [],
-          };
-        case "eth_call":
-          return handleCall(args[0] as { to: Address; data: Hex });
-        case "eth_estimateGas":
-          // Run the call so a revert surfaces here, the way a node's estimate
-          // does — that is what makes estimation the keeper's pre-flight check.
-          handleCall(args[0] as { to: Address; data: Hex });
-          return numberToHex(options.estimateGas ?? 500_000n);
-        case "eth_getBalance":
-          return numberToHex(options.balance ?? 10n ** 18n);
-        case "eth_getTransactionCount":
-          return numberToHex(BigInt(triggerCalls.length));
-        case "eth_gasPrice":
-          return numberToHex(1_500_000_000n);
-        case "eth_maxPriorityFeePerGas":
-          return numberToHex(1_000_000n);
-        case "eth_sendRawTransaction": {
-          const { data, gas } = parseTransaction(args[0] as Hex);
-          sentGas.push(gas ?? 0n);
-          const { args: callArgs } = decodeFunctionData({
-            abi: registryAbi,
-            data: data as Hex,
-          });
-          const volumeId = (callArgs as readonly [Hex])[0];
-          triggerCalls.push(volumeId);
-          const hash = keccak256(toHex(`tx-${triggerCalls.length}`));
-          receipts.set(hash, { volumeId });
-          return hash;
-        }
-        case "eth_getTransactionReceipt": {
-          const hash = args[0] as Hex;
-          const sent = receipts.get(hash);
-          if (!sent || options.dropReceipts) return null;
-          return {
-            transactionHash: hash,
-            transactionIndex: "0x0",
-            blockNumber: numberToHex(blockNumber),
-            blockHash: keccak256(toHex("block")),
-            from: SIGNER,
-            to: REGISTRY,
-            cumulativeGasUsed: numberToHex(400_000n),
-            gasUsed: numberToHex(400_000n),
-            effectiveGasPrice: numberToHex(1_500_000_000n),
-            contractAddress: null,
-            status: options.revertTx ? "0x0" : "0x1",
-            type: "0x2",
-            logs: options.revertTx ? [] : receiptLogs(sent.volumeId),
-            logsBloom: `0x${"0".repeat(512)}`,
-          };
-        }
-        default:
-          throw new MethodNotFound(method);
+    switch (method) {
+      case "eth_chainId":
+        return numberToHex(options.chainId ?? sepolia.id);
+      case "eth_blockNumber":
+        return numberToHex(blockNumber);
+      case "eth_getBlockByNumber":
+      case "eth_getBlockByHash":
+        return {
+          number: numberToHex(blockNumber),
+          timestamp: numberToHex(timestamp),
+          hash: keccak256(toHex("block")),
+          parentHash: keccak256(toHex("parent")),
+          baseFeePerGas: numberToHex(1_000_000_000n),
+          gasLimit: numberToHex(30_000_000n),
+          gasUsed: "0x0",
+          transactions: [],
+        };
+      case "eth_call":
+        return handleCall(args[0] as { to: Address; data: Hex });
+      case "eth_estimateGas":
+        // Run the call so a revert surfaces here, the way a node's estimate
+        // does — that is what makes estimation the keeper's pre-flight check.
+        handleCall(args[0] as { to: Address; data: Hex });
+        return numberToHex(options.estimateGas ?? 500_000n);
+      case "eth_getBalance":
+        return numberToHex(options.balance ?? 10n ** 18n);
+      case "eth_getTransactionCount":
+        return numberToHex(BigInt(triggerCalls.length));
+      case "eth_gasPrice":
+        return numberToHex(1_500_000_000n);
+      case "eth_maxPriorityFeePerGas":
+        return numberToHex(1_000_000n);
+      case "eth_sendRawTransaction": {
+        const { data, gas } = parseTransaction(args[0] as Hex);
+        sentGas.push(gas ?? 0n);
+        const { args: callArgs } = decodeFunctionData({
+          abi: registryAbi,
+          data: data as Hex,
+        });
+        const volumeId = (callArgs as readonly [Hex])[0];
+        triggerCalls.push(volumeId);
+        const hash = keccak256(toHex(`tx-${triggerCalls.length}`));
+        receipts.set(hash, { volumeId });
+        return hash;
       }
-    },
-  });
+      case "eth_getTransactionReceipt": {
+        const hash = args[0] as Hex;
+        const sent = receipts.get(hash);
+        if (!sent || options.dropReceipts) return null;
+        return {
+          transactionHash: hash,
+          transactionIndex: "0x0",
+          blockNumber: numberToHex(blockNumber),
+          blockHash: keccak256(toHex("block")),
+          from: SIGNER,
+          to: REGISTRY,
+          cumulativeGasUsed: numberToHex(400_000n),
+          gasUsed: numberToHex(400_000n),
+          effectiveGasPrice: numberToHex(1_500_000_000n),
+          contractAddress: null,
+          status: options.revertTx ? "0x0" : "0x1",
+          type: "0x2",
+          logs: options.revertTx ? [] : receiptLogs(sent.volumeId),
+          logsBloom: `0x${"0".repeat(512)}`,
+        };
+      }
+      default:
+        throw new MethodNotFound(method);
+    }
+  }
+
+  const transport = custom({ request });
 
   const client = createWalletClient({
     account: privateKeyToAccount(TEST_KEY),
@@ -445,6 +452,7 @@ export function mockChain(options: MockChainOptions = {}) {
 
   return {
     client,
+    request,
     /** The volume id carried by each transaction sent, in order. */
     triggerCalls,
     /** Gas limit carried by each transaction actually sent. */

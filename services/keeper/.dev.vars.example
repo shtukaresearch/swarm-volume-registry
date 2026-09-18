@@ -1,0 +1,25 @@
+# Secrets for `bun run dev` (wrangler dev --env sepolia). Copy to .dev.vars and
+# fill in; never commit .dev.vars.
+#
+# Only the names in `secrets.required` are loaded from this file — anything
+# else here is ignored. Non-secret overrides go on the command line instead:
+#
+#   bun run dev --var DRY_RUN:true --var TELEGRAM_CHAT_ID:-100…
+#
+# For a deployment these are set per env, once, and never shared between envs:
+#
+#   bunx wrangler secret put PRIVATE_KEY --env sepolia
+
+# The keeper wallet. Generate a fresh one — `cast wallet new` — and reuse no key
+# from anywhere else. It only pays gas: it never holds or moves BZZ and needs no
+# registry authorization, so fund it with Sepolia ETH (or xDAI on Gnosis) and
+# nothing else.
+PRIVATE_KEY="0x<64 hex chars>"
+
+# Required; no endpoints ship with the keeper. Comma-separate several from
+# independent providers — they are probed every run and tried in order, and a
+# failover is reported as a warning.
+RPC_URL="https://..."
+
+# From @BotFather. Both deployments may post to the same group.
+TELEGRAM_BOT_TOKEN="<id>:<secret>"

@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { collectActiveVolumes } from "../src/actions/collectActiveVolumes.js";
-import { getActiveVolumeCount } from "../src/actions/getActiveVolumeCount.js";
-import { trigger } from "../src/actions/trigger.js";
-import { runKeeperCycle } from "../src/index.js";
+import { collectActiveVolumes } from "../src/keeper/actions/collectActiveVolumes.js";
+import { getActiveVolumeCount } from "../src/keeper/actions/getActiveVolumeCount.js";
+import { runKeeperCycle } from "../src/keeper/actions/runKeeperCycle.js";
+import { trigger } from "../src/keeper/actions/trigger.js";
 import { REGISTRY, mockChain, volumeId, type MockVolume } from "./mock-chain.js";
 
 const GRACE = 17_280n;
@@ -162,7 +162,7 @@ describe("runKeeperCycle", () => {
     ]);
   });
 
-  // The package carries no PostageStamp ABI at all, and this is why: nothing on
+  // The keeper carries no PostageStamp ABI at all, and this is why: nothing on
   // the cycle path may form a second opinion about what a volume needs.
   test("reads no PostageStamp state — the contract does that itself", async () => {
     const chain = mockChain({ volumes: [funded(1), due(2)] });
@@ -213,7 +213,14 @@ describe("per-volume outcomes", () => {
     expect(result.topupSkipped).toEqual([
       { volumeId: volumeId(1), reason: "NoAuth" },
     ]);
-    expect(result.warnings.join(" ")).toContain("NoAuth");
+    // Named volume and transaction, so the alert can point at both.
+    expect(result.warnings).toEqual([
+      {
+        volumeId: volumeId(1),
+        hash: result.volumes[0]!.hash!,
+        message: "not funded: NoAuth",
+      },
+    ]);
   });
 
   test("a payer out of BZZ reads back as PaymentFailed", async () => {
@@ -232,7 +239,13 @@ describe("per-volume outcomes", () => {
 
     expect(chain.triggerCalls).toEqual([volumeId(1)]);
     expect(result.retired).toEqual([{ volumeId: volumeId(1), reason: "BatchDied" }]);
-    expect(result.warnings.join(" ")).toContain("BatchDied");
+    expect(result.warnings).toEqual([
+      {
+        volumeId: volumeId(1),
+        hash: result.volumes[0]!.hash!,
+        message: "retired: BatchDied",
+      },
+    ]);
   });
 
   test("an expired volume retires with its own reason", async () => {
@@ -282,7 +295,9 @@ describe("bounds and failures", () => {
 
     expect(chain.triggerCalls).toEqual([volumeId(1), volumeId(2)]);
     expect(result.volumeCount).toBe(5);
-    expect(result.warnings.join(" ")).toContain("3 volume(s) deferred");
+    expect(result.warnings.map((w) => w.message).join(" ")).toContain(
+      "3 volume(s) deferred",
+    );
   });
 
   test("a reverted transaction fails the cycle without throwing", async () => {
@@ -376,7 +391,10 @@ describe("selected mode", () => {
 
     expect(result.ok).toBe(true);
     expect(result.notActive).toEqual([volumeId(99)]);
-    expect(result.warnings.join(" ")).toContain("not Active");
+    // No transaction was spent on it, so there is no hash to name.
+    expect(result.warnings).toEqual([
+      { volumeId: volumeId(99), message: "requested volume is not Active" },
+    ]);
     expect(chain.triggerCalls).toEqual([volumeId(1)]);
   });
 });

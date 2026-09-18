@@ -8,8 +8,8 @@ import {
   type Hex,
   type Log,
 } from "viem";
-import { registryAbi } from "../src/abi.js";
-import { decodeCycleEvents, summarizeVolume } from "../src/events.js";
+import { registryAbi } from "../src/keeper/abi.js";
+import { decodeCycleEvents, summarizeVolume } from "../src/keeper/events.js";
 import { REGISTRY, volumeId } from "./mock-chain.js";
 
 const OTHER_CONTRACT = "0x9999999999999999999999999999999999999999" as Address;

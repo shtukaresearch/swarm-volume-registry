@@ -1,106 +1,99 @@
 # keeper
 
-A one-shot keeper cycle, run by [`.github/workflows/keeper.yml`](../../.github/workflows/keeper.yml) on a cron schedule. An alternative runtime to the Cloudflare Worker in [`js/workers/gas-boy`](../../js/workers/gas-boy) — same [`ethswarm-volume-keeper`](../../js/packages/ethswarm-volume-keeper) library, same registry, deliberately different infrastructure, because two variants fail in different ways.
+The Swarm `VolumeRegistry` keeper: one Cloudflare Worker, deployed once per chain. Each scheduled run enumerates the registry's active volumes, sends `trigger(bytes32)` for each — one transaction per volume, per [`docs/KEEPERS.md`](../../docs/KEEPERS.md) — and reports what the contract did.
 
-A standalone Bun project rather than a member of the `js/` workspace: it is a thing we deploy, not a thing we publish.
+Cloudflare Cron Triggers are the only scheduler. GitHub Actions tests and deploys the Worker; it never runs a cycle.
 
-| | |
-|---|---|
-| `index.ts` | the run — probe, cycle, report, notify, exit code |
-| `src/config.ts` | environment parsing, endpoint health, client construction, log scrubbing |
-| `src/report.ts` | annotations and the job summary |
-| `src/notify.ts` | Telegram push, on conditions the keeper knows about |
+| Deployment | Worker | Chain | Registry | Schedule |
+|---|---|---|---|---|
+| `sepolia` | `keeper-sepolia` | Sepolia (11155111) | v2 `0x33a53c79…4c493729` | every minute |
+| `gnosis` | `keeper-gnosis` | Gnosis (100) | v1 `0x9639ae4c…ddd02aad` | hourly |
 
-## Read this before relying on it
+Both are envs in [`wrangler.jsonc`](./wrangler.jsonc), with independent wallets and RPC credentials. They may share one Telegram group; every alert names its deployment, chain and registry.
 
-**GitHub's scheduler is the weakest part of this design, and it fails quietly.**
-
-- `schedule` fires **only on the repository's default branch**. On any other branch this workflow does nothing, no matter what its cron says.
-- GitHub **disables scheduled workflows after 60 days** with no repository activity. A keeper that switches itself off is the worst failure mode here, because nothing reports it.
-- Scheduled runs are **frequently late** — commonly 5–15 minutes, occasionally much more — and can be **dropped entirely** under load. The advertised minimum interval is 5 minutes; the delivered interval is not.
-
-So this variant suits a registry whose `graceBlocks` gives hours of runway, not minutes.
-
-Concretely: **it cannot keep a Sepolia volume alive.** Sepolia's `graceBlocks` is 12 (≈ 2.4 min); a top-up buys less runway than the scheduler's ordinary jitter. It is still a good target for exercising the whole path — secrets, RPC failover, signing, receipt decoding, alerting — which is why the workflow defaults to it. Gnosis (`graceBlocks` 17280, ≈ 24 h) is the deployment an hourly cron can genuinely maintain.
-
-## Setup
-
-Create a [GitHub Environment](https://docs.github.com/en/actions/deployment/targeting-different-environments/using-environments-for-deployment) named `sepolia` or `gnosis` — the job selects one by name, so the testnet and mainnet keepers cannot share a key by accident.
-
-Environment **secrets**:
+## Layout
 
 | | |
 |---|---|
-| `PRIVATE_KEY` | The keeper EOA. Generate a fresh one (`cast wallet new`) and reuse nothing. It only pays gas: it never holds or moves BZZ and needs no registry authorization. |
-| `RPC_URL` | Required — no endpoints ship here. Comma-separate several from **independent providers** to fail over between them. |
-| `TELEGRAM_BOT_TOKEN` | Optional; see Alerting. |
+| `src/index.ts` | `scheduled()` and `GET /health` |
+| `src/config.ts` | validates the Worker's bindings into a config, reporting every problem at once |
+| `src/client.ts` | supported chains, the per-run RPC probe, the viem client |
+| `src/keeper/` | the keeper cycle: enumerate at a pinned block, trigger each volume, decode each receipt |
+| `src/reporting.ts` | the one structured report per run that logs and alerts are both rendered from |
+| `src/notifications/telegram.ts` | formats that report for Telegram and sends it |
 
-Environment **variables**:
+## What a run reports
 
-| | | |
-|---|---|---|
-| `CHAIN_ID` | required | `100` (Gnosis) or `11155111` (Sepolia) |
-| `REGISTRY_ADDRESS` | required | the `VolumeRegistry` — see [`docs/usage.md`](../../docs/usage.md) §2 |
-| `VOLUME_IDS` | optional | comma-separated; maintain only these instead of the whole registry |
-| `MIN_BALANCE_WEI` | optional | warn below this native balance |
-| `MAX_VOLUMES_PER_CYCLE` | optional | default 50; overflow defers to the next run |
-| `CYCLE_TIMEOUT_MS` | optional | default 300000 — no *new* transaction starts past it |
-| `FAIL_ON_WARNING` | optional | see Alerting |
-| `TELEGRAM_CHAT_ID` | optional | see Alerting |
+Every run writes one JSON object to Workers Logs (`kind: "keeper/run"`) at the level matching its `status`:
 
-Then fund the keeper EOA with xDAI (or Sepolia ETH) and nothing else.
+- **`failure`** (`console.error`) — invalid configuration, no usable RPC endpoint, the registry unreadable, or any volume whose transaction failed, reverted, or went unconfirmed within `RECEIPT_TIMEOUT_MS`. One failed volume does not stop the rest being attempted. The invocation itself then fails, so Cron Events shows it too.
+- **`warning`** (`console.warn`) — a failover to a secondary RPC, the wallet below `MIN_BALANCE_WEI`, a `TopupSkipped` (`NoAuth`: payer revoked; `PaymentFailed`: out of BZZ or allowance), a retirement, deferred work, or dry-run mode.
+- **`ok`** (`console.log`).
 
-## Alerting
+`failures` and `warnings` each list `{ message, volumeId?, hash? }`; `volumes` has the per-volume detail, including the healthy `noop`s. In the Workers Logs query builder, filter on `status` or `deployment`.
 
-GitHub emails you when a workflow run **fails**. It does not notify on warnings, so by default a message like "keeper balance is nearly out" lands in a job summary nobody opens — precisely the signal you wanted a week before it mattered.
+Failures always go to Telegram. Warnings go only where `NOTIFY_WARNINGS` is `true` — on for Gnosis, off for Sepolia, where a standing warning would repeat every minute.
 
-Two ways to close that, which compose:
+A failed run is not retried by the platform (`noRetry()`): the next tick is the retry, and an overlapping one would race the same wallet's nonce. `trigger` is idempotent, so nothing is lost by waiting.
 
-- **`FAIL_ON_WARNING=true`** — any warning (low balance, an RPC failover, `TopupSkipped`, a deferred volume) exits non-zero, so you get the standard failed-run email. Noisier, but nothing important is silent.
-- **`TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`** — a push on the same verdict, with the failing detail and a link to the run. Unset, it is inert; it never fails a run because it could not send.
+RPC URLs are reduced to scheme and host, and the bot token and private key are masked, everywhere a report goes — viem puts the full endpoint URL in its error text.
 
-Either way, the **job summary** carries the per-volume table: every volume, its transaction status, and what the contract actually did (`topped up`, `retired`, `not funded`, `no action needed`). Failures also appear as run annotations, which show up without opening the logs.
+## Configuration
 
-## Differences from gas-boy
+Secrets, per deployment — never shared between them:
 
-Both run `runKeeperCycle`. What changes is everything around it:
+| | |
+|---|---|
+| `PRIVATE_KEY` | The keeper wallet. Generate a fresh one (`cast wallet new`). It only pays gas: fund it with Sepolia ETH or xDAI and nothing else. |
+| `RPC_URL` | Comma-separated, from independent providers. Probed every run — chain id included — and tried in order. |
+| `TELEGRAM_BOT_TOKEN` | From @BotFather. |
 
-| | `gas-boy` (Worker) | `services/keeper` |
-|---|---|---|
-| Schedule | Cloudflare cron, punctual, down to 1 min | GitHub cron, late and skippable, default branch only |
-| Process | Long-lived isolate, warm across ticks | Fresh runner every time, nothing cached |
-| RPC failover | viem `fallback` with `rank`, learned over ticks | Pre-flight health probe of every endpoint, then ordered `fallback` |
-| Cycle budget | Tight; `cycleTimeout` defaults to 120 s | Minutes of wall clock; defaults to 300 s under a 15 min job timeout |
-| Failure signal | A log line you must go and read | Non-zero exit → red run → GitHub's email, plus optional Telegram |
-| Secrets | `wrangler secret put` | Environment secrets, masked in logs |
+Declared in `secrets.required`, so `wrangler deploy` refuses to ship a deployment with any of them unset. The Worker validates their shape too: a key or URL set to the wrong thing fails the run and alerts, rather than passing for an idle keeper.
 
-The `rank` difference is not cosmetic. Ranking learns which endpoint is slow by sampling over time, which a process that lives for one cycle cannot do — and it schedules an interval that would hold the process open past its work. So this variant probes every endpoint once, up front, chain id included, and reports the result. That turns a silent failover into a line in the log, which is what [`docs/KEEPERS.md`](../../docs/KEEPERS.md) asks for.
+Variables, in `wrangler.jsonc` per env: `DEPLOYMENT_NAME`, `CHAIN_ID`, `REGISTRY_ADDRESS`, `TELEGRAM_CHAT_ID`, `NOTIFY_WARNINGS`, `MIN_BALANCE_WEI` (0 disables the warning), and the cycle limits `MAX_VOLUMES_PER_CYCLE`, `CYCLE_TIMEOUT_MS`, `RECEIPT_TIMEOUT_MS`, `CONFIRMATIONS`. Not set by either deployment, but accepted: `DRY_RUN`, `VOLUME_IDS` (maintain only these), `PAGE_SIZE`.
 
-RPC URLs are scrubbed to scheme and host on every output path. Redacting where *we* print a URL is not enough — viem embeds the full endpoint in its error text, and those errors travel into warnings, annotations, the JSON line and the Telegram message. On a public repository the run logs are world-readable.
+**A run must fit inside its cron interval**, so two runs never share the wallet at once: 5 s of RPC probing, plus `CYCLE_TIMEOUT_MS` (no new transaction starts after it), plus `RECEIPT_TIMEOUT_MS` for the last one, plus 5 s of slack. `test/config.test.ts` holds each env to that, and to the 15-minute Cron Trigger limit. On Sepolia that leaves about two volumes a minute at 12 s blocks — if it ever maintains more, that budget is what to revisit.
+
+## Setting up a deployment
+
+Needs Workers Paid: a run signs and sends transactions, which the Free plan's 10 ms CPU and 50 subrequests per invocation do not cover.
+
+1. **First deploy, from your machine.** A new Worker cannot take `wrangler secret put` before it exists, and `secrets.required` blocks deploying without them — so the first deploy carries them:
+
+   ```bash
+   cd services/keeper && bun install
+   printf 'PRIVATE_KEY=0x…\nRPC_URL=https://…,https://…\nTELEGRAM_BOT_TOKEN=…\n' > .secrets.sepolia
+   bunx wrangler deploy --env sepolia --secrets-file .secrets.sepolia
+   rm .secrets.sepolia
+   ```
+
+   Later changes: `bunx wrangler secret put RPC_URL --env sepolia`.
+
+2. **Fund the wallet.** `curl https://keeper-sepolia.<subdomain>.workers.dev/health` returns its address — and `503` with the problems if the configuration is invalid. It makes no RPC calls.
+
+3. **Let CI deploy from then on.** In repository settings:
+   - Environments `sepolia` and `gnosis`. Give `gnosis` required reviewers, and restrict it to tags.
+   - Secret `CLOUDFLARE_API_TOKEN` (from the *Edit Cloudflare Workers* token template) and variable `CLOUDFLARE_ACCOUNT_ID`, on the repository or on each environment.
+   - Variable `KEEPER_DEPLOY_SEPOLIA_ON_MERGE=true` to deploy Sepolia on every merge to `main`. Unset, merges deploy nothing.
+
+   Gnosis ships only by running **keeper-deploy** by hand, from a release tag, after approval.
 
 ## Working on it
 
 ```bash
-cd js && bun install && bun run build   # the library, whose dist/ is not committed
-cd ../services/keeper && bun install
-
-bun test
+bun install
+bun test               # includes whole scheduled runs against a mock chain
 bun run typecheck
+bun run check:deploy   # bundles both envs, as CI does
 ```
 
-The library is a path dependency and Bun installs it by copying, so **rerun `bun run build` in `js/` and `bun install` here after changing the library** — otherwise this project keeps using the previous build.
+After changing `wrangler.jsonc`, run `bun run types` and commit `worker-configuration.d.ts`; CI fails if it is stale.
 
-`viem` is pinned to an exact version that matches the `js/` workspace. It has to: `runKeeperCycle` takes a viem client, so its public types *are* viem types, and two different viem versions across the two lockfiles produce two incompatible `Client` types and a typecheck failure that has nothing to do with this code. Bump both together.
-
-## Running one cycle locally
+To run it locally against a real chain, put the three secrets in `.dev.vars` (see `.dev.vars.example`), then:
 
 ```bash
-CHAIN_ID=11155111 \
-REGISTRY_ADDRESS=0x33a53c79a08ed1f863905cd4c6ce036a4c493729 \
-RPC_URL="https://…,https://…" \
-PRIVATE_KEY=0x… \
-DRY_RUN=true \
-bun run start
+bun run dev --var DRY_RUN:true          # wrangler dev --env sepolia
+curl "localhost:8787/cdn-cgi/local/scheduled?format=json"
 ```
 
-`DRY_RUN=true` enumerates and simulates without sending, which is the safe way to validate a new environment's secrets and variables. Outside Actions the job summary is skipped and annotations are just lines on stdout; the JSON line (`kind: "keeper/cycle"`) and the exit code are the same either way.
+`DRY_RUN` simulates each trigger and sends nothing — the safe way to check a new deployment's RPC and registry. Only `secrets.required` names are read from `.dev.vars`; override anything else with `--var NAME:value`.

@@ -1,0 +1,57 @@
+# Keeper Worker CI. Installs, typechecks, tests, and bundles both deployments
+# with `wrangler deploy --dry-run`.
+#
+# It never runs a keeper cycle: Cloudflare Cron Triggers are the only
+# scheduler. Nothing here needs Cloudflare credentials either — a dry run
+# bundles locally — so it runs the same on pull requests from forks.
+
+name: keeper-ci
+
+permissions: {}
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  # keeper-deploy.yml runs this as its gate, so nothing ships untested.
+  workflow_call:
+
+jobs:
+  check:
+    name: Keeper Worker
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: services/keeper
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      # worker-configuration.d.ts is generated from wrangler.jsonc and
+      # committed. Stale, it types the Worker against bindings that no longer
+      # exist.
+      - name: Generated types are current
+        run: bun run check:types
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      # Includes test/config.test.ts, which validates each deployment in
+      # wrangler.jsonc against the Worker's own config rules — the part a dry
+      # run does not check.
+      - name: Test
+        run: bun test
+
+      - name: Bundle both deployments
+        run: bun run check:deploy

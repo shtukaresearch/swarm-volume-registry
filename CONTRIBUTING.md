@@ -71,51 +71,21 @@ bound the value implies.
 - [`ethersphere/storage-incentives`](https://github.com/ethersphere/storage-incentives), pinned to the tag of the live `PostageStamp` deployment (currently `v0.9.4`). Tests import `PostageStamp`, `PriceOracle`, and `TestToken` from this submodule so the suite runs against real bytecode rather than mocks.
 - [`OpenZeppelin/openzeppelin-contracts`](https://github.com/OpenZeppelin/openzeppelin-contracts), pinned to `v4.8.2`. `VolumeRegistry` itself does not depend on OpenZeppelin, but `storage-incentives` is a Hardhat project that imports `@openzeppelin/contracts/...` and resolves it from `node_modules/` at its own build time. When `forge` compiles those same sources here, it has no npm awareness, so the dependency must be supplied as a submodule with a matching remapping in `remappings.txt`. The pin tracks `storage-incentives@v0.9.4`'s `package.json`; bump it together with `storage-incentives` whenever a new PostageStamp deployment lands.
 
-## Keeper package
+## Keeper
 
-`js/packages/ethswarm-volume-keeper` (the keeper cycle) and
-`js/workers/gas-boy` (a cron-triggered Cloudflare Worker) form a Bun workspace
-rooted at `js/`.
-
-`services/keeper` is the second bot — a one-shot run driven by
-`.github/workflows/keeper.yml` on a GitHub Actions schedule. Two bots on
-unrelated infrastructure means a failure in one is unlikely to be a failure in
-both. It is a standalone Bun project with its own lockfile rather than a
-workspace member, because it is deployed rather than published; it depends on
-the keeper package by path.
+[`services/keeper`](./services/keeper) is the keeper: one Cloudflare Worker,
+deployed as `keeper-sepolia` and `keeper-gnosis`. A standalone Bun project with
+its own lockfile; nothing else in the repository depends on it.
 
 ```sh
-cd js
+cd services/keeper
 bun install
+bun test
 bun run typecheck
-bun test packages/
-bun run build          # tsc → packages/ethswarm-volume-keeper/dist
+bun run check:deploy   # wrangler deploy --dry-run, both envs
 ```
 
-Both bots consume the package's `dist/`, which is not committed. `gas-boy` is a
-workspace member and builds it from its own scripts. `services/keeper` installs
-it by path, so build the package *before* installing there, and rebuild and
-reinstall after changing it:
-
-```sh
-cd js && bun install && bun run build
-cd ../services/keeper && bun install
-bun test && bun run typecheck
-```
-
-Its `viem` is pinned to the exact version the `js/` workspace resolves. That
-coupling is real rather than tidy-mindedness: `runKeeperCycle` takes a viem
-client, so the package's public types are viem types, and a version skew across
-the two lockfiles produces two incompatible `Client` types. Bump both together.
-
-Neither bot needs chain access to typecheck. `bun run dev` in `js/workers/gas-boy`
-starts `wrangler dev` against `.dev.vars` (see `.dev.vars.example`);
-`bun run start` in `services/keeper` runs one cycle from environment variables,
-and `DRY_RUN=true` makes that safe to point anywhere.
-
-The package is deliberately free of transports, chain definitions, RPC
-endpoints, key handling and environment parsing — actions take a viem client
-the caller supplies. Those concerns belong in a bot. Keeping them there is what
-lets the two bots differ where it matters: the Worker ranks its RPC endpoints
-across ticks because its isolate persists, while the Actions runner probes them
-once per run because it does not.
+None of this needs chain access or Cloudflare credentials. CI runs the same
+steps (`.github/workflows/keeper-ci.yml`); deploys go through
+`.github/workflows/keeper-deploy.yml`. Setup, configuration and local runs are
+in its [README](./services/keeper/README.md).

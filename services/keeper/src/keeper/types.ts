@@ -60,6 +60,16 @@ export interface VolumeResult {
   error?: string;
 }
 
+/**
+ * Something an operator should see: what happened, and — when there is one —
+ * the volume it happened to and the transaction that shows it.
+ */
+export interface KeeperIssue {
+  message: string;
+  volumeId?: Hex;
+  hash?: Hex;
+}
+
 export interface VolumeOutcome {
   volumeId: Hex;
   reason: string;

@@ -8,7 +8,12 @@ import {
 import { getAction } from "viem/utils";
 import { VOLUME_STATUS, registryAbi } from "../abi.js";
 import { decodeCycleEvents, summarizeVolume } from "../events.js";
-import type { KeeperMode, VolumeOutcome, VolumeResult } from "../types.js";
+import type {
+  KeeperIssue,
+  KeeperMode,
+  VolumeOutcome,
+  VolumeResult,
+} from "../types.js";
 import { collectActiveVolumes } from "./collectActiveVolumes.js";
 import { trigger } from "./trigger.js";
 
@@ -57,7 +62,12 @@ export type RunKeeperCycleReturnType = {
   failed: Hex[];
   /** `selected` mode: requested ids that are not Active volumes. */
   notActive: Hex[];
-  warnings: string[];
+  /**
+   * Worth an operator's attention but not a failure (docs/KEEPERS.md): deferred
+   * work, retirements, `TopupSkipped`, named ids that are gone. Each names its
+   * volume and transaction when it has one, so an alert can too.
+   */
+  warnings: KeeperIssue[];
   error?: string;
   durationMs: number;
 };
@@ -86,7 +96,7 @@ const message = (err: unknown): string =>
  *
  * **Volumes are processed sequentially**, and every one is attempted even after
  * an earlier one fails; `ok` then reports the run as failed and `failed` names
- * the volumes. Sequential is what keeps nonces safe without this package
+ * the volumes. Sequential is what keeps nonces safe without the keeper
  * managing them, and it is what bounds a cycle: `cycleTimeout` stops new
  * transactions rather than truncating one in flight, and anything left over is
  * warned about and picked up next cycle. A cycle therefore handles roughly
@@ -94,7 +104,9 @@ const message = (err: unknown): string =>
  * against `graceBlocks`.
  *
  * **Never throws.** Every failure is folded into the returned result, because
- * throwing out of a cron handler causes retry storms. Check `ok`.
+ * one volume failing must not stop the rest from being attempted, and a run
+ * that fails part-way still owes a report of what it did. Check `ok` — the
+ * Worker turns a failed cycle into a failed invocation.
  *
  * Stateless and self-healing: nothing is remembered between cycles. If a
  * transaction does not mine, the result reports it (with its hash) and the next
@@ -161,21 +173,21 @@ export async function runKeeperCycle<
 
     const attempting = volumeIds.slice(0, maxVolumesPerCycle);
     if (attempting.length < volumeIds.length) {
-      result.warnings.push(
-        `maxVolumesPerCycle (${maxVolumesPerCycle}) reached: ${
+      result.warnings.push({
+        message: `maxVolumesPerCycle (${maxVolumesPerCycle}) reached: ${
           volumeIds.length - attempting.length
         } volume(s) deferred to the next cycle`,
-      );
+      });
     }
 
     const deadline = startedAt + cycleTimeout;
     for (const [i, volumeId] of attempting.entries()) {
       if (i > 0 && Date.now() > deadline) {
-        result.warnings.push(
-          `cycle deadline reached after ${i} volume(s); ${
+        result.warnings.push({
+          message: `cycle deadline reached after ${i} volume(s); ${
             attempting.length - i
           } deferred to the next cycle`,
-        );
+        });
         break;
       }
 
@@ -229,14 +241,14 @@ export async function runKeeperCycle<
 
     const active: Hex[] = [];
     views.forEach((view, i) => {
-      if (view.status === VOLUME_STATUS.active) active.push(view.volumeId);
-      else result.notActive.push(mode.volumeIds[i]!);
+      if (view.status === VOLUME_STATUS.active) {
+        active.push(view.volumeId);
+        return;
+      }
+      const volumeId = mode.volumeIds[i]!;
+      result.notActive.push(volumeId);
+      result.warnings.push({ volumeId, message: "requested volume is not Active" });
     });
-    if (result.notActive.length > 0) {
-      result.warnings.push(
-        `${result.notActive.length} requested volume(s) are not Active: ${result.notActive.join(", ")}`,
-      );
-    }
     return active;
   }
 
@@ -294,11 +306,19 @@ export async function runKeeperCycle<
           break;
         case "retired":
           result.retired.push({ volumeId, reason: summary.reason });
-          result.warnings.push(`${volumeId} retired: ${summary.reason}`);
+          result.warnings.push({
+            volumeId,
+            hash,
+            message: `retired: ${summary.reason}`,
+          });
           break;
         case "topupSkipped":
           result.topupSkipped.push({ volumeId, reason: summary.reason });
-          result.warnings.push(`${volumeId} not funded: ${summary.reason}`);
+          result.warnings.push({
+            volumeId,
+            hash,
+            message: `not funded: ${summary.reason}`,
+          });
           break;
         case "noop":
           result.noop.push(volumeId);

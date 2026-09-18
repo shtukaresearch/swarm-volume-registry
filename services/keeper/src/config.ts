@@ -1,253 +1,229 @@
-import {
-  createPublicClient,
-  createWalletClient,
-  fallback,
-  http,
-  isAddress,
-  isHex,
-  publicActions,
-  type Address,
-  type Chain,
-  type Hex,
-} from "viem";
-import { privateKeyToAccount } from "viem/accounts";
-import { gnosis, sepolia } from "viem/chains";
-import type { KeeperMode } from "ethswarm-volume-keeper";
+import { isAddress, type Address, type Chain, type Hex } from "viem";
+import { CHAINS } from "./client.js";
+import type { KeeperMode } from "./keeper/types.js";
 
 /**
- * Chains this runner can be pointed at. Add one here to support it — its viem
- * `Chain` must carry `contracts.multicall3`, which is how every read is
- * batched.
+ * The Worker's bindings, as `wrangler types` generates them from
+ * wrangler.jsonc, plus the optional overrides that no committed deployment
+ * sets — pass them with `wrangler dev --var NAME:value`.
  */
-const CHAINS: Record<number, Chain> = {
-  [gnosis.id]: gnosis,
-  [sepolia.id]: sepolia,
-};
+export type KeeperEnv = Env &
+  Partial<Record<"DRY_RUN" | "VOLUME_IDS" | "PAGE_SIZE", string>>;
 
-export interface Config {
-  chain: Chain;
-  privateKey: Hex;
-  /** Tried in order. The first is the primary. */
-  endpoints: string[];
-  registry: Address;
-  mode: KeeperMode;
-  dryRun: boolean;
-  maxVolumesPerCycle?: number;
-  pageSize?: number;
-  confirmations?: number;
-  receiptTimeout?: number;
-  cycleTimeout: number;
-  /** Warn when the keeper's native balance drops below this. 0 disables. */
-  minBalanceWei: bigint;
-  /** Escalate warnings to a failing exit code — see the README on notifications. */
-  failOnWarning: boolean;
+export interface TelegramConfig {
+  botToken: string;
+  /** A numeric chat id (groups are negative) or an `@channel` username. */
+  chatId: string;
 }
 
-const list = (raw: string | undefined): string[] =>
-  (raw ?? "")
+export interface CycleLimits {
+  maxVolumesPerCycle: number;
+  pageSize: number;
+  cycleTimeoutMs: number;
+  receiptTimeoutMs: number;
+  confirmations: number;
+}
+
+export interface Config {
+  /** Which Worker this is — `keeper-sepolia`, `keeper-gnosis`. Leads every report. */
+  deployment: string;
+  chain: Chain;
+  registry: Address;
+  privateKey: Hex;
+  /** Tried in order; the first is the primary. */
+  endpoints: string[];
+  telegram: TelegramConfig;
+  /** Failures always notify; warnings only when this is set. */
+  notifyWarnings: boolean;
+  /** Warn when the keeper wallet's native balance is below this. 0 disables. */
+  minBalanceWei: bigint;
+  mode: KeeperMode;
+  dryRun: boolean;
+  limits: CycleLimits;
+}
+
+/**
+ * Every problem with a deployment's configuration, not just the first — a
+ * redeploy per typo is a slow way to find out there were three.
+ */
+export class ConfigError extends Error {
+  constructor(readonly problems: string[]) {
+    super(`invalid configuration: ${problems.join("; ")}`);
+    this.name = "ConfigError";
+  }
+}
+
+/** What a deployment says it is, straight from its vars — valid or not. */
+export interface DeploymentIdentity {
+  deployment: string;
+  chainId?: number;
+  chainName?: string;
+  registry?: string;
+}
+
+const PRIVATE_KEY = /^0x[0-9a-fA-F]{64}$/;
+const VOLUME_ID = /^0x[0-9a-fA-F]{64}$/;
+const DIGITS = /^\d+$/;
+// `<bot id>:<secret>`, as BotFather issues it.
+const BOT_TOKEN = /^\d+:[\w-]+$/;
+const CHAT_ID = /^(-?\d+|@[A-Za-z]\w{3,})$/;
+
+const text = (env: KeeperEnv, key: keyof KeeperEnv): string => {
+  const value = env[key];
+  return typeof value === "string" ? value.trim() : "";
+};
+
+const list = (raw: string): string[] =>
+  raw
     .split(",")
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
 
-const num = (raw: string | undefined): number | undefined =>
-  raw && raw.trim() ? Number(raw) : undefined;
-
-const bool = (raw: string | undefined): boolean =>
-  !!raw && !["", "false", "0", "no"].includes(raw.trim().toLowerCase());
-
-/**
- * Hide the path of an RPC URL, which usually *is* the API key.
- *
- * GitHub masks registered secrets in logs, but only on exact match — a URL
- * assembled or split anywhere along the way can slip through, and on a public
- * repository the logs are world-readable. Cheap insurance.
- */
-export const redact = (url: string): string => {
-  try {
-    const u = new URL(url);
-    return u.pathname === "/" && !u.search
-      ? `${u.protocol}//${u.host}`
-      : `${u.protocol}//${u.host}/…`;
-  } catch {
-    return "<malformed url>";
-  }
-};
-
-/**
- * Replace every configured endpoint URL with its redacted form, anywhere in a
- * string.
- *
- * Redacting at the point where *we* print a URL is not enough: viem embeds the
- * full endpoint in its error messages ("URL: https://…/<api key>"), and those
- * messages travel into warnings, annotations, the JSON line and the Telegram
- * ping. So scrubbing happens at the output boundary instead, over text nobody
- * here composed.
- */
-export function makeScrubber(endpoints: string[]): (text: string) => string {
-  const pairs: Array<[string, string]> = [];
-  for (const url of endpoints) {
-    const replacement = redact(url);
-    const variants = new Set<string>([url, url.replace(/\/+$/, "")]);
-    try {
-      variants.add(new URL(url).href);
-    } catch {
-      // Unparseable: the raw form is still worth masking.
-    }
-    for (const variant of variants) {
-      if (variant) pairs.push([variant, replacement]);
-    }
-  }
-  // Longest first, so a shorter variant never masks part of a longer match.
-  pairs.sort((a, b) => b[0].length - a[0].length);
-  return (text) =>
-    pairs.reduce((acc, [from, to]) => acc.split(from).join(to), text);
-}
-
-/** viem errors run to many lines; a warning wants the headline. */
-export const brief = (message: string, max = 160): string => {
-  const line = message
-    .split("\n")
-    .map((s) => s.trim())
-    .filter(Boolean)[0];
-  const text = line ?? message;
-  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
-};
-
-export function readConfig(env: NodeJS.ProcessEnv): Config {
-  const chainId = Number(env.CHAIN_ID);
-  const chain = CHAINS[chainId];
-  if (!chain) {
-    throw new Error(
-      `unsupported CHAIN_ID ${env.CHAIN_ID ?? "(unset)"} (supported: ${Object.keys(CHAINS).join(", ")})`,
-    );
-  }
-
-  const privateKey = env.PRIVATE_KEY ?? "";
-  if (!isHex(privateKey) || privateKey.length !== 66) {
-    throw new Error("PRIVATE_KEY must be a 0x-prefixed 32-byte hex string");
-  }
-
-  const endpoints = list(env.RPC_URL);
-  if (endpoints.length === 0) throw new Error("RPC_URL is required");
-
-  const registry = env.REGISTRY_ADDRESS ?? "";
-  if (!isAddress(registry)) {
-    throw new Error(`REGISTRY_ADDRESS is not an address: ${registry || "(unset)"}`);
-  }
-
-  const volumeIds = list(env.VOLUME_IDS);
-  for (const id of volumeIds) {
-    if (!isHex(id) || id.length !== 66) {
-      throw new Error(`VOLUME_IDS entry is not a 32-byte hex string: ${id}`);
-    }
-  }
-
+/** Enough of the configuration to say which deployment is speaking. */
+export function readIdentity(env: KeeperEnv): DeploymentIdentity {
+  const chainId = Number(text(env, "CHAIN_ID"));
+  const registry = text(env, "REGISTRY_ADDRESS");
   return {
-    chain,
-    privateKey,
-    endpoints,
-    registry,
-    mode: volumeIds.length
-      ? { type: "selected", volumeIds: volumeIds as Hex[] }
-      : { type: "all" },
-    dryRun: bool(env.DRY_RUN),
-    maxVolumesPerCycle: num(env.MAX_VOLUMES_PER_CYCLE),
-    pageSize: num(env.PAGE_SIZE),
-    confirmations: num(env.CONFIRMATIONS),
-    receiptTimeout: num(env.RECEIPT_TIMEOUT_MS),
-    // A runner has minutes of wall clock, not a Worker's tight budget, so the
-    // default is well above the package's 120s. `timeout-minutes` on the job is
-    // the real backstop; this one exits cleanly and reports what it deferred.
-    cycleTimeout: num(env.CYCLE_TIMEOUT_MS) ?? 300_000,
-    minBalanceWei: env.MIN_BALANCE_WEI?.trim()
-      ? BigInt(env.MIN_BALANCE_WEI.trim())
-      : 0n,
-    failOnWarning: bool(env.FAIL_ON_WARNING),
+    deployment: text(env, "DEPLOYMENT_NAME") || "keeper (DEPLOYMENT_NAME unset)",
+    ...(Number.isInteger(chainId) && chainId > 0 ? { chainId } : {}),
+    ...(CHAINS[chainId] ? { chainName: CHAINS[chainId]!.name } : {}),
+    ...(registry ? { registry } : {}),
   };
 }
 
-export interface EndpointHealth {
-  url: string;
-  redacted: string;
-  ok: boolean;
-  chainId?: number;
-  blockNumber?: bigint;
-  latencyMs: number;
-  error?: string;
+/**
+ * The alert channel alone, read leniently: a deployment whose wallet or RPC
+ * config is broken can still say so, as long as this much is right.
+ */
+export function readTelegramConfig(env: KeeperEnv): TelegramConfig | undefined {
+  const botToken = text(env, "TELEGRAM_BOT_TOKEN");
+  const chatId = text(env, "TELEGRAM_CHAT_ID");
+  return BOT_TOKEN.test(botToken) && CHAT_ID.test(chatId)
+    ? { botToken, chatId }
+    : undefined;
 }
 
 /**
- * Check every endpoint before the cycle starts, and report what it found.
+ * Validate the Worker's bindings into a {@link Config}, or throw a
+ * {@link ConfigError} naming every problem.
  *
- * The Worker keeps one isolate alive across ticks, so it can let viem's
- * `fallback` rank endpoints over time and learn which is slow. A run that lives
- * for one cycle learns nothing it can keep, and `rank` schedules an interval
- * that would hold the process open past the work. So this runner ranks nothing
- * and probes instead: one round trip per endpoint, up front, turning "we
- * quietly failed over" into a line in the log.
- *
- * A wrong `chainId` is treated as unusable rather than merely noted. An
- * endpoint on the wrong network answers reads confidently and wrongly, which
- * looks exactly like an empty registry.
+ * Secrets are checked for shape and never echoed: an error message ends up in
+ * Workers Logs and in Telegram. `wrangler deploy` already refuses to ship a
+ * deployment with a secret *unset* (`secrets.required`); this catches one set
+ * to the wrong thing, before it can pass for an idle keeper.
  */
-export async function probeEndpoints(
-  endpoints: string[],
-  chain: Chain,
-  timeout = 10_000,
-): Promise<EndpointHealth[]> {
-  return Promise.all(
-    endpoints.map(async (url): Promise<EndpointHealth> => {
-      const startedAt = Date.now();
-      const redacted = redact(url);
-      try {
-        const client = createPublicClient({
-          chain,
-          transport: http(url, { retryCount: 0, timeout }),
-        });
-        const [chainId, blockNumber] = await Promise.all([
-          client.getChainId(),
-          client.getBlockNumber({ cacheTime: 0 }),
-        ]);
-        const latencyMs = Date.now() - startedAt;
-        if (chainId !== chain.id) {
-          return {
-            url,
-            redacted,
-            ok: false,
-            chainId,
-            latencyMs,
-            error: `reports chain id ${chainId}, expected ${chain.id}`,
-          };
-        }
-        return { url, redacted, ok: true, chainId, blockNumber, latencyMs };
-      } catch (err) {
-        return {
-          url,
-          redacted,
-          ok: false,
-          latencyMs: Date.now() - startedAt,
-          error: err instanceof Error ? err.message : String(err),
-        };
-      }
-    }),
-  );
+export function readConfig(env: KeeperEnv): Config {
+  const problems: string[] = [];
+
+  const deployment = text(env, "DEPLOYMENT_NAME");
+  if (!deployment) problems.push("DEPLOYMENT_NAME is required");
+
+  const rawChainId = text(env, "CHAIN_ID");
+  const chain = CHAINS[Number(rawChainId)];
+  if (!chain) {
+    problems.push(
+      `CHAIN_ID ${rawChainId ? `${rawChainId} is not supported` : "is required"} (supported: ${Object.keys(CHAINS).join(", ")})`,
+    );
+  }
+
+  const registry = text(env, "REGISTRY_ADDRESS");
+  if (!isAddress(registry)) {
+    problems.push(
+      registry
+        ? `REGISTRY_ADDRESS is not a valid address: ${registry}`
+        : "REGISTRY_ADDRESS is required",
+    );
+  }
+
+  const privateKey = text(env, "PRIVATE_KEY");
+  if (!privateKey) problems.push("PRIVATE_KEY is required");
+  else if (!PRIVATE_KEY.test(privateKey)) {
+    problems.push("PRIVATE_KEY must be a 0x-prefixed 32-byte hex string");
+  }
+
+  const endpoints = list(text(env, "RPC_URL"));
+  if (endpoints.length === 0) problems.push("RPC_URL is required");
+  endpoints.forEach((url, i) => {
+    // Position, not value: the path of an RPC URL is usually its API key.
+    if (!isHttpUrl(url)) problems.push(`RPC_URL entry ${i + 1} is not an http(s) URL`);
+  });
+
+  const botToken = text(env, "TELEGRAM_BOT_TOKEN");
+  if (!botToken) problems.push("TELEGRAM_BOT_TOKEN is required");
+  else if (!BOT_TOKEN.test(botToken)) {
+    problems.push("TELEGRAM_BOT_TOKEN does not look like a bot token (<id>:<secret>)");
+  }
+
+  const chatId = text(env, "TELEGRAM_CHAT_ID");
+  if (!chatId) problems.push("TELEGRAM_CHAT_ID is required");
+  else if (!CHAT_ID.test(chatId)) {
+    problems.push(`TELEGRAM_CHAT_ID must be a numeric chat id or @channel: ${chatId}`);
+  }
+
+  const volumeIds = list(text(env, "VOLUME_IDS"));
+  for (const id of volumeIds) {
+    if (!VOLUME_ID.test(id)) problems.push(`VOLUME_IDS entry is not a 32-byte hex string: ${id}`);
+  }
+
+  const flag = (key: keyof KeeperEnv): boolean => {
+    const raw = text(env, key).toLowerCase();
+    if (raw === "" || raw === "false") return false;
+    if (raw === "true") return true;
+    problems.push(`${key} must be "true" or "false", got "${raw}"`);
+    return false;
+  };
+
+  const count = (key: keyof KeeperEnv, fallback?: number): number => {
+    const raw = text(env, key);
+    if (!raw && fallback !== undefined) return fallback;
+    if (!raw) {
+      problems.push(`${key} is required`);
+      return 0;
+    }
+    if (!DIGITS.test(raw) || Number(raw) < 1 || !Number.isSafeInteger(Number(raw))) {
+      problems.push(`${key} must be a positive integer, got "${raw}"`);
+      return 0;
+    }
+    return Number(raw);
+  };
+
+  const rawBalance = text(env, "MIN_BALANCE_WEI");
+  if (!rawBalance) problems.push("MIN_BALANCE_WEI is required (0 disables the warning)");
+  else if (!DIGITS.test(rawBalance)) {
+    problems.push(`MIN_BALANCE_WEI must be a whole number of wei, got "${rawBalance}"`);
+  }
+
+  const config = {
+    deployment,
+    chain: chain!,
+    registry: registry as Address,
+    privateKey: privateKey as Hex,
+    endpoints,
+    telegram: { botToken, chatId },
+    notifyWarnings: flag("NOTIFY_WARNINGS"),
+    minBalanceWei: DIGITS.test(rawBalance) ? BigInt(rawBalance) : 0n,
+    mode: volumeIds.length
+      ? { type: "selected" as const, volumeIds: volumeIds as Hex[] }
+      : { type: "all" as const },
+    dryRun: flag("DRY_RUN"),
+    limits: {
+      maxVolumesPerCycle: count("MAX_VOLUMES_PER_CYCLE"),
+      pageSize: count("PAGE_SIZE", 100),
+      cycleTimeoutMs: count("CYCLE_TIMEOUT_MS"),
+      receiptTimeoutMs: count("RECEIPT_TIMEOUT_MS"),
+      confirmations: count("CONFIRMATIONS", 1),
+    },
+  } satisfies Config;
+
+  if (problems.length > 0) throw new ConfigError(problems);
+  return config;
 }
 
-/**
- * A wallet client with public actions — what `runKeeperCycle` expects.
- *
- * `endpoints` should be the healthy ones from {@link probeEndpoints}, still in
- * configured order. Each gets `retryCount: 0` so a dead one is abandoned
- * immediately and `fallback` owns the retry budget as it walks the list. No
- * `rank`: see {@link probeEndpoints}.
- */
-export function buildClient(config: Config, endpoints: string[]) {
-  return createWalletClient({
-    account: privateKeyToAccount(config.privateKey),
-    chain: config.chain,
-    transport: fallback(
-      endpoints.map((url) => http(url, { retryCount: 0, timeout: 15_000 })),
-      { retryCount: 2 },
-    ),
-  }).extend(publicActions);
+function isHttpUrl(raw: string): boolean {
+  try {
+    const { protocol } = new URL(raw);
+    return protocol === "https:" || protocol === "http:";
+  } catch {
+    return false;
+  }
 }

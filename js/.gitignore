@@ -1,6 +1,0 @@
-# Shared by all workspaces (packages/*, workers/*). bun.lock is committed.
-node_modules/
-dist/
-.wrangler/
-.dev.vars
-*.log

@@ -1,0 +1,85 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // Each env below deploys as its own Worker, named `keeper-<env>`. Top level is
+  // not a deployment: it holds only what both envs share.
+  "name": "keeper",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-15",
+  "compatibility_flags": ["nodejs_compat"],
+
+  // Workers Logs and Traces. Every run emits one structured JSON line — the same
+  // report the Telegram alert is rendered from — at the level matching its
+  // status: log / warn / error. Traces capture the RPC and Telegram fetches
+  // each run makes. Both sample everything: at most one run a minute, volume is
+  // not a concern.
+  "observability": {
+    "enabled": true,
+    "logs": { "enabled": true, "head_sampling_rate": 1, "invocation_logs": true },
+    "traces": { "enabled": true, "head_sampling_rate": 1 }
+  },
+
+  // `secrets` is not inherited, so this top-level copy only guards the root: a
+  // bare `wrangler deploy` with no `--env` fails on missing secrets instead of
+  // quietly creating a third, cron-less `keeper` Worker.
+  "secrets": { "required": ["PRIVATE_KEY", "RPC_URL", "TELEGRAM_BOT_TOKEN"] },
+
+  // Per env. `vars` and `secrets` are not inherited, hence the repetition.
+  //
+  // Secrets are per deployment and never shared: each env has its own keeper
+  // wallet and its own RPC credentials, set once with
+  // `wrangler secret put <NAME> --env <env>`. Declaring them in
+  // `secrets.required` makes `wrangler deploy` fail while any is unset, rather
+  // than deploy a Worker whose every scheduled run can only fail.
+  //
+  // Cycle limits keep a whole run inside one cron interval, so two runs never
+  // share a wallet at once (docs/KEEPERS.md: prevent overlapping invocations).
+  // test/config.test.ts holds each env to that:
+  //   probe (5 s) + CYCLE_TIMEOUT_MS + RECEIPT_TIMEOUT_MS + 5 s slack ≤ interval
+  // and also ≤ the 15 min Cron Trigger wall-clock limit.
+  "env": {
+    // Sepolia — registry v2, graceBlocks = 12 (~2.4 min). The one-minute cron is
+    // the floor that keeps volumes alive, and it bounds a run to ~55 s: roughly
+    // two volumes per tick at 12 s blocks. Warnings stay out of Telegram here —
+    // at one run a minute a standing warning would page 1440 times a day — but
+    // failures always go.
+    "sepolia": {
+      "vars": {
+        "DEPLOYMENT_NAME": "keeper-sepolia",
+        "CHAIN_ID": "11155111",
+        "REGISTRY_ADDRESS": "0x33a53c79a08ed1f863905cd4c6ce036a4c493729",
+        "TELEGRAM_CHAT_ID": "",
+        "NOTIFY_WARNINGS": "false",
+        "MIN_BALANCE_WEI": "50000000000000000",
+        "MAX_VOLUMES_PER_CYCLE": "10",
+        "CYCLE_TIMEOUT_MS": "20000",
+        "RECEIPT_TIMEOUT_MS": "30000",
+        "CONFIRMATIONS": "1"
+      },
+      "secrets": { "required": ["PRIVATE_KEY", "RPC_URL", "TELEGRAM_BOT_TOKEN"] },
+      "triggers": { "crons": ["* * * * *"] }
+    },
+
+    // Gnosis Chain — graceBlocks = 17280 (~24 h at 5 s blocks), so hourly leaves
+    // ~23 h of slack for missed runs, and a run may take up to ~11 min.
+    //
+    // Still registry *v1*: no v2 is deployed on Gnosis yet. The keeper works
+    // against both — trigger(bytes32), the views and the events are identical
+    // in v1 and v2, which only dropped transferVolumeOwnership.
+    "gnosis": {
+      "vars": {
+        "DEPLOYMENT_NAME": "keeper-gnosis",
+        "CHAIN_ID": "100",
+        "REGISTRY_ADDRESS": "0x9639ae4c7a8fa9efe585738d516a3915ddd02aad",
+        "TELEGRAM_CHAT_ID": "",
+        "NOTIFY_WARNINGS": "true",
+        "MIN_BALANCE_WEI": "500000000000000000",
+        "MAX_VOLUMES_PER_CYCLE": "100",
+        "CYCLE_TIMEOUT_MS": "600000",
+        "RECEIPT_TIMEOUT_MS": "60000",
+        "CONFIRMATIONS": "1"
+      },
+      "secrets": { "required": ["PRIVATE_KEY", "RPC_URL", "TELEGRAM_BOT_TOKEN"] },
+      "triggers": { "crons": ["0 * * * *"] }
+    }
+  }
+}

@@ -44,14 +44,33 @@ the sender from the named account.
 
 ## Deployment artifacts
 
-Foundry writes broadcast records beneath:
+Foundry writes execution records beneath:
 
 ```text
 broadcast/DeployVolumeRegistry.s.sol/<chain-id>/
 ```
 
 A broadcast creates a timestamped `run-<timestamp>.json` and updates
-`run-latest.json`. These production broadcast records are intended to be committed.
+`run-latest.json`. These production broadcast records are intended to be committed as
+the audit trail, but they are not the stable discovery interface.
+
+After a successful broadcast, export the deployment record:
+
+```sh
+python3 script/export_deployment.py sepolia-postage-v0.9.4
+```
+
+The exporter validates the chain, constructor arguments, successful receipt and
+deployed address before combining the broadcast with the compiled ABI. It writes a
+record following the hardhat-deploy v1 layout beneath:
+
+```text
+deployments/<network>/.chainId
+deployments/<network>/VolumeRegistry.json
+```
+
+Commit the deployment record together with its production broadcast files. See
+[`RELEASING.md`](../RELEASING.md) for the complete release procedure.
 
 Simulations write the equivalent files beneath:
 

@@ -4,6 +4,9 @@
 # profile identity: multiple profiles may target different PostageStamp
 # deployments on the same chain. VolumeRegistry addresses are recorded only
 # after deployment, in docs/usage.md and the Foundry broadcast records.
+# deployment_network selects the discovery-manifest directory. The verifier
+# fields configure script/verify_deployment.py; secrets and RPC URLs come from
+# the environment and are never stored here.
 # These values originated in docs/usage.md. On 2026-08-21, each live
 # PostageStamp returned the configured BZZ address and grace_blocks value from
 # bzzToken() and minimumValidityBlocks(), respectively.
@@ -13,9 +16,17 @@ chain_id = 100
 postage_stamp = "0x45a1502382541Cd610CC9068e88727426b696293"
 bzz = "0xdBF3Ea6F5beE45c02255B2c26a16F300502F68da"
 grace_blocks = 17280
+deployment_network = "gnosis"
+verifier = "blockscout"
+verifier_url = "https://gnosis.blockscout.com/api/"
+explorer_url = "https://gnosis.blockscout.com/address/{address}"
 
 [profiles."sepolia-postage-v0.9.4"]
 chain_id = 11155111
 postage_stamp = "0xcdfdC3752caaA826fE62531E0000C40546eC56A6"
 bzz = "0x543dDb01Ba47acB11de34891cD86B675F04840db"
 grace_blocks = 12
+deployment_network = "sepolia"
+verifier = "etherscan"
+verifier_api_key_env = "ETHERSCAN_API_KEY"
+explorer_url = "https://sepolia.etherscan.io/address/{address}#code"

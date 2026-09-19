@@ -2,6 +2,10 @@
 contracts/out/
 contracts/cache/
 
+# Python tooling
+__pycache__/
+*.py[cod]
+
 # Broadcast logs — keep production deploy records, drop local/dry-run noise
 contracts/broadcast/**/dry-run/
 contracts/broadcast/*/31337/

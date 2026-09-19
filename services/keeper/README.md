@@ -32,7 +32,7 @@ Every run writes one JSON object to Workers Logs (`kind: "keeper/run"`) at the l
 
 `failures` and `warnings` each list `{ message, volumeId?, hash? }`; `volumes` has the per-volume detail, including the healthy `noop`s. In the Workers Logs query builder, filter on `status` or `deployment`.
 
-Failures always go to Telegram. Warnings go only where `NOTIFY_WARNINGS` is `true` — on for Gnosis, off for Sepolia, where a standing warning would repeat every minute.
+Failures and warnings go to Telegram in both deployments. `NOTIFY_WARNINGS` remains configurable, but defaults to `true` so skipped top-ups, retirements and RPC failovers are visible.
 
 A failed run is not retried by the platform (`noRetry()`): the next tick is the retry, and an overlapping one would race the same wallet's nonce. `trigger` is idempotent, so nothing is lost by waiting.
 
@@ -47,10 +47,11 @@ Secrets, per deployment — never shared between them:
 | `PRIVATE_KEY` | The keeper wallet. Generate a fresh one (`cast wallet new`). It only pays gas: fund it with Sepolia ETH or xDAI and nothing else. |
 | `RPC_URL` | Comma-separated, from independent providers. Probed every run — chain id included — and tried in order. |
 | `TELEGRAM_BOT_TOKEN` | From @BotFather. |
+| `TELEGRAM_CHAT_ID` | Numeric user or private-group chat ID. Both deployments may post to the same group, but store it independently. |
 
 Declared in `secrets.required`, so `wrangler deploy` refuses to ship a deployment with any of them unset. The Worker validates their shape too: a key or URL set to the wrong thing fails the run and alerts, rather than passing for an idle keeper.
 
-Variables, in `wrangler.jsonc` per env: `DEPLOYMENT_NAME`, `CHAIN_ID`, `REGISTRY_ADDRESS`, `TELEGRAM_CHAT_ID`, `NOTIFY_WARNINGS`, `MIN_BALANCE_WEI` (0 disables the warning), and the cycle limits `MAX_VOLUMES_PER_CYCLE`, `CYCLE_TIMEOUT_MS`, `RECEIPT_TIMEOUT_MS`, `CONFIRMATIONS`. Not set by either deployment, but accepted: `DRY_RUN`, `VOLUME_IDS` (maintain only these), `PAGE_SIZE`.
+Variables, in `wrangler.jsonc` per env: `DEPLOYMENT_NAME`, `CHAIN_ID`, `REGISTRY_ADDRESS`, `NOTIFY_WARNINGS`, `MIN_BALANCE_WEI` (0 disables the warning), and the cycle limits `MAX_VOLUMES_PER_CYCLE`, `CYCLE_TIMEOUT_MS`, `RECEIPT_TIMEOUT_MS`, `CONFIRMATIONS`. Not set by either deployment, but accepted: `DRY_RUN`, `VOLUME_IDS` (maintain only these), `PAGE_SIZE`.
 
 **A run must fit inside its cron interval**, so two runs never share the wallet at once: 5 s of RPC probing, plus `CYCLE_TIMEOUT_MS` (no new transaction starts after it), plus `RECEIPT_TIMEOUT_MS` for the last one, plus 5 s of slack. `test/config.test.ts` holds each env to that, and to the 15-minute Cron Trigger limit. On Sepolia that leaves about two volumes a minute at 12 s blocks — if it ever maintains more, that budget is what to revisit.
 
@@ -64,7 +65,7 @@ A new Worker cannot take `wrangler secret put` before it exists, and `secrets.re
 
 ```bash
 cd services/keeper && bun install
-printf 'PRIVATE_KEY=0x…\nRPC_URL=https://…,https://…\nTELEGRAM_BOT_TOKEN=…\n' > .secrets.sepolia
+printf 'PRIVATE_KEY=0x…\nRPC_URL=https://…,https://…\nTELEGRAM_BOT_TOKEN=…\nTELEGRAM_CHAT_ID=-100…\n' > .secrets.sepolia
 bunx wrangler deploy --env sepolia --secrets-file .secrets.sepolia
 rm .secrets.sepolia
 ```
@@ -103,7 +104,7 @@ Finally, configure CI for all later deploys (so you never deploy from a laptop a
 
 ### Secret rotation
 
-Secrets are never in `wrangler.jsonc` or git — they live in Cloudflare Workers Secrets per env (`secrets.required: PRIVATE_KEY, RPC_URL, TELEGRAM_BOT_TOKEN`).
+Secrets are never in `wrangler.jsonc` or git — they live in Cloudflare Workers Secrets per env (`secrets.required: PRIVATE_KEY, RPC_URL, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID`).
 
 Rotate one value without redeploying code:
 
@@ -112,9 +113,10 @@ Rotate one value without redeploying code:
 bunx wrangler secret put PRIVATE_KEY --env sepolia
 bunx wrangler secret put RPC_URL --env sepolia          # comma-separated, independent providers
 bunx wrangler secret put TELEGRAM_BOT_TOKEN --env gnosis
+bunx wrangler secret put TELEGRAM_CHAT_ID --env gnosis
 
 # or atomically via file (avoids typing a key into shell history)
-printf 'PRIVATE_KEY=0x…\nRPC_URL=https://…,https://…\nTELEGRAM_BOT_TOKEN=…\n' > .secrets.sepolia
+printf 'PRIVATE_KEY=0x…\nRPC_URL=https://…,https://…\nTELEGRAM_BOT_TOKEN=…\nTELEGRAM_CHAT_ID=-100…\n' > .secrets.sepolia
 bunx wrangler deploy --env sepolia --secrets-file .secrets.sepolia
 rm .secrets.sepolia
 ```
@@ -130,7 +132,7 @@ Notes:
 
 * `wrangler deploy` refuses if any `secrets.required` entry is missing; the Worker itself re-validates shape (e.g. `PRIVATE_KEY` is `0x`-hex, `RPC_URL` parses) and **fails the run and alerts** rather than reporting `ok` with no work — a bad rotation is never silent.
 * `HEALTH` is unauthenticated and reveals only the wallet address, not secret values.
-* Keep `PRIVATE_KEY` per deployment (Sepolia vs Gnosis keys never shared) and keep `TELEGRAM_CHAT_ID` as a non-secret var — the bot token alone is the secret.
+* Keep `PRIVATE_KEY` per deployment (Sepolia vs Gnosis keys never shared). `TELEGRAM_CHAT_ID` is also a per-deployment secret, even when both deployments post to the same group.
 * After rotation, the next cron tick uses the new value; no Workers restart needed. Old secrets are overwritten in place — delete the local `.secrets.*` file after.
 
 ## Working on it
@@ -144,7 +146,7 @@ bun run check:deploy   # bundles both envs, as CI does
 
 After changing `wrangler.jsonc`, run `bun run types` and commit `worker-configuration.d.ts`; CI fails if it is stale.
 
-To run it locally against a real chain, put the three secrets in `.dev.vars` (see `.dev.vars.example`), then:
+To run it locally against a real chain, put the four secrets in `.dev.vars` (see `.dev.vars.example`), then:
 
 ```bash
 bun run dev --var DRY_RUN:true          # wrangler dev --env sepolia

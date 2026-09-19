@@ -21,7 +21,9 @@
   // `secrets` is not inherited, so this top-level copy only guards the root: a
   // bare `wrangler deploy` with no `--env` fails on missing secrets instead of
   // quietly creating a third, cron-less `keeper` Worker.
-  "secrets": { "required": ["PRIVATE_KEY", "RPC_URL", "TELEGRAM_BOT_TOKEN"] },
+  "secrets": {
+    "required": ["PRIVATE_KEY", "RPC_URL", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"]
+  },
 
   // Per env. `vars` and `secrets` are not inherited, hence the repetition.
   //
@@ -39,23 +41,23 @@
   "env": {
     // Sepolia — registry v2, graceBlocks = 12 (~2.4 min). The one-minute cron is
     // the floor that keeps volumes alive, and it bounds a run to ~55 s: roughly
-    // two volumes per tick at 12 s blocks. Warnings stay out of Telegram here —
-    // at one run a minute a standing warning would page 1440 times a day — but
-    // failures always go.
+    // two volumes per tick at 12 s blocks. Warnings go to Telegram so skipped
+    // top-ups, retirements and RPC failovers cannot make a run look healthy.
     "sepolia": {
       "vars": {
         "DEPLOYMENT_NAME": "keeper-sepolia",
         "CHAIN_ID": "11155111",
         "REGISTRY_ADDRESS": "0x33a53c79a08ed1f863905cd4c6ce036a4c493729",
-        "TELEGRAM_CHAT_ID": "",
-        "NOTIFY_WARNINGS": "false",
+        "NOTIFY_WARNINGS": "true",
         "MIN_BALANCE_WEI": "50000000000000000",
         "MAX_VOLUMES_PER_CYCLE": "10",
         "CYCLE_TIMEOUT_MS": "20000",
         "RECEIPT_TIMEOUT_MS": "30000",
         "CONFIRMATIONS": "1"
       },
-      "secrets": { "required": ["PRIVATE_KEY", "RPC_URL", "TELEGRAM_BOT_TOKEN"] },
+      "secrets": {
+        "required": ["PRIVATE_KEY", "RPC_URL", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"]
+      },
       "triggers": { "crons": ["* * * * *"] }
     },
 
@@ -70,7 +72,6 @@
         "DEPLOYMENT_NAME": "keeper-gnosis",
         "CHAIN_ID": "100",
         "REGISTRY_ADDRESS": "0x9639ae4c7a8fa9efe585738d516a3915ddd02aad",
-        "TELEGRAM_CHAT_ID": "",
         "NOTIFY_WARNINGS": "true",
         "MIN_BALANCE_WEI": "500000000000000000",
         "MAX_VOLUMES_PER_CYCLE": "100",
@@ -78,7 +79,9 @@
         "RECEIPT_TIMEOUT_MS": "60000",
         "CONFIRMATIONS": "1"
       },
-      "secrets": { "required": ["PRIVATE_KEY", "RPC_URL", "TELEGRAM_BOT_TOKEN"] },
+      "secrets": {
+        "required": ["PRIVATE_KEY", "RPC_URL", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"]
+      },
       "triggers": { "crons": ["0 * * * *"] }
     }
   }

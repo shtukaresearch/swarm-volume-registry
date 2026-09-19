@@ -4,7 +4,7 @@
 # Only the names in `secrets.required` are loaded from this file — anything
 # else here is ignored. Non-secret overrides go on the command line instead:
 #
-#   bun run dev --var DRY_RUN:true --var TELEGRAM_CHAT_ID:-100…
+#   bun run dev --var DRY_RUN:true
 #
 # For a deployment these are set per env, once, and never shared between envs:
 #
@@ -23,3 +23,7 @@ RPC_URL="https://..."
 
 # From @BotFather. Both deployments may post to the same group.
 TELEGRAM_BOT_TOKEN="<id>:<secret>"
+
+# Numeric Telegram user or group chat ID. Both deployments may use the same
+# destination, but Cloudflare stores the value separately for each Worker.
+TELEGRAM_CHAT_ID="-100..."

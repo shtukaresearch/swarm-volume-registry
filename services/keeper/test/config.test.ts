@@ -166,7 +166,7 @@ describe("reading around a broken config", () => {
 
 const WRANGLER = join(import.meta.dir, "..", "wrangler.jsonc");
 const DEPLOYMENTS = ["sepolia", "gnosis"] as const;
-const SECRETS = ["PRIVATE_KEY", "RPC_URL", "TELEGRAM_BOT_TOKEN"];
+const SECRETS = ["PRIVATE_KEY", "RPC_URL", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"].sort();
 
 /** Cron Triggers stop a run at 15 minutes regardless of schedule. */
 const CRON_WALL_CLOCK_MS = 15 * 60_000;
@@ -203,12 +203,14 @@ describe("committed deployments (wrangler.jsonc)", () => {
           PRIVATE_KEY: KEY,
           RPC_URL: "https://rpc.example",
           TELEGRAM_BOT_TOKEN: TOKEN,
+          TELEGRAM_CHAT_ID: "-1001234567890",
         } as KeeperEnv;
         expect(problems(withSecrets)).toEqual([]);
       });
 
       test("requires its own wallet, RPC and Telegram secrets to deploy", () => {
         expect([...(deployment.secrets?.required ?? [])].sort()).toEqual(SECRETS);
+        expect(vars).not.toHaveProperty("TELEGRAM_CHAT_ID");
       });
 
       // KEEPERS.md: prevent overlapping invocations that share a wallet. Two

@@ -6,15 +6,15 @@ The contract does not custody BZZ, does not sign chunks, has no admin role, and 
 
 ## Deployments
 
-The deployments below are the early-alpha v1 contracts. The repository's v2 contract
-source removes unilateral volume ownership transfer; v2 addresses will be added after
-deployment. Until then, [`docs/usage.md`](./docs/usage.md) documents the deployed v1
+v2 — which removes unilateral volume ownership transfer — is deployed on Sepolia only.
+Gnosis is still the early-alpha v1 contract; a v2 Gnosis address will be added after
+deployment, and until then [`docs/usage.md`](./docs/usage.md) documents the deployed v1
 ABI and its mitigations.
 
-| Chain | `VolumeRegistry` | `graceBlocks` |
-|---|---|---|
-| Gnosis (chain 100) | `0x9639ae4c7a8fa9efe585738d516a3915ddd02aad` | `17280` (≈ 24 h at 5-second blocks) |
-| Sepolia (chain 11155111) | `0x3a99b4b52a4bd75760667219ea93c627051b1af8` | `12` (≈ 2.4 min at 12-second blocks) |
+| Chain | Version | `VolumeRegistry` | `graceBlocks` |
+|---|---|---|---|
+| Gnosis (chain 100) | v1 | `0x9639ae4c7a8fa9efe585738d516a3915ddd02aad` | `17280` (≈ 24 h at 5-second blocks) |
+| Sepolia (chain 11155111) | v2 | `0x33a53c79a08ed1f863905cd4c6ce036a4c493729` | `12` (≈ 2.4 min at 12-second blocks) |
 
 Companion-contract addresses (`PostageStamp`, `BZZ`, `PriceOracle`) and runtime discovery snippets are in [`docs/usage.md`](./docs/usage.md) §2. `graceBlocks` is constructor-immutable; a different runway target requires a fresh deployment.
 

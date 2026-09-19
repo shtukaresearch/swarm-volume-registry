@@ -70,3 +70,22 @@ bound the value implies.
 - [`forge-std`](https://github.com/foundry-rs/forge-std) — Foundry stdlib.
 - [`ethersphere/storage-incentives`](https://github.com/ethersphere/storage-incentives), pinned to the tag of the live `PostageStamp` deployment (currently `v0.9.4`). Tests import `PostageStamp`, `PriceOracle`, and `TestToken` from this submodule so the suite runs against real bytecode rather than mocks.
 - [`OpenZeppelin/openzeppelin-contracts`](https://github.com/OpenZeppelin/openzeppelin-contracts), pinned to `v4.8.2`. `VolumeRegistry` itself does not depend on OpenZeppelin, but `storage-incentives` is a Hardhat project that imports `@openzeppelin/contracts/...` and resolves it from `node_modules/` at its own build time. When `forge` compiles those same sources here, it has no npm awareness, so the dependency must be supplied as a submodule with a matching remapping in `remappings.txt`. The pin tracks `storage-incentives@v0.9.4`'s `package.json`; bump it together with `storage-incentives` whenever a new PostageStamp deployment lands.
+
+## Keeper
+
+[`services/keeper`](./services/keeper) is the keeper: one Cloudflare Worker,
+deployed as `keeper-sepolia` and `keeper-gnosis`. A standalone Bun project with
+its own lockfile; nothing else in the repository depends on it.
+
+```sh
+cd services/keeper
+bun install
+bun test
+bun run typecheck
+bun run check:deploy   # wrangler deploy --dry-run, both envs
+```
+
+None of this needs chain access or Cloudflare credentials. CI runs the same
+steps (`.github/workflows/keeper-ci.yml`); deploys go through
+`.github/workflows/keeper-deploy.yml`. Setup, configuration and local runs are
+in its [README](./services/keeper/README.md).

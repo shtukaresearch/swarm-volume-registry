@@ -3,12 +3,13 @@
 A reference for integrating with a deployed `VolumeRegistry` contract. Aimed at LLM agents writing integrations and at humans driving the contract from `cast` or ad-hoc scripts. Authoritative architecture lives in [`DESIGN.md`](./DESIGN.md); this file documents the *public-facing* behavior only.
 
 > [!WARNING]
-> The deployed v1 contracts are early-alpha and immutable. Their
-> `transferVolumeOwnership` function does not require acceptance by the recipient. If
-> the recipient already has an active account, the next keeper trigger can charge that
-> account's payer for the transferred volume. Keep allowances bounded, use ownership
-> transfer only by prior agreement, and see [§10](#10-revocation) for the emergency
-> response to an unsolicited transfer.
+> The deployed contracts are early-alpha and immutable. The Gnosis deployment is still
+> v1, whose `transferVolumeOwnership` function does not require acceptance by the
+> recipient. If the recipient already has an active account, the next keeper trigger can
+> charge that account's payer for the transferred volume. Keep allowances bounded, use
+> ownership transfer only by prior agreement, and see [§10](#10-revocation) for the
+> emergency response to an unsolicited transfer. v2 removes the function entirely and is
+> deployed on Sepolia only — see [§2](#2-deployments).
 
 ## Contents
 
@@ -43,25 +44,27 @@ The contract does not custody BZZ, does not sign chunks, is not upgradeable, and
 
 ## 2. Deployments
 
-### Mainnet — Gnosis Chain (chain ID 100)
+### Mainnet — Gnosis Chain (chain ID 100) — registry v1
 
 | Contract | Address |
 |---|---|
-| `VolumeRegistry` | `0x9639ae4c7a8fa9efe585738d516a3915ddd02aad` |
+| `VolumeRegistry` (v1) | `0x9639ae4c7a8fa9efe585738d516a3915ddd02aad` |
 | `PostageStamp` | `0x45a1502382541Cd610CC9068e88727426b696293` |
 | `BZZ` | `0xdBF3Ea6F5beE45c02255B2c26a16F300502F68da` |
 | `PriceOracle` | `0x47EeF336e7fE5bED98499A4696bce8f28c1B0a8b` |
 | `graceBlocks` | `17280` (≈ 24 h at 5-second blocks) |
 
-### Testnet — Sepolia (chain ID 11155111)
+### Testnet — Sepolia (chain ID 11155111) — registry v2
 
 | Contract | Address |
 |---|---|
-| `VolumeRegistry` | `0x3a99b4b52a4bd75760667219ea93c627051b1af8` |
+| `VolumeRegistry` (v2) | `0x33a53c79a08ed1f863905cd4c6ce036a4c493729` |
 | `PostageStamp` | `0xcdfdC3752caaA826fE62531E0000C40546eC56A6` |
 | `BZZ` (TestToken) | `0x543dDb01Ba47acB11de34891cD86B675F04840db` |
 | `PriceOracle` | `0x95Dc18380e92C13E4F8a4e94C99FB1b97250174B` |
 | `graceBlocks` | `12` (≈ 2.4 min at 12-second blocks) |
+
+The two deployments are not the same contract version. Sepolia runs v2; Gnosis is still v1 and retains `transferVolumeOwnership`, so the unsolicited-transfer response in [§10](#10-revocation) applies there and only there. The superseded v1 Sepolia registry was `0x3a99b4b52a4bd75760667219ea93c627051b1af8` — it holds no active volumes and is no longer maintained.
 
 The Sepolia `graceBlocks` is deliberately tiny so that topup and expiry cycles run on a short enough timescale to be observed within integration tests. An altruistic keeper runs every minute against this deployment on a best-effort basis; integration tests should not rely on it and should either call `trigger` directly or run their own keeper.
 

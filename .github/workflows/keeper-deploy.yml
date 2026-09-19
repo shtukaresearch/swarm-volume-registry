@@ -1,0 +1,99 @@
+# Deploys the keeper Worker. Never runs a keeper cycle: once deployed, each
+# Worker is driven by its own Cloudflare Cron Trigger and nothing else.
+#
+#   push to main     → keeper-sepolia (auto)
+#   manual dispatch  → keeper-gnosis (or keeper-sepolia from any ref), after
+#                      approval
+#
+# Keeper runs only in Cloudflare Workers; GitHub Actions only deploys.
+# The approval is the `gnosis` GitHub Environment's required reviewers, which
+# live in repository settings rather than in this file — see
+# services/keeper/README.md.
+#
+# Wallet, RPC and Telegram secrets are *not* passed from here. They live in
+# Cloudflare, set once per deployment with `wrangler secret put`, and never
+# pass through GitHub. `secrets.required` in wrangler.jsonc makes the deploy
+# below fail if any of them is unset on the target Worker.
+
+name: keeper-deploy
+
+permissions: {}
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - services/keeper/**
+      - .github/workflows/keeper-ci.yml
+      - .github/workflows/keeper-deploy.yml
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Deployment to ship
+        type: choice
+        options: [sepolia, gnosis]
+        required: true
+
+# One deploy per Worker at a time; queue rather than cancel mid-upload.
+concurrency:
+  group: keeper-deploy-${{ inputs.environment || 'sepolia' }}
+  cancel-in-progress: false
+
+jobs:
+  target:
+    name: Choose deployment
+    runs-on: ubuntu-latest
+    permissions: {}
+    outputs:
+      environment: ${{ steps.choose.outputs.environment }}
+    steps:
+      - id: choose
+        env:
+          EVENT: ${{ github.event_name }}
+          REQUESTED: ${{ inputs.environment }}
+        run: |
+          if [ "$EVENT" = push ]; then
+            echo "environment=sepolia" >> "$GITHUB_OUTPUT"
+          else
+            echo "environment=$REQUESTED" >> "$GITHUB_OUTPUT"
+          fi
+
+  check:
+    needs: target
+    if: needs.target.outputs.environment != ''
+    uses: ./.github/workflows/keeper-ci.yml
+    permissions:
+      contents: read
+
+  deploy:
+    name: Deploy keeper-${{ needs.target.outputs.environment }}
+    needs: [target, check]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    # Gates the job on the Environment's protection rules: required reviewers
+    # for gnosis, and whatever branch/tag restrictions it is given.
+    environment:
+      name: ${{ needs.target.outputs.environment }}
+    defaults:
+      run:
+        working-directory: services/keeper
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          TARGET: ${{ needs.target.outputs.environment }}
+        run: bunx wrangler deploy --env "$TARGET"

@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Export a Forge broadcast as a hardhat-deploy-compatible deployment record."""
+"""Export a Forge broadcast as a hardhat-deploy-compatible deployment record.
+
+Each deployment is recorded once, immutably, as ``deployments/<network>/<Contract>-<version>.json``
+where ``<version>`` is the release name (``vN`` on mainnets, ``vN-rcM`` for testnet release
+candidates). ``deployments/<network>/<Contract>.json`` is the network's *latest* pointer: a
+byte-identical copy of one versioned record, written only when ``--latest`` is passed.
+"""
 
 from __future__ import annotations
 
@@ -19,6 +25,9 @@ DEFAULT_DEPLOYMENTS = Path("deployments")
 SAFE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 ADDRESS = re.compile(r"0x[0-9a-fA-F]{40}\Z")
 TRANSACTION_HASH = re.compile(r"0x[0-9a-fA-F]{64}\Z")
+# Release names: vN for a mainnet release, vN-rcM for a testnet release candidate. The
+# same grammar as the indexer's registry (services/indexer, registry.VERSION_NAME).
+VERSION_NAME = re.compile(r"v[1-9][0-9]*(-rc[1-9][0-9]*)?\Z")
 
 
 def fail(message: str) -> NoReturn:
@@ -200,6 +209,7 @@ def validate_artifact(artifact: dict[str, Any], transaction: dict[str, Any]) -> 
 
 def build_manifest(
     profile_name: str,
+    version: str,
     profile: dict[str, Any],
     broadcast: dict[str, Any],
     artifact: dict[str, Any],
@@ -219,6 +229,7 @@ def build_manifest(
             source_broadcast = timestamped_broadcast
 
     linked_data: dict[str, Any] = {
+        "version": version,
         "chainId": profile["chain_id"],
         "profile": profile_name,
         "broadcast": str(source_broadcast.relative_to(CONTRACTS)),
@@ -242,16 +253,23 @@ def build_manifest(
     }
 
 
+def versioned_name(contract_name: str, version: str) -> str:
+    return f"{contract_name}-{version}"
+
+
 def write_manifest(
     output_root: Path,
     network: str,
-    deployment_name: str,
+    contract_name: str,
+    version: str,
     chain_id: int,
     manifest: dict[str, Any],
-) -> Path:
+    latest: bool = False,
+) -> list[Path]:
     network_dir = output_root / network
     chain_file = network_dir / ".chainId"
-    output_file = network_dir / f"{deployment_name}.json"
+    output_file = network_dir / f"{versioned_name(contract_name, version)}.json"
+    latest_file = network_dir / f"{contract_name}.json"
 
     if chain_file.exists():
         recorded_chain = quantity(chain_file.read_text().strip(), f"chain ID in {chain_file}")
@@ -261,21 +279,45 @@ def write_manifest(
                 f"not {chain_id}"
             )
 
+    # One deployment per network and version: a record may be regenerated, never replaced
+    # by another deployment. A redeploy is a new release candidate or release.
+    if output_file.exists():
+        recorded = read_json(output_file, "deployment record")
+        if str(recorded.get("address", "")).lower() != str(manifest["address"]).lower():
+            fail(
+                f"{network} already records {contract_name} {version} at "
+                f"{recorded.get('address')}; a new deployment needs a new version"
+            )
+
+    text = json.dumps(manifest, indent=2) + "\n"
     network_dir.mkdir(parents=True, exist_ok=True)
     chain_file.write_text(f"{chain_id}\n")
-    output_file.write_text(json.dumps(manifest, indent=2) + "\n")
-    return output_file
+    output_file.write_text(text)
+    written = [output_file]
+    if latest:
+        latest_file.write_text(text)
+        written.append(latest_file)
+    return written
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("profile", help="profile name from deployments.toml")
     parser.add_argument(
+        "--version",
+        required=True,
+        help="release name: vN on a mainnet, vN-rcM for a testnet release candidate",
+    )
+    parser.add_argument(
+        "--latest",
+        action="store_true",
+        help=f"also point the network's {DEFAULT_CONTRACT}.json at this deployment",
+    )
+    parser.add_argument(
         "--network",
         help="override the profile's deployment network directory name",
     )
     parser.add_argument("--contract-name", default=DEFAULT_CONTRACT)
-    parser.add_argument("--deployment-name", default=DEFAULT_CONTRACT)
     parser.add_argument(
         "--broadcast",
         type=Path,
@@ -285,12 +327,10 @@ def main() -> None:
     parser.add_argument("--deployments-dir", type=Path, default=DEFAULT_DEPLOYMENTS)
     args = parser.parse_args()
 
-    for description, name in (
-        ("contract name", args.contract_name),
-        ("deployment name", args.deployment_name),
-    ):
-        if not SAFE_NAME.fullmatch(name):
-            parser.error(f"{description} must contain only letters, digits, '.', '_' or '-'")
+    if not SAFE_NAME.fullmatch(args.contract_name):
+        parser.error("contract name must contain only letters, digits, '.', '_' or '-'")
+    if not VERSION_NAME.fullmatch(args.version):
+        parser.error("version must be vN or vN-rcM (e.g. v2, v2-rc1)")
 
     profile = load_profile(args.profile)
     network = args.network or profile.get("deployment_network")
@@ -314,6 +354,7 @@ def main() -> None:
     try:
         manifest = build_manifest(
             args.profile,
+            args.version,
             profile,
             broadcast,
             artifact,
@@ -323,14 +364,17 @@ def main() -> None:
     except ValueError:
         fail(f"broadcast path must be beneath the contracts directory: {broadcast_path}")
 
-    output_file = write_manifest(
+    written = write_manifest(
         output_root,
         network,
-        args.deployment_name,
+        args.contract_name,
+        args.version,
         profile["chain_id"],
         manifest,
+        latest=args.latest,
     )
-    print(f"wrote {display_path(output_file)}")
+    for path in written:
+        print(f"wrote {display_path(path)}")
 
 
 if __name__ == "__main__":

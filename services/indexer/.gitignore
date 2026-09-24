@@ -1,0 +1,18 @@
+# Python virtual environment
+.venv/
+
+# Byte-compiled / caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# The event_log cache + generated artifact (rebuildable; default lives in XDG cache,
+# but ignore any that land in-tree under a local --store-dir).
+artifact.json

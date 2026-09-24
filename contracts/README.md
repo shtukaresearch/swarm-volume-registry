@@ -57,7 +57,7 @@ the audit trail, but they are not the stable discovery interface.
 After a successful broadcast, export the deployment record:
 
 ```sh
-python3 script/export_deployment.py sepolia-postage-v0.9.4
+python3 script/export_deployment.py sepolia-postage-v0.9.4 --version v2-rc2 [--latest]
 ```
 
 The exporter validates the chain, constructor arguments, successful receipt and
@@ -66,8 +66,12 @@ record following the hardhat-deploy v1 layout beneath:
 
 ```text
 deployments/<network>/.chainId
-deployments/<network>/VolumeRegistry.json
+deployments/<network>/VolumeRegistry-<release>.json   one immutable record per release
+deployments/<network>/VolumeRegistry.json             copy of the current one (--latest)
 ```
+
+Release names are `vN` on a mainnet and `vN-rcM` for a testnet release candidate; a
+network holds one deployment per name.
 
 Commit the deployment record together with its production broadcast files. See
 [`RELEASING.md`](../RELEASING.md) for the complete release procedure.

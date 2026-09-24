@@ -194,7 +194,7 @@ class Chain:
 
     def deployment_doc(self) -> dict[str, Any]:
         return {
-            "label": "anvil",
+            "label": f"anvil-{REGISTRY_VERSION}",
             "chain_id": self.w3.eth.chain_id,
             "registry": self.s.registry.address,
             "registry_version": REGISTRY_VERSION,

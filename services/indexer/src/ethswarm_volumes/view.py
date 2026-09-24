@@ -1,6 +1,6 @@
 """The client read path: fold an artifact entry into the resolved summary (``docs/SCHEMA.md`` §4).
 
-Web3-free and network-free — the dashboard and the CLI both build this same view-model from
+Web3-free and network-free — the CLI (and the planned dashboard) builds this view-model from
 the single fetched artifact (``docs/CLIENT.md``, ADR-0009). :func:`resolve_view`
 produces the ``--json`` object; :func:`render_text` renders the human table over it.
 

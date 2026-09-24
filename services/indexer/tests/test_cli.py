@@ -27,12 +27,15 @@ def _write_config(tmp_path, chain) -> str:
             {
                 "deployments": [
                     {
-                        "label": "anvil",
+                        "network": "anvil",
+                        "registry_version": "v1",
                         "chain_id": chain.w3.eth.chain_id,
                         "registry": chain.s.registry.address,
-                        "registry_version": "v1",
                     }
-                ]
+                ],
+                # the bare network resolves through the explicit pointer, carried into
+                # the artifact so `stat anvil` works against the published file
+                "latest": {"anvil": "anvil-v1"},
             }
         )
     )
@@ -113,7 +116,7 @@ def test_cli_sync_then_stat(chain, tmp_path, capsys):
     )
     assert rc == 0
     summary = json.loads(capsys.readouterr().out)
-    assert summary["deployment"]["label"] == "anvil"
+    assert summary["deployment"]["label"] == "anvil-v1"
     assert summary["capacity"]["active_volumes"] == orc.snap_active
     assert summary["accounts"]["authorized"] == orc.snap_authorized
     assert summary["fee_volume"]["unit"] == "BZZ"  # no fiat baked for a local chain
@@ -171,7 +174,7 @@ def test_cli_incremental_sync_matches_one_shot(chain, tmp_path):
     a_one = serialize.artifact_from_json((tmp_path / "one" / "artifact.json").read_text())
 
     # A split point that is an actual event block with events on both sides.
-    dep_id = registry.load_registry(cfg)[0].deployment_id
+    dep_id = registry.load_registry(cfg).deployments[0].deployment_id
     blocks = sorted({r.block_number for r in store.load_event_log(one, dep_id).merged()})
     assert len(blocks) >= 3, "scenario too small to split into non-empty prior + fresh"
     mid = blocks[len(blocks) // 2]

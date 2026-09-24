@@ -92,6 +92,7 @@ def artifact_to_dict(artifact: Artifact) -> dict[str, Any]:
     return {
         "schema_version": artifact.schema_version,
         "generated_at": _iso(artifact.generated_at),
+        "latest": dict(sorted(artifact.latest.items())),
         "deployments": [entry_to_dict(e) for e in artifact.deployments],
     }
 
@@ -155,6 +156,7 @@ def artifact_from_dict(obj: dict[str, Any]) -> Artifact:
         schema_version=obj["schema_version"],
         generated_at=_parse_iso(obj["generated_at"]),
         deployments=[entry_from_dict(e) for e in obj["deployments"]],
+        latest=dict(obj.get("latest", {})),
     )
 
 

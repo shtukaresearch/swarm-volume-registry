@@ -31,7 +31,7 @@ def _utc(*args) -> datetime:
 
 def _sample_artifact() -> Artifact:
     entry = ArtifactEntry(
-        label="gnosis",
+        label="gnosis-v1",
         chain_id=100,
         registry="0x9639",
         registry_version="v1",
@@ -59,6 +59,7 @@ def _sample_artifact() -> Artifact:
         schema_version=serialize.SCHEMA_VERSION,
         generated_at=_utc(2026, 6, 9, 12, 0, 0),
         deployments=[entry],
+        latest={"gnosis": "gnosis-v1"},
     )
 
 
@@ -66,7 +67,8 @@ def test_wire_shape_matches_schema():
     art = _sample_artifact()
     doc = serialize.artifact_to_dict(art)
 
-    assert set(doc) == {"schema_version", "generated_at", "deployments"}
+    assert set(doc) == {"schema_version", "generated_at", "latest", "deployments"}
+    assert doc["latest"] == {"gnosis": "gnosis-v1"}
     assert doc["generated_at"] == "2026-06-09T12:00:00Z"  # Z-suffixed UTC
 
     e = doc["deployments"][0]

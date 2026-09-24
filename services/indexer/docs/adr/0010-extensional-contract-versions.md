@@ -1,6 +1,6 @@
 # ADR-0010: `registry_version` names a deployed release; fixtures pinned per version
 
-Status: Accepted
+Status: Accepted; release-name grammar (`vN`, `vN-rcM`) in [ADR-0012](./0012-release-names-and-latest-pointers.md)
 
 ## Context
 

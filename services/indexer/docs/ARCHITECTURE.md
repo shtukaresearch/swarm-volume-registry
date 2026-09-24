@@ -25,7 +25,7 @@ flowchart LR
 
     subgraph clients["clients — fold / render local"]
         cli["CLI"]
-        dash["dashboard"]
+        dash["dashboard (planned)"]
     end
 
     registry -->|"getLogs, delta to finalized"| web3
@@ -36,7 +36,7 @@ flowchart LR
 
 - **Indexer (`ethswarm-volumes sync`)** — the only stateful process; runs offline, hourly ([ADR-0002](./adr/0002-finalized-only-indexer.md)). A walled-off **web3 layer** (RPC + ABI decode) reads logs via `eth_getLogs` to the chain's `finalized` block and lands decoded rows in [`event_log`](./data-model/event-log.md); a **web3-free projector** folds `event_log` into the artifact and publishes it.
 - **Artifact** — one JSON file ([`SCHEMA.md`](./SCHEMA.md)). The contract between indexer and clients.
-- **Clients** — CLI (`ethswarm-volumes stat`) and web dashboard. Both read the *same* artifact and do all windowing, bucketing, and fiat conversion locally. Two thin renderers over one data contract ([`CLIENT.md`](./CLIENT.md), [ADR-0009](./adr/0009-client-side-folding.md)).
+- **Clients** — CLI (`ethswarm-volumes stat`) and a planned web dashboard. Both read the *same* artifact and do all windowing, bucketing, and fiat conversion locally. Two thin renderers over one data contract ([`CLIENT.md`](./CLIENT.md), [ADR-0009](./adr/0009-client-side-folding.md)).
 
 The data model behind the indexer — the deployment registry, the `event_log`, and the pure projection — is specified in [`data-model/`](./data-model/).
 
@@ -63,7 +63,7 @@ This is one of the two clean seams of the system (§4). The row shape it produce
 ## 4. Symmetries
 
 - Three measures × identical temporal access patterns (as-of / window / series); flow-vs-stock is the one structural difference.
-- One artifact, two renderers (CLI / dashboard) with shared option semantics.
+- One artifact, two renderers (CLI / planned dashboard) with shared option semantics.
 - Stable public contract (artifact) over per-version private decode (the per-deployment, per-event-type [`event_log`](./data-model/event-log.md) + the projector selected by `registry_version`).
 - The web3 layer acquires per event type, the store keeps per event type, and the projector merges only the logs each measure needs — one shape across acquisition, storage, and read.
 - Two clean seams: `event_log` separates web3 from everything else (§2); the artifact separates the indexer write path from the client read path.

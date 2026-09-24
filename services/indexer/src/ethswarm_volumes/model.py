@@ -12,7 +12,7 @@ timestamps are timezone-aware UTC ``datetime``s.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
@@ -200,8 +200,13 @@ class ArtifactEntry:
 
 @dataclass(frozen=True)
 class Artifact:
-    """The single published file (``docs/SCHEMA.md`` §3)."""
+    """The single published file (``docs/SCHEMA.md`` §3).
+
+    ``latest`` maps a bare network name to the label of that network's current deployment
+    (the registry's explicit pointer, ADR-0012), restricted to entries present in the file.
+    """
 
     schema_version: str
     generated_at: datetime
     deployments: list[ArtifactEntry]
+    latest: dict[str, str] = field(default_factory=dict)

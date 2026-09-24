@@ -17,3 +17,4 @@ Format per record: **Context** → **Decision** → **Consequences**.
 | [0009](./0009-client-side-folding.md) | Clients fold locally; `paid_in_window` pre-baked |
 | [0010](./0010-extensional-contract-versions.md) | `registry_version` names a deployed release; fixtures pinned per version |
 | [0011](./0011-derived-deployment-registry.md) | Facts vs claims; the built-in registry derived, not hand-written |
+| [0012](./0012-release-names-and-latest-pointers.md) | Release names (`vN`, `vN-rcM`), `<network>-<version>` labels, explicit latest pointers |

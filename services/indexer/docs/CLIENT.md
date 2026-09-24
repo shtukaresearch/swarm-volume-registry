@@ -1,6 +1,6 @@
 # Volume Registry Data API — Client interface
 
-The tool is `ethswarm-volumes`. The read client and dashboard share one set of option semantics; the CLI renders them as flags, the dashboard as controls. Both read the same artifact ([`SCHEMA.md`](./SCHEMA.md)) and fold locally ([ADR-0009](./adr/0009-client-side-folding.md)).
+The tool is `ethswarm-volumes`. The read client and a planned web dashboard share one set of option semantics; the CLI renders them as flags, the dashboard would render them as controls. Both read the same artifact ([`SCHEMA.md`](./SCHEMA.md)) and fold locally ([ADR-0009](./adr/0009-client-side-folding.md)).
 
 ```
 ethswarm-volumes sync [options]                 # run the indexer (the ARCHITECTURE.md §1 write path)
@@ -11,7 +11,7 @@ ethswarm-volumes stat [<deployment>] [options]  # render the 3-measure summary
 
 ## `stat`
 
-`<deployment>` selects by `label` (primary) or `chain:address` (unambiguous fallback); optional when only one deployment is present. With no `<deployment>` and several present, `stat` lists them.
+`<deployment>` selects, in order, by `label` (`gnosis-v1`, `sepolia-v2-rc1`), by bare network name through the artifact's explicit `latest` pointer (`gnosis`), or by `chain:address` (unambiguous fallback) — [ADR-0012](./adr/0012-release-names-and-latest-pointers.md). It is optional when only one deployment is present. With no `<deployment>` and several present, `stat` lists the labels and pointers. `sync <deployment>` resolves the same way against the registry.
 
 | Option | Meaning | Default |
 |---|---|---|

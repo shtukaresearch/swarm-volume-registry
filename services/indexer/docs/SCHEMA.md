@@ -24,11 +24,12 @@ This document specifies the wire format the indexer writes and the clients read.
 {
   "schema_version": "1.0",                   // major.minor; artifact structure; synced fleet-wide
   "generated_at": "2026-06-09T12:00:00Z",    // UTC ISO 8601; publish time
+  "latest": { "gnosis": "gnosis-v1" },       // bare network name -> label (explicit pointer)
 
   "deployments": [
     {
       // ----- identity (contract-agnostic) -----
-      "label": "gnosis",                      // selector for `ethswarm-volumes stat <label>`
+      "label": "gnosis-v1",                   // <network>-<registry_version>; `stat <label>`
       "chain_id": 100,
       "registry": "0x9639…",
       "registry_version": "v1",               // which contract; orthogonal to schema_version
@@ -83,8 +84,9 @@ This document specifies the wire format the indexer writes and the clients read.
 |---|---|---|
 | `schema_version` | string (`major.minor`) | artifact structure version; synced fleet-wide |
 | `generated_at` | string (UTC ISO 8601) | publish time |
+| `latest` | `{<network>: <label>}` | what a bare network name selects; only labels present in the file ([ADR-0012](./adr/0012-release-names-and-latest-pointers.md)) |
 | `deployments[]` | array | one self-contained entry per deployment |
-| `…label` | string | human selector; unique within the file |
+| `…label` | string | `<network>-<registry_version>`; human selector; unique within the file |
 | `…chain_id` | number | EVM chain id |
 | `…registry` | string (address) | the `VolumeRegistry` address |
 | `…registry_version` | string | contract variant; selects the projector that produced this entry |
@@ -103,12 +105,12 @@ This document specifies the wire format the indexer writes and the clients read.
 
 ## 4. Client `--json` summary (resolved view-model)
 
-`ethswarm-volumes stat --json` emits the resolved summary after applying the options — the same numbers the human view renders, and the same view-model the dashboard builds. `unit` flips to `"BZZ"` and the `fiat` fields drop when `--fiat none`.
+`ethswarm-volumes stat --json` emits the resolved summary after applying the options — the same numbers the human view renders, and the same view-model a dashboard would build. `unit` flips to `"BZZ"` and the `fiat` fields drop when `--fiat none`.
 
 ```jsonc
 {
   "deployment": {
-    "label": "gnosis", "chain_id": 100, "registry": "0x9639…",
+    "label": "gnosis-v1", "chain_id": 100, "registry": "0x9639…",
     "registry_version": "v1", "genesis_ts": "2026-05-20T08:00:00Z",
     "as_of": { "block": 38211904, "ts": "2026-06-09T12:00:00Z" }
   },

@@ -5,11 +5,15 @@ Part of the [data model](./README.md). Holds deployment identity and version poi
 ```
 deployment(
   deployment_id        = (chain_id, registry_address),   -- PK
-  registry_version,    -- selects the web3 decoder + projector for this deployment
+  network,             -- the contracts/deployments/<network>/ directory it is recorded under
+  registry_version,    -- the release name; selects the web3 decoder + projector
   genesis_block,       -- first block to index
-  label
-)
+)                      -- label = <network>-<registry_version>, unique (derived)
+
+latest(network -> label)   -- explicit pointer: what the bare network name means
 ```
+
+A network holds at most one deployment per release, so the label is a second key. The `latest` pointer is set only by a release step, never inferred from version order ([ADR-0012](../adr/0012-release-names-and-latest-pointers.md)).
 
 Version-specific facts (`grace_blocks`, dependency addresses) live in the artifact's `extra` ([`SCHEMA.md`](../SCHEMA.md)).
 

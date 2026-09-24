@@ -167,6 +167,7 @@ def supported_versions() -> frozenset[str]:
     """The ``registry_version`` values this package build can decode."""
     return frozenset(_VERSIONS)
 
+
 _W3 = Web3()
 
 

@@ -31,7 +31,7 @@ def _entry() -> ArtifactEntry:
     authd = [1, 2, 2, 3]
     nominal = [0, 100, 100, 300]
     return ArtifactEntry(
-        label="gnosis",
+        label="gnosis-v1",
         chain_id=100,
         registry="0x9639",
         registry_version="v1",

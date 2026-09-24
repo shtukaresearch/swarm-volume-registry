@@ -1,6 +1,6 @@
 # ADR-0011: Facts vs claims; the built-in registry derived, not hand-written
 
-Status: Accepted
+Status: Accepted; amended by [ADR-0012](./0012-release-names-and-latest-pointers.md) (the facts are the exported deployment records, which carry the release name; labels and latest pointers)
 
 ## Context
 

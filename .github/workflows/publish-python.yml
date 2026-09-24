@@ -1,58 +1,35 @@
 name: Publish Python package
 
-# Builds the ethswarm-volumes package and publishes it to PyPI when a change
-# under python/ lands on main (i.e. a merged PR). The publish job is gated on
-# the full Python test suite: the test job runs the integration tiers against
-# a real Anvil node, deploying from the pinned per-version contract fixtures
-# committed under python/tests/fixtures/ (no forge build — the suite tests
-# the deployed contract versions, not contracts HEAD), so a publish cannot
-# happen unless those pass.
+# Builds the ethswarm-volumes package (services/indexer) and publishes it to
+# PyPI when a change under services/indexer/ lands on main (i.e. a merged PR).
+# The publish job is gated on indexer-ci.yml — lint plus the full suite,
+# integration tiers included — so a publish cannot happen unless it passes.
 #
 # Uploads are idempotent: skip-existing means merges that do not bump the
-# version in python/pyproject.toml are no-ops rather than failures, so
-# publishing only actually happens on the merge that raises the version.
+# version in services/indexer/pyproject.toml are no-ops rather than failures,
+# so publishing only actually happens on the merge that raises the version.
+#
+# The filename is part of PyPI's trusted-publisher configuration; renaming it
+# requires updating the publisher on PyPI to match.
 
 on:
   push:
     branches: [main]
     paths:
-      - 'python/**'
+      - 'services/indexer/**'
   workflow_dispatch:
 
 permissions: {}
 
 jobs:
-  test:
-    name: Python test suite
-    runs-on: ubuntu-latest
+  check:
+    uses: ./.github/workflows/indexer-ci.yml
     permissions:
       contents: read
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          persist-credentials: false
-
-      # Foundry provides `anvil`, the node the integration tiers run against
-      # (the contract artifacts themselves are the committed fixtures — no
-      # `forge` needed). Without anvil the node tiers silently skip.
-      # Pinned: the harness leans on specific anvil behaviour
-      # (evm_setNextBlockTimestamp, anvil_reset, instant finality), so a
-      # toolchain release must not change the test environment underneath us.
-      - name: Install Foundry
-        uses: foundry-rs/foundry-toolchain@v1
-        with:
-          version: v1.5.1
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
-
-      - name: Run test suite
-        working-directory: python
-        run: uv run --group dev python -m pytest -q
 
   publish:
     name: Build and publish to PyPI
-    needs: test
+    needs: check
     runs-on: ubuntu-latest
     environment:
       name: pypi
@@ -62,7 +39,7 @@ jobs:
       id-token: write # OIDC token for PyPI trusted publishing
     defaults:
       run:
-        working-directory: python
+        working-directory: services/indexer
     steps:
       - uses: actions/checkout@v5
         with:
@@ -77,5 +54,5 @@ jobs:
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          packages-dir: python/dist/
+          packages-dir: services/indexer/dist/
           skip-existing: true

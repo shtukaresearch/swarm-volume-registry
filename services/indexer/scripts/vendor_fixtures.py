@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Vendor the pinned per-version contract fixtures for the Python test suite.
 
-Release-procedure step 2 (see ``RELEASING.md`` and ``python/docs/VERSIONING.md``): freeze
+Release-procedure step 2 (see ``RELEASING.md`` and ``services/indexer/docs/VERSIONING.md``): freeze
 slim (abi + creation bytecode) copies of the Foundry build artifacts at
-``python/tests/fixtures/<version>/``, together with a ``provenance.json`` recording the
+``services/indexer/tests/fixtures/<version>/``, together with a ``provenance.json`` recording the
 source commit, compiler settings, and — when ``--verify`` deployments are given — an
 on-chain verification that the build being frozen is the code actually deployed.
 
@@ -16,7 +16,7 @@ tolerated.
 
 Stdlib only. Run from anywhere inside the repo, after ``forge build``::
 
-    python3 scripts/vendor_fixtures.py v2 \\
+    python3 services/indexer/scripts/vendor_fixtures.py v2 \\
         --verify gnosis 0xREGISTRY "$GNO_RPC_URL" \\
         --verify sepolia 0xREGISTRY "$SEP_RPC_URL"
 """
@@ -32,11 +32,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-REPO = Path(__file__).resolve().parents[1]
+REPO = Path(__file__).resolve().parents[3]
+INDEXER = REPO / "services" / "indexer"
 OUT = REPO / "contracts" / "out"
-FIXTURES = REPO / "python" / "tests" / "fixtures"
+FIXTURES = INDEXER / "tests" / "fixtures"
 
-#: The contracts the harness deploys (``python/tests/harness.py``). ``VolumeRegistry`` is
+#: The contracts the harness deploys (``services/indexer/tests/harness.py``). ``VolumeRegistry`` is
 #: the versioned contract; the rest are vendored test-support contracts.
 CONTRACTS = ("VolumeRegistry", "PostageStamp", "PriceOracle", "TestToken")
 
@@ -60,9 +61,7 @@ def rpc(url: str, method: str, params: list[Any]) -> Any:
     """One JSON-RPC call; returns the ``result`` or raises on an error response."""
     req = urllib.request.Request(
         url,
-        json.dumps(
-            {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
-        ).encode(),
+        json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode(),
         {"Content-Type": "application/json", "User-Agent": "vendor-fixtures"},
     )
     doc = json.load(urllib.request.urlopen(req))
@@ -95,14 +94,10 @@ def verify_deployment(
     """
     refs = [
         r
-        for ref_list in artifact["deployedBytecode"]
-        .get("immutableReferences", {})
-        .values()
+        for ref_list in artifact["deployedBytecode"].get("immutableReferences", {}).values()
         for r in ref_list
     ]
-    local = mask_immutables(
-        bytes.fromhex(artifact["deployedBytecode"]["object"][2:]), refs
-    )
+    local = mask_immutables(bytes.fromhex(artifact["deployedBytecode"]["object"][2:]), refs)
     chain_id = int(rpc(rpc_url, "eth_chainId", []), 16)
     onchain = mask_immutables(
         bytes.fromhex(rpc(rpc_url, "eth_getCode", [address, "latest"])[2:]), refs
@@ -124,9 +119,7 @@ def git(*args: str) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument(
-        "version", help="registry_version to vendor (fixture dir name, e.g. v2)"
-    )
+    parser.add_argument("version", help="registry_version to vendor (fixture dir name, e.g. v2)")
     parser.add_argument(
         "--verify",
         nargs=3,
@@ -138,9 +131,7 @@ def main() -> int:
     args = parser.parse_args()
 
     if not (OUT / "VolumeRegistry.sol" / "VolumeRegistry.json").exists():
-        print(
-            "no build artifacts: run `forge build` in contracts/ first", file=sys.stderr
-        )
+        print("no build artifacts: run `forge build` in contracts/ first", file=sys.stderr)
         return 1
     if git("status", "--porcelain", "--", "contracts/src", "contracts/lib"):
         print("contracts source is dirty; commit before vendoring", file=sys.stderr)
@@ -149,9 +140,7 @@ def main() -> int:
     dst = FIXTURES / args.version
     dst.mkdir(parents=True, exist_ok=True)
     for name in CONTRACTS:
-        (dst / f"{name}.json").write_text(
-            json.dumps(slim(load_artifact(name)), indent=1) + "\n"
-        )
+        (dst / f"{name}.json").write_text(json.dumps(slim(load_artifact(name)), indent=1) + "\n")
         print(f"vendored {dst.relative_to(REPO)}/{name}.json")
 
     registry = load_artifact("VolumeRegistry")
@@ -163,12 +152,8 @@ def main() -> int:
         entry = verify_deployment(registry, label, address, rpc_url)
         deployments.append(entry)
         status = "OK" if entry["runtime_body_match"] else "MISMATCH"
-        meta = (
-            "" if entry["metadata_match"] else " (metadata differs: source-text drift)"
-        )
-        print(
-            f"verify {label} (chain {entry['chain_id']}): runtime body {status}{meta}"
-        )
+        meta = "" if entry["metadata_match"] else " (metadata differs: source-text drift)"
+        print(f"verify {label} (chain {entry['chain_id']}): runtime body {status}{meta}")
         ok = ok and entry["runtime_body_match"]
 
     provenance = {

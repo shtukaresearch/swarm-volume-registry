@@ -135,7 +135,11 @@ def cmd_sync(args) -> int:
         return 2
 
     store_dir = store.resolve_store_dir(args.store_dir)
-    specs = registry.load_registry(args.config)
+    try:
+        reg = registry.load_registry(args.config)
+    except (KeyError, ValueError) as exc:
+        print(f"error: invalid deployment registry: {exc}", file=sys.stderr)
+        return 2
     w3 = node.connect(rpc_url)
     if not w3.is_connected():
         print(f"error: cannot connect to {rpc_url}", file=sys.stderr)
@@ -147,13 +151,13 @@ def cmd_sync(args) -> int:
     head_block = args.to_block if args.to_block is not None else rpc.finalized_block_number()
 
     if args.deployment:
-        chosen = registry.select(specs, args.deployment)
+        chosen = registry.select(reg, args.deployment)
         if chosen is None:
             print(f"error: unknown deployment {args.deployment!r}", file=sys.stderr)
             return 2
         targets = [chosen]
     else:
-        targets = [s for s in specs if s.chain_id == chain_id]
+        targets = [s for s in reg if s.chain_id == chain_id]
         if not targets:
             print(f"error: no registry deployment on chain {chain_id}", file=sys.stderr)
             return 2
@@ -183,10 +187,16 @@ def cmd_sync(args) -> int:
     for entry in entries:
         by_id[(entry.chain_id, entry.registry.lower())] = entry
 
+    # The latest pointers: the prior file's, overridden by this registry's, kept only where
+    # they name an entry the file actually carries.
+    deployments = list(by_id.values())
+    labels = {e.label for e in deployments}
+    latest = {**(existing.latest if existing else {}), **reg.latest}
     artifact = Artifact(
         schema_version=serialize.SCHEMA_VERSION,
         generated_at=datetime.now(timezone.utc),
-        deployments=list(by_id.values()),
+        deployments=deployments,
+        latest={net: label for net, label in latest.items() if label in labels},
     )
     path = _artifact_path(args, store_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -200,19 +210,6 @@ def cmd_sync(args) -> int:
 # ---------------------------------------------------------------------------
 
 
-def _select_entry(artifact: Artifact, selector: str | None):
-    """Resolve a ``stat`` selector against the artifact's deployment entries."""
-    if selector is None:
-        return artifact.deployments[0] if len(artifact.deployments) == 1 else None
-    for e in artifact.deployments:
-        if e.label == selector:
-            return e
-    for e in artifact.deployments:
-        if f"{e.chain_id}:{e.registry}".lower() == selector.lower():
-            return e
-    return None
-
-
 def cmd_stat(args) -> int:
     store_dir = store.resolve_store_dir(args.store_dir)
     source = Path(args.source) if args.source else store_dir / DEFAULT_ARTIFACT_NAME
@@ -221,10 +218,11 @@ def cmd_stat(args) -> int:
         return 2
     artifact = serialize.artifact_from_json(source.read_text(encoding="utf-8"))
 
-    entry = _select_entry(artifact, args.deployment)
+    entry = registry.resolve(artifact.deployments, artifact.latest, args.deployment)
     if entry is None:
-        labels = ", ".join(e.label for e in artifact.deployments)
-        print(f"select a deployment: {labels}", file=sys.stderr)
+        choices = [e.label for e in artifact.deployments]
+        choices += [f"{net} (= {label})" for net, label in sorted(artifact.latest.items())]
+        print(f"select a deployment: {', '.join(choices)}", file=sys.stderr)
         return 2
 
     opts = view.ViewOptions(
@@ -259,7 +257,9 @@ def _build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_sync = sub.add_parser("sync", help="index to finalized and write the artifact")
-    p_sync.add_argument("deployment", nargs="?", help="label or chain:address (default: by chain)")
+    p_sync.add_argument(
+        "deployment", nargs="?", help="label, network or chain:address (default: by chain)"
+    )
     p_sync.add_argument("--rpc", help=f"RPC endpoint (default: ${RPC_ENV})")
     p_sync.add_argument("--config", help="deployment registry JSON (default: built-in fleet)")
     p_sync.add_argument(
@@ -274,7 +274,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_sync.set_defaults(func=cmd_sync)
 
     p_stat = sub.add_parser("stat", help="render the 3-measure summary")
-    p_stat.add_argument("deployment", nargs="?", help="label or chain:address")
+    p_stat.add_argument("deployment", nargs="?", help="label, network or chain:address")
     p_stat.add_argument(
         "--source", help="artifact path or URL (default: <store-dir>/artifact.json)"
     )

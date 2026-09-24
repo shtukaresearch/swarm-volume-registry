@@ -1,6 +1,6 @@
 # Volume Registry Data API — Design
 
-Design documents for the data API wrapping the `VolumeRegistry` contract (the contract itself: `../../docs/DESIGN.md`, `../../docs/usage.md`).
+Design documents for the data API wrapping the `VolumeRegistry` contract (the contract itself: [`docs/DESIGN.md`](../../../docs/DESIGN.md), [`docs/usage.md`](../../../docs/usage.md)).
 
 - **This file** — the goal and the three measures that define the public contract.
 - [`ARCHITECTURE.md`](./ARCHITECTURE.md) — components, the web3-isolation boundary, versioning, delivery, and the cross-cutting symmetries.
@@ -13,7 +13,7 @@ Design documents for the data API wrapping the `VolumeRegistry` contract (the co
 
 ## Goal
 
-Serve three aggregate measures — **fee volume**, **storage capacity**, **accounts** — for one or more `VolumeRegistry` deployments to two clients (a local CLI and a public web dashboard), with low integration complexity, fast load times, and hourly freshness.
+Serve three aggregate measures — **fee volume**, **storage capacity**, **accounts** — for one or more `VolumeRegistry` deployments to two clients (a local CLI, which exists, and a public web dashboard, which is planned), with low integration complexity, fast load times, and hourly freshness.
 
 ## The three measures
 

@@ -11,7 +11,15 @@ from pathlib import Path
 from typing import Any
 
 from deploy import CONTRACTS, load_profile
-from export_deployment import ADDRESS, SAFE_NAME, fail, quantity, read_json
+from export_deployment import (
+    ADDRESS,
+    SAFE_NAME,
+    VERSION_NAME,
+    fail,
+    quantity,
+    read_json,
+    versioned_name,
+)
 
 
 CONTRACT = "src/VolumeRegistry.sol:VolumeRegistry"
@@ -68,9 +76,10 @@ def load_deployment(
     profile_name: str,
     profile: dict[str, Any],
     network: str,
-    deployment_name: str,
+    version: str,
 ) -> tuple[Path, dict[str, Any]]:
-    path = CONTRACTS / "deployments" / network / f"{deployment_name}.json"
+    record = versioned_name("VolumeRegistry", version)
+    path = CONTRACTS / "deployments" / network / f"{record}.json"
     deployment = read_json(path, "deployment record")
 
     address = deployment.get("address")
@@ -84,6 +93,8 @@ def load_deployment(
         fail(f"deployment record chain does not match profile {profile_name!r}: {path}")
     if linked_data.get("profile") != profile_name:
         fail(f"deployment record profile does not match {profile_name!r}: {path}")
+    if linked_data.get("version") != version:
+        fail(f"deployment record version does not match {version!r}: {path}")
 
     arguments = deployment.get("args")
     if not isinstance(arguments, list) or len(arguments) != 3:
@@ -151,7 +162,7 @@ def verification_command(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("profile", help="profile name from deployments.toml")
-    parser.add_argument("--deployment-name", default="VolumeRegistry")
+    parser.add_argument("--version", required=True, help="release name of the deployment")
     parser.add_argument(
         "--rpc-url",
         default=os.environ.get("RPC_URL"),
@@ -159,8 +170,8 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    if not SAFE_NAME.fullmatch(args.deployment_name):
-        parser.error("deployment name must contain only letters, digits, '.', '_' or '-'")
+    if not VERSION_NAME.fullmatch(args.version):
+        parser.error("version must be vN or vN-rcM (e.g. v2, v2-rc1)")
     if not args.rpc_url:
         parser.error("--rpc-url is required when RPC_URL is not set")
 
@@ -170,7 +181,7 @@ def main() -> None:
         args.profile,
         profile,
         settings["network"],
-        args.deployment_name,
+        args.version,
     )
     constructor_args = encode_constructor(profile)
     command = verification_command(

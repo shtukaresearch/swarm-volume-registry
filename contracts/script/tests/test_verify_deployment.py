@@ -71,6 +71,22 @@ class VerificationSettingsTests(unittest.TestCase):
         self.assertNotIn("api_key_env", settings)
 
 
+class LoadDeploymentTests(unittest.TestCase):
+    PROFILE = "sepolia-postage-v0.9.4"
+
+    def test_loads_the_versioned_record(self) -> None:
+        path, deployment = verify_deployment.load_deployment(
+            self.PROFILE, SEPOLIA_PROFILE, "sepolia", "v2-rc1"
+        )
+
+        self.assertEqual(path.name, "VolumeRegistry-v2-rc1.json")
+        self.assertEqual(deployment["address"], "0x33a53c79a08ed1f863905cd4c6ce036a4c493729")
+
+    def test_requires_a_record_for_the_version(self) -> None:
+        with self.assertRaisesRegex(SystemExit, "deployment record not found"):
+            verify_deployment.load_deployment(self.PROFILE, SEPOLIA_PROFILE, "sepolia", "v2-rc9")
+
+
 class VerificationCommandTests(unittest.TestCase):
     def test_encodes_profile_constructor_arguments(self) -> None:
         encoded = verify_deployment.encode_constructor(SEPOLIA_PROFILE)

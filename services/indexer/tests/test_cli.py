@@ -28,14 +28,14 @@ def _write_config(tmp_path, chain) -> str:
                 "deployments": [
                     {
                         "network": "anvil",
-                        "registry_version": "v1",
+                        "registry_version": chain.version,
                         "chain_id": chain.w3.eth.chain_id,
                         "registry": chain.s.registry.address,
                     }
                 ],
                 # the bare network resolves through the explicit pointer, carried into
                 # the artifact so `stat anvil` works against the published file
-                "latest": {"anvil": "anvil-v1"},
+                "latest": {"anvil": f"anvil-{chain.version}"},
             }
         )
     )
@@ -116,7 +116,7 @@ def test_cli_sync_then_stat(chain, tmp_path, capsys):
     )
     assert rc == 0
     summary = json.loads(capsys.readouterr().out)
-    assert summary["deployment"]["label"] == "anvil-v1"
+    assert summary["deployment"]["label"] == f"anvil-{chain.version}"
     assert summary["capacity"]["active_volumes"] == orc.snap_active
     assert summary["accounts"]["authorized"] == orc.snap_authorized
     assert summary["fee_volume"]["unit"] == "BZZ"  # no fiat baked for a local chain
@@ -264,5 +264,5 @@ def test_cli_progress_is_optional(chain, tmp_path, capsys, flag, shown):
     )
     assert cli.main(args + ([flag] if flag else [])) == 0
     err = capsys.readouterr().err
-    assert ("anvil-v1: block" in err) is shown
+    assert (f"anvil-{chain.version}: block" in err) is shown
     assert "synced [" in err  # the one-line summary is always there

@@ -36,10 +36,13 @@ GENESIS = 1893456000  # 2030-01-01T00:00:00Z
 
 _FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
-#: The registry version this harness drives. The ``Chain`` driver's function signatures and
-#: oracle reads are as version-specific as the fixture bytecode, so a future version with
-#: changed semantics gets its own fixture dir *and* driver variant.
-REGISTRY_VERSION = "v1"
+#: The registry versions this harness drives: every version with a pinned fixture dir. The
+#: ``chain`` fixture (``conftest.py``) runs each node-backed test once per version. The
+#: ``Chain`` driver's function signatures and oracle reads are as version-specific as the
+#: fixture bytecode; it uses only calls every version here shares (v2 dropped
+#: ``transferVolumeOwnership``, which the driver never calls), so a future version with
+#: changed semantics gets its own driver variant rather than edits to this one.
+REGISTRY_VERSIONS = tuple(sorted(p.name for p in _FIXTURES.iterdir() if p.is_dir()))
 
 # Fixture constants mirroring RegistryFixture.sol.
 MIN_BUCKET_DEPTH = 16
@@ -50,7 +53,7 @@ VALIDITY_BLOCKS = 12
 ONE_BZZ_PLUR = 10**16  # TestToken has 16 decimals
 
 
-def load_artifact(name: str, version: str = REGISTRY_VERSION) -> tuple[list, str]:
+def load_artifact(name: str, version: str) -> tuple[list, str]:
     """Return ``(abi, bytecode)`` for a contract from the pinned ``version`` fixtures."""
     doc = json.loads((_FIXTURES / version / f"{name}.json").read_text())
     return doc["abi"], doc["bytecode"]["object"]
@@ -58,13 +61,14 @@ def load_artifact(name: str, version: str = REGISTRY_VERSION) -> tuple[list, str
 
 @dataclass
 class Stack:
-    """Deployed contract instances + the registry deployment block."""
+    """Deployed contract instances, the registry deployment block, and its fixture version."""
 
     bzz: Any
     stamp: Any
     oracle: Any
     registry: Any
     genesis_block: int
+    version: str
 
 
 class Web3RpcClient:
@@ -98,6 +102,7 @@ class Chain:
     def __init__(self, w3: Web3, stack: Stack) -> None:
         self.w3 = w3
         self.s = stack
+        self.version = stack.version
         accts = w3.eth.accounts
         self.deployer = accts[0]
         self.owner = accts[1]
@@ -194,10 +199,10 @@ class Chain:
 
     def deployment_doc(self) -> dict[str, Any]:
         return {
-            "label": f"anvil-{REGISTRY_VERSION}",
+            "label": f"anvil-{self.version}",
             "chain_id": self.w3.eth.chain_id,
             "registry": self.s.registry.address,
-            "registry_version": REGISTRY_VERSION,
+            "registry_version": self.version,
             "genesis_ts": datetime.fromtimestamp(GENESIS, tz=timezone.utc),
             "fiat_currencies": [],
             "extra": {
@@ -290,12 +295,13 @@ def oracle(chain: Chain, as_of_ts: int) -> Oracle:
     return out
 
 
-def deploy_stack(w3: Web3) -> Stack:
-    """Deploy the full stack, mirroring ``RegistryFixture.setUp`` (deployer == accounts[0])."""
+def deploy_stack(w3: Web3, version: str) -> Stack:
+    """Deploy ``version``'s pinned stack, mirroring ``RegistryFixture.setUp`` (deployer ==
+    accounts[0])."""
     deployer = w3.eth.accounts[0]
 
     def _deploy(name: str, *args):
-        abi, code = load_artifact(name)
+        abi, code = load_artifact(name, version)
         c = w3.eth.contract(abi=abi, bytecode=code)
         tx = c.constructor(*args).transact({"from": deployer})
         addr = w3.eth.wait_for_transaction_receipt(tx)["contractAddress"]
@@ -312,4 +318,4 @@ def deploy_stack(w3: Web3) -> Stack:
     _tx(stamp.functions.grantRole(role, deployer))
     _tx(stamp.functions.setPrice(INITIAL_PRICE))
     registry = _deploy("VolumeRegistry", stamp.address, bzz.address, GRACE_BLOCKS)
-    return Stack(bzz, stamp, oracle, registry, genesis_block=w3.eth.block_number)
+    return Stack(bzz, stamp, oracle, registry, genesis_block=w3.eth.block_number, version=version)

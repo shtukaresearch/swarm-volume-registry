@@ -47,7 +47,9 @@ def _decoded_rows(chain):
         postage=chain.s.stamp.address,
         from_block=chain.s.genesis_block,
     )
-    return [decode.decode_log(log, deployment_id=dep_id, registry_version="v1") for log in raw]
+    return [
+        decode.decode_log(log, deployment_id=dep_id, registry_version=chain.version) for log in raw
+    ]
 
 
 def test_block_ts_comes_from_the_log_and_matches_the_block(chain):

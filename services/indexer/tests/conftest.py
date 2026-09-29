@@ -18,7 +18,7 @@ import time
 import pytest
 from web3 import Web3
 
-from harness import deploy_stack, Chain
+from harness import REGISTRY_VERSIONS, deploy_stack, Chain
 
 
 def _free_port() -> int:
@@ -65,8 +65,9 @@ def node():
             proc.kill()
 
 
-@pytest.fixture
-def chain(node) -> Chain:
-    """A clean chain with a freshly-deployed registry stack for one test."""
+@pytest.fixture(params=REGISTRY_VERSIONS)
+def chain(node, request) -> Chain:
+    """A clean chain with a freshly-deployed registry stack for one test — once per pinned
+    registry version, so every node-backed test covers every supported release."""
     node.provider.make_request("anvil_reset", [])
-    return Chain(node, deploy_stack(node))
+    return Chain(node, deploy_stack(node, request.param))

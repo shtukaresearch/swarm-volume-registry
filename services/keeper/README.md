@@ -6,7 +6,7 @@ Cloudflare Cron Triggers are the only scheduler. GitHub Actions tests and deploy
 
 | Deployment | Worker | Chain | Registry | Schedule |
 |---|---|---|---|---|
-| `sepolia` | `keeper-sepolia` | Sepolia (11155111) | v2 `0x33a53c79…4c493729` | every minute |
+| `sepolia` | `keeper-sepolia` | Sepolia (11155111) | v2-rc1 `0x33a53c79…4c493729` | every minute |
 | `gnosis` | `keeper-gnosis` | Gnosis (100) | v1 `0x9639ae4c…ddd02aad` | hourly |
 
 Both are envs in [`wrangler.jsonc`](./wrangler.jsonc), with independent wallets and RPC credentials. They may share one Telegram group; every alert names its deployment, chain and registry.

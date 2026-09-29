@@ -13,9 +13,17 @@
       "chain_id": 11155111,
       "registry": "0x3a99b4b52a4bd75760667219ea93c627051b1af8",
       "genesis_block": 10715515
+    },
+    {
+      "network": "sepolia",
+      "registry_version": "v2-rc1",
+      "chain_id": 11155111,
+      "registry": "0x33a53c79a08ed1f863905cd4c6ce036a4c493729",
+      "genesis_block": 11532775
     }
   ],
   "latest": {
-    "gnosis": "gnosis-v1"
+    "gnosis": "gnosis-v1",
+    "sepolia": "sepolia-v2-rc1"
   }
 }

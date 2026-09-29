@@ -22,7 +22,7 @@ A contract version names a **deployed release**, extensionally ([ADR-0010](./adr
 | `contracts/deployments/<network>/VolumeRegistry-<version>.json` | the deployments the name indexes (address, chain, creation block), one per network |
 | `registry_version` in a registry entry | selects the decoder/projector for that deployment |
 | `decode._VERSIONS` key | the pinned decode reference data (events ABI, enum names) |
-| `tests/fixtures/<version>/` | the frozen build the harness deploys ([`TESTING.md`](./TESTING.md) §2a) |
+| `tests/fixtures/<version>/` | the deployed registry code the harness deploys ([`TESTING.md`](./TESTING.md) §2a) |
 
 A version covers every deployment made from its tag's source, across networks and over time: deploying the *same* release to a new network adds a deployment record and a registry entry under the existing name, no new version. A network holds at most one deployment per name. A new release gets a new name even when the indexer-visible surface is unchanged — its `_VERSIONS` entry is then a one-line alias of the predecessor's reference data. Once assigned, a name is frozen; deployments are immutable, so it can never become wrong.
 
@@ -37,9 +37,9 @@ Contracts `HEAD` carries **no** version: it is the next release in development, 
 Nothing here can break an existing install: until step 5 ships, the new deployment simply does not exist for the indexer. (Operational runbook with the concrete commands: repo-root [`RELEASING.md`](../../../RELEASING.md).)
 
 1. **Deploy** from the release commit; **export** the versioned deployment record (optionally promoting it to the network's latest pointer); **commit** it with the broadcast records; **tag** that commit with the release name (tag after the record commit, so the tag's tree contains its own deployment record).
-2. **Pin the fixture**: slim abi + creation bytecode at `tests/fixtures/vN/`, with `provenance.json` (source commit/tag, compiler settings) recording an on-chain verification — deployed runtime bytecode vs the build's, immutable references masked.
+2. **Pin the fixture**: `tests/fixtures/vN/VolumeRegistry.json`, derived from the deployment records with no build — the record's abi plus the recorded CREATE initcode minus its constructor arguments — with a `provenance.json` naming the records, transactions and tag. (v1 predates deployment records; its fixture is a build verified against the chain by runtime bytecode.)
 3. **Add the decode reference data**: `decode._VERSIONS["vN"]` — a new events ABI + enum tables if the surface changed, an alias of the predecessor if not. The pinning unit in `test_decoder.py` enforces that this and the fixture agree.
-4. **Extend the suite** only if semantics changed: a `Chain` driver variant + scenarios for the new behaviour.
+4. **Handle changed semantics**, only if the release changed what the indexer relies on (event meanings, fee flow, active-set or authorization rules, wiring getters): scenarios for the new behaviour (plus a `Chain` driver variant if calls changed), and the matching implementation — version-aware projection in `project.py` (introducing dispatch on `registry_version` the first time it is needed) and wiring / `extra` in `node.resolve_extra`. The artifact kernel stays stable; new facts go in `extra` or an additive section.
 5. **Register the deployments**: run the derivation script (`scripts/derive_deployments.py`), which proposes registry entries for recorded deployments of supported versions (network, version, chain, address, genesis block — all read from the deployment records, never hand-transcribed; [ADR-0011](./adr/0011-derived-deployment-registry.md)) and follows each network's latest pointer where it names a registered deployment; review the diff, commit, and make a Python package release carrying it.
 
 Steps 1–2 produce **facts** (safely automatable, inert until named); steps 3–5 are **claims** — the manual acknowledgements that the package understands the new version ([ADR-0011](./adr/0011-derived-deployment-registry.md)). Automatic propagation stops at step 3, the first claim.

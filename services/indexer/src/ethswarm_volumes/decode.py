@@ -154,12 +154,20 @@ _V1_ENUMS: dict[tuple[str, str], dict[int, str]] = {
     ("TopupSkipped", "reason"): _V1_SKIP_REASONS,
 }
 
+#: v2-rc1 (first v2 release candidate, Sepolia): v1 minus ``VolumeOwnershipTransferred``
+#: — v2 removed ownership transfer and changed nothing else on the indexer-visible surface
+#: (other events, their ABIs and the ``REASON_*`` / ``SKIP_*`` constants are unchanged).
+_V2_RC1_EVENT_ABIS: list[dict[str, Any]] = [
+    abi for abi in _V1_EVENT_ABIS if abi["name"] != "VolumeOwnershipTransferred"
+]
+
 #: All version-specific reference data, keyed by ``registry_version``. Adding a key here
 #: is the act that makes a contract version *supported* — the single claim site gating
 #: registration (ADR-0011). A release with an unchanged indexer surface aliases its
 #: predecessor's entry.
 _VERSIONS = {
     "v1": {"abis": _V1_EVENT_ABIS, "enums": _V1_ENUMS},
+    "v2-rc1": {"abis": _V2_RC1_EVENT_ABIS, "enums": _V1_ENUMS},
 }
 
 

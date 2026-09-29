@@ -11,8 +11,12 @@ Two verbs over the one data contract (``docs/CLIENT.md``):
 - ``stat`` — the read path. Load the artifact, fold one deployment per the bucket / capacity
   / fiat options, and render it as text or ``--json`` (``docs/SCHEMA.md`` §4).
 
-The RPC endpoint defaults to ``$GNO_RPC_URL`` and is overridable with ``--rpc``. The
-deployment set is the built-in registry, overridable with ``--config``
+The RPC endpoint is ``--rpc``, or else an environment variable named for the chain by its
+EIP-3770 short name: ``sync <deployment>`` reads ``$<SHORT>_RPC_URL`` for that deployment's
+chain (``$GNO_RPC_URL`` on Gnosis, ``$SEP_RPC_URL`` on Sepolia); a bare ``sync`` reads
+``$GNO_RPC_URL`` and indexes every registered deployment on the chain it reaches. A named
+deployment on a different chain from the endpoint is refused before any contract call.
+The deployment set is the built-in registry, overridable with ``--config``
 (:mod:`ethswarm_volumes.registry`).
 """
 
@@ -30,7 +34,19 @@ from .model import Artifact, Deployment, EventLog
 from .project import project_entry
 
 DEFAULT_ARTIFACT_NAME = "artifact.json"
-RPC_ENV = "GNO_RPC_URL"
+#: EIP-3770 short names of the chains with a default RPC variable, ``$<SHORT>_RPC_URL``.
+CHAIN_SHORT_NAMES = {1: "ETH", 100: "GNO", 11155111: "SEP"}
+#: The chain a bare ``sync`` (no deployment named) connects to by default.
+DEFAULT_CHAIN_ID = 100
+
+
+def rpc_env(chain_id: int) -> str | None:
+    """The default RPC environment variable for ``chain_id``, if it has a short name."""
+    short = CHAIN_SHORT_NAMES.get(chain_id)
+    return f"{short}_RPC_URL" if short else None
+
+
+RPC_ENV = rpc_env(DEFAULT_CHAIN_ID)
 
 
 class _Progress:
@@ -164,31 +180,42 @@ def _load_existing(path: Path) -> Artifact | None:
 
 
 def cmd_sync(args) -> int:
-    rpc_url = args.rpc or os.environ.get(RPC_ENV)
-    if not rpc_url:
-        print(f"error: no RPC endpoint (pass --rpc or set ${RPC_ENV})", file=sys.stderr)
-        return 2
-
     store_dir = store.resolve_store_dir(args.store_dir)
     try:
         reg = registry.load_registry(args.config)
     except (KeyError, ValueError) as exc:
         print(f"error: invalid deployment registry: {exc}", file=sys.stderr)
         return 2
+
+    # Resolve a named deployment first: its chain picks the default endpoint.
+    chosen = None
+    if args.deployment:
+        chosen = registry.select(reg, args.deployment)
+        if chosen is None:
+            print(f"error: unknown deployment {args.deployment!r}", file=sys.stderr)
+            return 2
+    env = rpc_env(chosen.chain_id if chosen else DEFAULT_CHAIN_ID)
+    rpc_url = args.rpc or (os.environ.get(env) if env else None)
+    if not rpc_url:
+        hint = f"pass --rpc or set ${env}" if env else "pass --rpc"
+        print(f"error: no RPC endpoint ({hint})", file=sys.stderr)
+        return 2
+
     w3 = node.connect(rpc_url, timeout=args.rpc_timeout)
     if not w3.is_connected():
         print(f"error: cannot connect to {rpc_url}", file=sys.stderr)
         return 2
     rpc = node.Web3RpcClient(w3)
     chain_id = w3.eth.chain_id
-    # The head to index to: an explicit --to-block, else the reorg-safe finalized head.
-    # All targets share one chain, so one resolution covers them.
-    head_block = args.to_block if args.to_block is not None else rpc.finalized_block_number()
 
-    if args.deployment:
-        chosen = registry.select(reg, args.deployment)
-        if chosen is None:
-            print(f"error: unknown deployment {args.deployment!r}", file=sys.stderr)
+    if chosen is not None:
+        if chosen.chain_id != chain_id:
+            print(
+                f"error: deployment {chosen.label!r} is on chain {chosen.chain_id}, but the"
+                f" RPC endpoint serves chain {chain_id}; pass --rpc for chain {chosen.chain_id}"
+                + (f" or set ${env}" if env else ""),
+                file=sys.stderr,
+            )
             return 2
         targets = [chosen]
     else:
@@ -196,6 +223,10 @@ def cmd_sync(args) -> int:
         if not targets:
             print(f"error: no registry deployment on chain {chain_id}", file=sys.stderr)
             return 2
+
+    # The head to index to: an explicit --to-block, else the reorg-safe finalized head.
+    # All targets share one chain, so one resolution covers them.
+    head_block = args.to_block if args.to_block is not None else rpc.finalized_block_number()
 
     bad = _unsupported(targets)
     if bad:
@@ -300,7 +331,11 @@ def _build_parser() -> argparse.ArgumentParser:
     p_sync.add_argument(
         "deployment", nargs="?", help="label, network or chain:address (default: by chain)"
     )
-    p_sync.add_argument("--rpc", help=f"RPC endpoint (default: ${RPC_ENV})")
+    p_sync.add_argument(
+        "--rpc",
+        help="RPC endpoint (default: $<SHORT>_RPC_URL for the named deployment's chain,"
+        f" e.g. $SEP_RPC_URL; ${RPC_ENV} when none is named)",
+    )
     p_sync.add_argument(
         "--rpc-timeout",
         type=float,

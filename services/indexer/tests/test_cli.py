@@ -28,14 +28,14 @@ def _write_config(tmp_path, chain) -> str:
                 "deployments": [
                     {
                         "network": "anvil",
-                        "registry_version": "v1",
+                        "registry_version": chain.version,
                         "chain_id": chain.w3.eth.chain_id,
                         "registry": chain.s.registry.address,
                     }
                 ],
                 # the bare network resolves through the explicit pointer, carried into
                 # the artifact so `stat anvil` works against the published file
-                "latest": {"anvil": "anvil-v1"},
+                "latest": {"anvil": f"anvil-{chain.version}"},
             }
         )
     )
@@ -116,7 +116,7 @@ def test_cli_sync_then_stat(chain, tmp_path, capsys):
     )
     assert rc == 0
     summary = json.loads(capsys.readouterr().out)
-    assert summary["deployment"]["label"] == "anvil-v1"
+    assert summary["deployment"]["label"] == f"anvil-{chain.version}"
     assert summary["capacity"]["active_volumes"] == orc.snap_active
     assert summary["accounts"]["authorized"] == orc.snap_authorized
     assert summary["fee_volume"]["unit"] == "BZZ"  # no fiat baked for a local chain
@@ -264,5 +264,59 @@ def test_cli_progress_is_optional(chain, tmp_path, capsys, flag, shown):
     )
     assert cli.main(args + ([flag] if flag else [])) == 0
     err = capsys.readouterr().err
-    assert ("anvil-v1: block" in err) is shown
+    assert (f"anvil-{chain.version}: block" in err) is shown
     assert "synced [" in err  # the one-line summary is always there
+
+
+def test_cli_refuses_named_deployment_on_another_chain(chain, tmp_path, capsys):
+    """A named deployment whose chain differs from the endpoint's is refused before any
+    contract call (which would otherwise fail opaquely), and nothing is written."""
+    cfg = tmp_path / "registry.json"
+    other_chain = chain.w3.eth.chain_id + 1
+    cfg.write_text(
+        json.dumps(
+            {
+                "deployments": [
+                    {
+                        "network": "elsewhere",
+                        "registry_version": chain.version,
+                        "chain_id": other_chain,
+                        "registry": chain.s.registry.address,
+                    }
+                ]
+            }
+        )
+    )
+    store_dir = tmp_path / "store"
+    rc = cli.main(
+        [
+            "--store-dir",
+            str(store_dir),
+            "sync",
+            f"elsewhere-{chain.version}",
+            "--rpc",
+            chain.w3.provider.endpoint_uri,
+            "--config",
+            str(cfg),
+        ]
+    )
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert f"is on chain {other_chain}" in err
+    assert f"serves chain {chain.w3.eth.chain_id}" in err
+    assert not store_dir.exists()  # no artifact, no cache
+
+
+def test_named_deployment_reads_its_own_chains_rpc_variable(monkeypatch, capsys):
+    """``sync sepolia`` defaults to ``$SEP_RPC_URL``, not ``$GNO_RPC_URL``."""
+    monkeypatch.setenv("GNO_RPC_URL", "http://gnosis.invalid")
+    monkeypatch.delenv("SEP_RPC_URL", raising=False)
+    assert cli.main(["sync", "sepolia"]) == 2
+    assert "set $SEP_RPC_URL" in capsys.readouterr().err
+
+
+def test_rpc_variables_are_named_by_chain_short_name():
+    assert cli.rpc_env(100) == "GNO_RPC_URL"
+    assert cli.rpc_env(11155111) == "SEP_RPC_URL"
+    assert cli.rpc_env(31337) is None  # no short name: --rpc is required
+    assert cli.RPC_ENV == "GNO_RPC_URL"  # a bare `sync` keeps its default

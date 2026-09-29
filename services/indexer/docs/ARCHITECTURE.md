@@ -64,6 +64,6 @@ This is one of the two clean seams of the system (§4). The row shape it produce
 
 - Three measures × identical temporal access patterns (as-of / window / series); flow-vs-stock is the one structural difference.
 - One artifact, two renderers (CLI / planned dashboard) with shared option semantics.
-- Stable public contract (artifact) over per-version private decode (the per-deployment, per-event-type [`event_log`](./data-model/event-log.md) + the projector selected by `registry_version`).
+- Stable public contract (artifact) over per-version private decode (the per-deployment, per-event-type [`event_log`](./data-model/event-log.md) + the projector for the deployment's `registry_version` — one projector serves every version so far; per-version dispatch arrives with the first release whose semantics differ).
 - The web3 layer acquires per event type, the store keeps per event type, and the projector merges only the logs each measure needs — one shape across acquisition, storage, and read.
 - Two clean seams: `event_log` separates web3 from everything else (§2); the artifact separates the indexer write path from the client read path.

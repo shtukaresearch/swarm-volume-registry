@@ -16,9 +16,12 @@ tolerated.
 
 Stdlib only. Run from anywhere inside the repo, after ``forge build``::
 
-    python3 services/indexer/scripts/vendor_fixtures.py v2 \\
+    python3 services/indexer/scripts/vendor_fixtures.py v2 --tag v2 \\
         --verify gnosis 0xREGISTRY "$GNO_RPC_URL" \\
-        --verify sepolia 0xREGISTRY "$SEP_RPC_URL"
+        --verify-record sepolia
+
+``--verify`` checks a live deployment over RPC; ``--verify-record`` checks offline against
+the committed deployment record and its broadcast.
 """
 
 from __future__ import annotations
@@ -42,8 +45,19 @@ FIXTURES = INDEXER / "tests" / "fixtures"
 CONTRACTS = ("VolumeRegistry", "PostageStamp", "PriceOracle", "TestToken")
 
 VERIFY_METHOD = (
-    "eth_getCode runtime bytecode vs this build's deployedBytecode, immutable references "
-    "masked; CBOR metadata suffix compared separately"
+    "per deployment: 'eth_getCode' compares this build's deployedBytecode with the live "
+    "runtime code, immutable references masked, CBOR metadata suffix compared separately; "
+    "'deployment_record' compares this build's creation bytecode byte-for-byte (metadata "
+    "included) with the initcode of the CREATE transaction in the committed deployment "
+    "record's Foundry broadcast"
+)
+
+#: Build inputs that must be identical between ``--tag`` and the working tree being built.
+BUILD_INPUTS = (
+    "contracts/src",
+    "contracts/lib",
+    "contracts/foundry.toml",
+    "contracts/remappings.txt",
 )
 
 
@@ -106,10 +120,50 @@ def verify_deployment(
     chain_body, chain_meta = split_metadata(onchain)
     return {
         "label": label,
+        "method": "eth_getCode",
         "chain_id": chain_id,
         "registry": address.lower(),
         "runtime_body_match": chain_body == local_body,
         "metadata_match": chain_meta == local_meta,
+    }
+
+
+def verify_record(artifact: dict[str, Any], network: str, version: str) -> dict[str, Any]:
+    """Compare the build's creation bytecode with a committed deployment record, offline.
+
+    Reads ``contracts/deployments/<network>/VolumeRegistry-<version>.json`` (written and
+    checked by ``contracts/script/export_deployment.py``) and the Foundry broadcast it
+    links to, and checks that the recorded CREATE transaction's initcode is exactly this
+    build's creation bytecode followed by the constructor arguments. An exact match
+    (metadata hash included) means the same source and settings produced the deployed
+    code — no RPC needed, which suits environments that cannot reach the chain.
+    """
+    path = REPO / "contracts" / "deployments" / network / f"VolumeRegistry-{version}.json"
+    record = json.loads(path.read_text(encoding="utf-8"))
+    if record["linkedData"]["version"] != version:
+        raise SystemExit(
+            f"{path.relative_to(REPO)} records version {record['linkedData']['version']!r}"
+        )
+    broadcast = json.loads(
+        (REPO / "contracts" / record["linkedData"]["broadcast"]).read_text(encoding="utf-8")
+    )
+    creates = [
+        tx
+        for tx in broadcast["transactions"]
+        if tx.get("hash", "").lower() == record["transactionHash"].lower()
+        and tx.get("transactionType") == "CREATE"
+    ]
+    if len(creates) != 1:
+        raise SystemExit(f"broadcast has no single CREATE for {record['transactionHash']}")
+    initcode = creates[0]["transaction"]["input"].lower()
+    build = artifact["bytecode"]["object"].lower()
+    return {
+        "label": network,
+        "method": "deployment_record",
+        "chain_id": int(record["linkedData"]["chainId"]),
+        "registry": record["address"].lower(),
+        "transaction": record["transactionHash"].lower(),
+        "creation_code_match": initcode.startswith(build),
     }
 
 
@@ -128,6 +182,19 @@ def main() -> int:
         default=[],
         help="a live deployment to verify the build against (repeatable)",
     )
+    parser.add_argument(
+        "--verify-record",
+        metavar="NETWORK",
+        action="append",
+        default=[],
+        help="verify offline against contracts/deployments/NETWORK/VolumeRegistry-VERSION.json"
+        " and its broadcast (repeatable)",
+    )
+    parser.add_argument(
+        "--tag",
+        help="the release tag; recorded in provenance after checking its contract sources"
+        " and build settings are identical to the working tree being vendored",
+    )
     args = parser.parse_args()
 
     if not (OUT / "VolumeRegistry.sol" / "VolumeRegistry.json").exists():
@@ -135,6 +202,9 @@ def main() -> int:
         return 1
     if git("status", "--porcelain", "--", "contracts/src", "contracts/lib"):
         print("contracts source is dirty; commit before vendoring", file=sys.stderr)
+        return 1
+    if args.tag and git("diff", "--name-only", args.tag, "HEAD", "--", *BUILD_INPUTS):
+        print(f"contract sources or build settings differ from {args.tag}", file=sys.stderr)
         return 1
 
     dst = FIXTURES / args.version
@@ -155,6 +225,12 @@ def main() -> int:
         meta = "" if entry["metadata_match"] else " (metadata differs: source-text drift)"
         print(f"verify {label} (chain {entry['chain_id']}): runtime body {status}{meta}")
         ok = ok and entry["runtime_body_match"]
+    for network in args.verify_record:
+        entry = verify_record(registry, network, args.version)
+        deployments.append(entry)
+        status = "OK" if entry["creation_code_match"] else "MISMATCH"
+        print(f"verify {network} (chain {entry['chain_id']}) against its record: {status}")
+        ok = ok and entry["creation_code_match"]
 
     provenance = {
         "registry_version": args.version,
@@ -166,7 +242,7 @@ def main() -> int:
         ),
         "source": {
             "commit": git("rev-parse", "HEAD"),
-            "tag": None,  # filled in once the release commit is tagged (RELEASING.md)
+            "tag": args.tag,  # None until the release commit is tagged (RELEASING.md)
             "solc": registry["metadata"]["compiler"]["version"],
             "optimizer": {
                 "enabled": settings["optimizer"]["enabled"],
@@ -187,7 +263,7 @@ def main() -> int:
 
     if not ok:
         print(
-            "FATAL: runtime body mismatch — this build is not the deployed contract",
+            "FATAL: bytecode mismatch — this build is not the deployed contract",
             file=sys.stderr,
         )
         return 1

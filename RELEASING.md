@@ -233,17 +233,26 @@ deployed; it is the package's acknowledgement that it can index the release
 
 ### B1. Vendor the pinned test fixture
 
-From a checkout of the release tag, after `forge build` in `contracts/`:
+After `forge build` in `contracts/` (solc 0.8.19, per `foundry.toml`), from `main` or a
+checkout of the release tag:
 
 ```sh
-python3 services/indexer/scripts/vendor_fixtures.py v2-rc2 \
-  --verify sepolia 0xREGISTRY "$SEP_RPC_URL"
+python3 services/indexer/scripts/vendor_fixtures.py v2-rc2 --tag v2-rc2 \
+  --verify-record sepolia
 ```
 
 This freezes slim build artifacts at `services/indexer/tests/fixtures/v2-rc2/` and writes
-`provenance.json`, verifying on-chain that the frozen build **is** the deployed code
-(runtime bytecode comparison, immutables masked). Take the address from the versioned
-deployment record, fill in `source.tag`, and commit the fixture directory.
+`provenance.json`, recording proof that the frozen build **is** the deployed code:
+
+- `--tag` refuses to vendor unless the tag's contract sources and build settings equal the
+  working tree's, and records the tag.
+- `--verify-record NETWORK` checks, offline, that the build's creation bytecode is exactly
+  (metadata hash included) the initcode of the CREATE transaction in the network's
+  committed deployment record and its broadcast.
+- `--verify NETWORK 0xREGISTRY "$RPC_URL"` additionally compares runtime bytecode with the
+  live chain (`eth_getCode`, immutables masked), where an RPC is reachable.
+
+Commit the fixture directory.
 
 ### B2. Add the decode reference data
 

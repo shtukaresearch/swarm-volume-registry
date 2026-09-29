@@ -31,17 +31,7 @@ def _project(chain, as_of_ts: int):
         postage=chain.s.stamp.address,
         from_block=chain.s.genesis_block,
     )
-    rows = [
-        decode.decode_log(
-            log,
-            deployment_id=dep_id,
-            block_ts=datetime.fromtimestamp(
-                chain.w3.eth.get_block(log["blockNumber"])["timestamp"], tz=timezone.utc
-            ),
-            registry_version="v1",
-        )
-        for log in raw
-    ]
+    rows = [decode.decode_log(log, deployment_id=dep_id, registry_version="v1") for log in raw]
     d = chain.deployment_doc()
     dep = Deployment(
         label=d["label"],

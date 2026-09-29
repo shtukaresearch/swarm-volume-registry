@@ -7,7 +7,7 @@ ethswarm-volumes sync [options]                 # run the indexer (the ARCHITECT
 ethswarm-volumes stat [<deployment>] [options]  # render the 3-measure summary
 ```
 
-`sync` reads to `finalized`, updates the [`event_log`](./data-model/event-log.md) cache, projects, and writes/publishes the artifact. Its main option is `--store-dir <path>` (the cache location; default `$XDG_CACHE_HOME/ethswarm-volumes`, overridable via `$ETHSWARM_VOLUMES_STORE`), alongside the RPC endpoint configuration. `stat` is the read path below. Further verbs (e.g. volume management) come later; v1 is these two.
+`sync` reads to `finalized`, updates the [`event_log`](./data-model/event-log.md) cache, projects, and writes/publishes the artifact. Its main option is `--store-dir <path>` (the cache location; default `$XDG_CACHE_HOME/ethswarm-volumes`, overridable via `$ETHSWARM_VOLUMES_STORE`), alongside the RPC endpoint configuration (`--rpc`, `--rpc-timeout` seconds per request, default 10). Progress through the block range goes to stderr when stderr is a terminal; `--progress` / `--no-progress` force it on or off, so headless runs (cron, CI) print only one summary line per deployment. The RPC endpoint must return `blockTimestamp` on log objects (execution-apis Log object; all mainstream clients do) — event times are read from the logs, never from per-block lookups. The sync checkpoints after each block range, so an interrupted run resumes where it stopped. `stat` is the read path below. Further verbs (e.g. volume management) come later; v1 is these two.
 
 ## `stat`
 

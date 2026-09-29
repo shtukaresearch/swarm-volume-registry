@@ -141,18 +141,24 @@ def load_event_log(store_dir: str | os.PathLike[str], deployment_id: DeploymentI
 
     Reads every ``<event_name>.jsonl`` under the deployment directory; the inverse of
     :func:`append_rows`. A missing deployment directory yields an empty ``EventLog``.
+
+    Duplicate lines are dropped, keyed by ``(block_number, log_index)`` — a log's position
+    in the chain. ``sync`` appends a chunk's rows *before* checkpointing its head, so a
+    process killed between the two re-appends that chunk on the next run; loading is where
+    that at-least-once write becomes exactly-once.
     """
     dep_dir = deployment_dir(store_dir, deployment_id)
     if not dep_dir.is_dir():
         return EventLog.from_rows(())
-    rows: list[EventLogRow] = []
+    rows: dict[tuple[int, int], EventLogRow] = {}
     for path in dep_dir.glob("*.jsonl"):
         with path.open(encoding="utf-8") as fh:
             for line in fh:
                 line = line.strip()
                 if line:
-                    rows.append(_row_from_json(json.loads(line)))
-    return EventLog.from_rows(rows)
+                    row = _row_from_json(json.loads(line))
+                    rows.setdefault((row.block_number, row.log_index), row)
+    return EventLog.from_rows(rows.values())
 
 
 def load_head(store_dir: str | os.PathLike[str], deployment_id: DeploymentId) -> int | None:

@@ -10,7 +10,7 @@ Each log shares the row shape below; `deployment_id` and `event_name` are the lo
 event_log[<event_name>](          -- one relation per event type
   deployment_id,              -- FK to the deployment registry
   block_number,
-  block_ts,                   -- UTC; drives day bucketing
+  block_ts,                   -- UTC, from the log's blockTimestamp; drives day bucketing
   tx_hash, tx_index,          -- tx grouping for the fee join
   log_index,                  -- (block_number, log_index) = chain order, within and across logs
   emitter,                    -- registry address, or the BZZ token address
@@ -33,7 +33,7 @@ The store is a directory of append-only **JSONLines** files, one per `(deploymen
     head.json                   -- { "finalized_block": N } : last finalized block synced
 ```
 
-`block_ts` is written as UTC ISO 8601; PLUR amounts are exact integer JSON numbers. The store is a **cache**, fully reconstructible by re-syncing from genesis. `sync` reads `head.json`, fetches `(head, finalized]`, appends the new rows to their per-type files, advances `head.json`, and re-projects. The first run for a deployment syncs from `genesis_block`, yielding the same `event_log` as a full genesis re-sync — an invariant of the event-sourced, `finalized`-only design (no reorgs to reconcile).
+`block_ts` is written as UTC ISO 8601; PLUR amounts are exact integer JSON numbers. The store is a **cache**, fully reconstructible by re-syncing from genesis. `sync` reads `head.json` and fetches `(head, finalized]` in block ranges; after each range it appends that range's rows to their per-type files and advances `head.json` to the range's end, so an interrupted sync resumes from the last completed range. Rows are written before the head, so an interruption between the two can re-append a range; loading drops duplicates by `(block_number, log_index)`. When the fetch completes, `sync` re-projects. The first run for a deployment syncs from `genesis_block`, yielding the same `event_log` as a full genesis re-sync — an invariant of the event-sourced, `finalized`-only design (no reorgs to reconcile).
 
 **Location.** The store directory is configurable: `--store-dir <path>`, else `$ETHSWARM_VOLUMES_STORE`, else the default `$XDG_CACHE_HOME/ethswarm-volumes` (falling back to `~/.cache/ethswarm-volumes`). Resolution lives in `ethswarm_volumes.store`.
 

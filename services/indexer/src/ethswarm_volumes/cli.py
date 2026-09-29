@@ -3,10 +3,11 @@
 Two verbs over the one data contract (``docs/CLIENT.md``):
 
 - ``sync`` — the write path. For each registry deployment on the connected chain: acquire
-  the delta to ``finalized``, decode it across the ``event_log`` boundary, feed the fresh
-  rows plus the cached prior history straight to the projector, bake fiat, and write/merge
-  the single artifact file. The delta is also appended to the JSONLines cache so the next
-  resync can resume — the cache is off the projector's data path (``docs/ARCHITECTURE.md`` §1).
+  the delta to ``finalized`` range by range, decode it across the ``event_log`` boundary,
+  feed the fresh rows plus the cached prior history straight to the projector, bake fiat,
+  and write/merge the single artifact file. Each range is appended to the JSONLines cache
+  and checkpointed as it completes, so an interrupted sync resumes where it stopped — the
+  cache is off the projector's data path (``docs/ARCHITECTURE.md`` §1).
 - ``stat`` — the read path. Load the artifact, fold one deployment per the bucket / capacity
   / fiat options, and render it as text or ``--json`` (``docs/SCHEMA.md`` §4).
 
@@ -32,19 +33,55 @@ DEFAULT_ARTIFACT_NAME = "artifact.json"
 RPC_ENV = "GNO_RPC_URL"
 
 
+class _Progress:
+    """Block-range progress for one deployment's acquisition, on stderr.
+
+    Disabled (a no-op) for headless runs; ``--progress`` / ``--no-progress`` override the
+    default, which is on only when stderr is a terminal. On a terminal the line redraws in
+    place; otherwise each update is its own line, so a forced ``--progress`` stays readable
+    in a log file.
+    """
+
+    def __init__(self, enabled: bool, label: str, from_block: int, to_block: int) -> None:
+        self.enabled = enabled and from_block <= to_block
+        self.label = label
+        self.from_block = from_block
+        self.total = to_block - from_block + 1
+        self.inplace = sys.stderr.isatty()
+
+    def update(self, block: int, n_logs: int) -> None:
+        if not self.enabled:
+            return
+        pct = 100 * (block - self.from_block + 1) // self.total
+        line = f"  {self.label}: block {block} ({pct}%), {n_logs} new logs"
+        print(
+            f"\r{line}" if self.inplace else line,
+            end="" if self.inplace else "\n",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    def done(self) -> None:
+        if self.enabled and self.inplace:
+            print(file=sys.stderr)
+
+
 # ---------------------------------------------------------------------------
 # sync
 # ---------------------------------------------------------------------------
 
 
-def _sync_and_project(w3, rpc, store_dir: Path, spec: registry.DeploymentSpec, head_block: int):
+def _sync_and_project(
+    w3, rpc, store_dir: Path, spec: registry.DeploymentSpec, head_block: int, progress: bool
+):
     """Sync one deployment's delta and project its artifact entry.
 
     Fresh decoded rows feed the projector directly; the JSONLines cache is off the data
     path (``docs/ARCHITECTURE.md`` §1). The cache supplies the prior history and the
     resume head, so a resync acquires only ``(head, head_block]`` and no freshly-decoded
-    row round-trips through disk before projection. The delta is appended to the cache
-    afterwards, purely so the next resync can resume.
+    row round-trips through disk before projection. Each acquired range is appended to
+    the cache and its end checkpointed as the head before the next range is requested,
+    purely so an interrupted sync — or the next one — resumes without refetching.
     """
     dep_id = spec.deployment_id
     genesis_block = spec.genesis_block
@@ -59,31 +96,29 @@ def _sync_and_project(w3, rpc, store_dir: Path, spec: registry.DeploymentSpec, h
     head = store.load_head(store_dir, dep_id)
     from_block = head + 1 if head is not None else genesis_block
 
-    # Acquire + decode only the delta.
-    raw = acquire.acquire_logs(
+    # Acquire + decode only the delta, one checkpointed range at a time. Timestamps ride
+    # on the logs (``blockTimestamp``), so decoding needs no further RPC.
+    fresh: list = []
+    bar = _Progress(progress, spec.label, from_block, head_block)
+    chunks = acquire.iter_log_chunks(
         rpc,
-        deployment_id=dep_id,
         registry=spec.registry,
         bzz_token=extra["bzz"],
         postage=extra["postage"],
         from_block=from_block,
         to_block=head_block,
     )
-    fresh: list = []
-    if raw:
-        ts_by_block = node.block_timestamps(w3, {int(log["blockNumber"]) for log in raw})
-        fresh = [
-            decode.decode_log(
-                log,
-                deployment_id=dep_id,
-                block_ts=ts_by_block[int(log["blockNumber"])],
-                registry_version=spec.registry_version,
-            )
+    for _, end, raw in chunks:
+        rows = [
+            decode.decode_log(log, deployment_id=dep_id, registry_version=spec.registry_version)
             for log in raw
         ]
-        store.append_rows(store_dir, fresh)  # persist the delta for the next resync only
-    store.save_head(store_dir, dep_id, head_block)
-    print(f"  synced [{from_block}, {head_block}] — {len(raw)} new logs", file=sys.stderr)
+        store.append_rows(store_dir, rows)  # rows first, then the head: at-least-once
+        store.save_head(store_dir, dep_id, end)
+        fresh.extend(rows)
+        bar.update(end, len(fresh))
+    bar.done()
+    print(f"  synced [{from_block}, {head_block}] — {len(fresh)} new logs", file=sys.stderr)
 
     # Feed prior history + the fresh delta straight to the projector — no reload.
     events = EventLog.from_rows([*prior.merged(), *fresh])
@@ -140,7 +175,7 @@ def cmd_sync(args) -> int:
     except (KeyError, ValueError) as exc:
         print(f"error: invalid deployment registry: {exc}", file=sys.stderr)
         return 2
-    w3 = node.connect(rpc_url)
+    w3 = node.connect(rpc_url, timeout=args.rpc_timeout)
     if not w3.is_connected():
         print(f"error: cannot connect to {rpc_url}", file=sys.stderr)
         return 2
@@ -174,10 +209,15 @@ def cmd_sync(args) -> int:
             )
         return 2
 
+    progress = sys.stderr.isatty() if args.progress is None else args.progress
     entries = []
     for spec in targets:
         print(f"sync {spec.label} (chain {spec.chain_id})", file=sys.stderr)
-        entries.append(_sync_and_project(w3, rpc, store_dir, spec, head_block))
+        try:
+            entries.append(_sync_and_project(w3, rpc, store_dir, spec, head_block, progress))
+        except decode.MissingBlockTimestampError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
 
     # Merge into the single artifact: replace synced entries, keep the rest.
     existing = _load_existing(_artifact_path(args, store_dir))
@@ -261,6 +301,18 @@ def _build_parser() -> argparse.ArgumentParser:
         "deployment", nargs="?", help="label, network or chain:address (default: by chain)"
     )
     p_sync.add_argument("--rpc", help=f"RPC endpoint (default: ${RPC_ENV})")
+    p_sync.add_argument(
+        "--rpc-timeout",
+        type=float,
+        default=node.DEFAULT_TIMEOUT,
+        help=f"per-request RPC timeout in seconds (default: {node.DEFAULT_TIMEOUT:g})",
+    )
+    p_sync.add_argument(
+        "--progress",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="report block-range progress on stderr (default: only when stderr is a terminal)",
+    )
     p_sync.add_argument("--config", help="deployment registry JSON (default: built-in fleet)")
     p_sync.add_argument(
         "--to-block",

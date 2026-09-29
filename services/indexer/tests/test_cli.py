@@ -187,3 +187,82 @@ def test_cli_incremental_sync_matches_one_shot(chain, tmp_path):
     a_inc = serialize.artifact_from_json((tmp_path / "inc" / "artifact.json").read_text())
 
     assert _entry_shape(a_inc.deployments[0]) == _entry_shape(a_one.deployments[0])
+
+
+def _sync_args(store_dir, rpc_url, cfg, to_block, *extra):
+    return [
+        "--store-dir",
+        store_dir,
+        "sync",
+        "--rpc",
+        rpc_url,
+        "--config",
+        cfg,
+        "--to-block",
+        str(to_block),
+        *extra,
+    ]
+
+
+def test_cli_interrupted_sync_resumes_from_its_checkpoint(chain, tmp_path, monkeypatch):
+    """Each acquired range is persisted and checkpointed before the next is requested, so
+    a sync killed mid-way resumes from the last completed range — refetching nothing
+    before it — and ends with exactly the one-shot result."""
+    H.drive_basic(chain)
+    latest = chain.w3.eth.block_number
+    cfg = _write_config(tmp_path, chain)
+    rpc_url = chain.w3.provider.endpoint_uri
+    dep_id = registry.load_registry(cfg).deployments[0].deployment_id
+
+    one = str(tmp_path / "one")
+    assert cli.main(_sync_args(one, rpc_url, cfg, latest)) == 0
+    a_one = serialize.artifact_from_json((tmp_path / "one" / "artifact.json").read_text())
+
+    real = cli.acquire.iter_log_chunks
+    requested: list[int] = []
+
+    def small_chunks(*args, **kwargs):
+        for start, end, logs in real(*args, **{**kwargs, "chunk_size": 3}):
+            requested.append(start)
+            yield start, end, logs
+
+    def dies_after_two(*args, **kwargs):
+        for i, chunk in enumerate(small_chunks(*args, **kwargs)):
+            if i == 2:
+                raise KeyboardInterrupt
+            yield chunk
+
+    inc = str(tmp_path / "inc")
+    monkeypatch.setattr(cli.acquire, "iter_log_chunks", dies_after_two)
+    with pytest.raises(KeyboardInterrupt):
+        cli.main(_sync_args(inc, rpc_url, cfg, latest))
+    checkpoint = store.load_head(inc, dep_id)
+    assert checkpoint is not None and checkpoint < latest  # two ranges landed, no more
+
+    requested.clear()
+    monkeypatch.setattr(cli.acquire, "iter_log_chunks", small_chunks)
+    assert cli.main(_sync_args(inc, rpc_url, cfg, latest)) == 0
+    assert requested[0] == checkpoint + 1  # resumed, not restarted
+    assert store.load_head(inc, dep_id) == latest
+
+    a_inc = serialize.artifact_from_json((tmp_path / "inc" / "artifact.json").read_text())
+    assert _entry_shape(a_inc.deployments[0]) == _entry_shape(a_one.deployments[0])
+
+
+@pytest.mark.parametrize(
+    ("flag", "shown"),
+    [(None, False), ("--progress", True), ("--no-progress", False)],
+    ids=["default-headless", "forced-on", "forced-off"],
+)
+def test_cli_progress_is_optional(chain, tmp_path, capsys, flag, shown):
+    """Progress is off by default when stderr is not a terminal (headless runs, and here
+    under pytest's capture), and ``--progress`` / ``--no-progress`` override it."""
+    H.drive_basic(chain)
+    cfg = _write_config(tmp_path, chain)
+    args = _sync_args(
+        str(tmp_path / "s"), chain.w3.provider.endpoint_uri, cfg, chain.w3.eth.block_number
+    )
+    assert cli.main(args + ([flag] if flag else [])) == 0
+    err = capsys.readouterr().err
+    assert ("anvil-v1: block" in err) is shown
+    assert "synced [" in err  # the one-line summary is always there

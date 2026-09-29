@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import pytest
+
 from ethswarm_volumes import acquire, decode
 
 import harness as H
@@ -45,18 +47,30 @@ def _decoded_rows(chain):
         postage=chain.s.stamp.address,
         from_block=chain.s.genesis_block,
     )
-    rows = []
-    for log in raw:
-        ts = chain.w3.eth.get_block(log["blockNumber"])["timestamp"]
-        rows.append(
-            decode.decode_log(
-                log,
-                deployment_id=dep_id,
-                block_ts=datetime.fromtimestamp(ts, tz=timezone.utc),
-                registry_version="v1",
-            )
-        )
-    return rows
+    return [decode.decode_log(log, deployment_id=dep_id, registry_version="v1") for log in raw]
+
+
+def test_block_ts_comes_from_the_log_and_matches_the_block(chain):
+    """``block_ts`` is read off the log (``blockTimestamp``) with no block lookup; the
+    node's own block header is the independent oracle for it."""
+    H.drive_basic(chain)
+    rows = _decoded_rows(chain)
+    assert rows
+    for row in rows:
+        header_ts = chain.w3.eth.get_block(row.block_number)["timestamp"]
+        assert row.block_ts == datetime.fromtimestamp(header_ts, tz=timezone.utc)
+
+
+@pytest.mark.parametrize("value", ["0x6a7426e6", 1785997030])
+def test_log_timestamp_accepts_hex_and_int(value):
+    ts = decode.log_timestamp({"blockTimestamp": value})
+    assert ts == datetime(2026, 8, 6, 6, 17, 10, tzinfo=timezone.utc)
+
+
+def test_log_without_block_timestamp_is_an_error():
+    """No fallback to ``eth_getBlockByNumber``: a node that omits the field is refused."""
+    with pytest.raises(decode.MissingBlockTimestampError, match="blockTimestamp"):
+        decode.log_timestamp({"blockNumber": 1})
 
 
 def test_pinned_abis_match_version_fixture():

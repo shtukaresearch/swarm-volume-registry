@@ -4,7 +4,7 @@ Scope: the **indexer** (`ethswarm-volumes sync`) — the web3 acquisition + deco
 
 ## 1. Approach: integration-first, against a real node
 
-The thing under test pulls logs from a chain RPC (`eth_getLogs`) and reads block timestamps and contract state. So the tests run against a **real node** — a local **Anvil** — driving genuine transactions through the real contracts and asserting against **state read back from the node**. No hand-built log fixtures, and no separately-maintained "what `eth_getLogs` returns" format: the node is the single source of truth for both the input (logs) and the oracle (state).
+The thing under test pulls logs from a chain RPC (`eth_getLogs`, whose log objects carry `blockTimestamp`) and reads contract state. So the tests run against a **real node** — a local **Anvil** — driving genuine transactions through the real contracts and asserting against **state read back from the node**. No hand-built log fixtures, and no separately-maintained "what `eth_getLogs` returns" format: the node is the single source of truth for both the input (logs) and the oracle (state).
 
 There are **no pure-Python unit tests** in the suite to start. A decoder or projector tested in isolation has no independent oracle for event values without re-encoding them, which is circular. Correctness is established end-to-end against the node instead (§3). (If pure-Python projector unit tests are wanted later, craft them with a one-time Foundry export of synthetic event + state cases — hand-authored, no simulation; §6.)
 

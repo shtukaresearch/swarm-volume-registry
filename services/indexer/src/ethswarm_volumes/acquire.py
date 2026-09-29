@@ -12,6 +12,7 @@ with ``from == registry`` and ``to == postage``. Logs are acquired per event typ
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import Any, Protocol
 
 from web3 import Web3
@@ -37,23 +38,33 @@ def _topic_address(address: str) -> str:
     return "0x" + address[2:].lower().rjust(64, "0")
 
 
-def _chunked(
+def iter_log_chunks(
     rpc: RpcClient,
     *,
+    registry: str,
+    bzz_token: str,
+    postage: str,
     from_block: int,
     to_block: int,
-    address: str,
-    topics: list[Any] | None,
-    chunk_size: int,
-) -> list[dict[str, Any]]:
-    """Range-chunked ``get_logs`` over ``[from_block, to_block]`` inclusive."""
-    out: list[dict[str, Any]] = []
+    chunk_size: int = 10_000,
+) -> Iterator[tuple[int, int, list[dict[str, Any]]]]:
+    """The filtered raw logs over ``[from_block, to_block]``, one block range at a time.
+
+    Yields ``(start, end, logs)`` per ``chunk_size``-block range, in ascending order, with
+    *both* acquisition legs for that range: every registry event (no topic filter — the
+    registry address is the filter) plus the canonical fee leg, BZZ ``Transfer`` logs with
+    ``from == registry`` and ``to == postage`` (server-side topic filter). A range is
+    complete when yielded, so a caller can persist it and checkpoint ``end`` before the
+    next request — which is what makes a long sync resumable.
+    """
+    fee_topics = [TRANSFER_TOPIC, _topic_address(registry), _topic_address(postage)]
     start = from_block
     while start <= to_block:
         end = min(start + chunk_size - 1, to_block)
-        out.extend(rpc.get_logs(from_block=start, to_block=end, address=address, topics=topics))
+        logs = rpc.get_logs(from_block=start, to_block=end, address=registry, topics=None)
+        logs += rpc.get_logs(from_block=start, to_block=end, address=bzz_token, topics=fee_topics)
+        yield start, end, logs
         start = end + 1
-    return out
 
 
 def acquire_logs(
@@ -67,13 +78,10 @@ def acquire_logs(
     to_block: int | None = None,
     chunk_size: int = 10_000,
 ) -> list[dict[str, Any]]:
-    """Fetch the filtered raw logs from ``from_block`` up to the head block.
+    """Fetch the filtered raw logs from ``from_block`` up to the head block, in one list.
 
-    Range-chunked by ``chunk_size``. Applies the ``docs/data-model/event-log.md`` acquisition
-    filter — every registry
-    event (no topic filter on the registry address), plus the canonical fee leg: BZZ
-    ``Transfer`` logs with ``from == registry`` and ``to == postage`` (server-side topic
-    filter).
+    The acquisition filter of ``docs/data-model/event-log.md``, applied per range by
+    :func:`iter_log_chunks`.
 
     ``to_block`` is the inclusive head; when ``None`` it defaults to the chain's current
     ``finalized`` block (the reorg-safe head — ADR-0002), and is never read past. Callers
@@ -83,30 +91,13 @@ def acquire_logs(
     """
     if to_block is None:
         to_block = rpc.finalized_block_number()
-    if from_block > to_block:
-        return []
-
-    logs: list[dict[str, Any]] = []
-    # All registry events (no topic filter — the registry address is the filter).
-    logs.extend(
-        _chunked(
-            rpc,
-            from_block=from_block,
-            to_block=to_block,
-            address=registry,
-            topics=None,
-            chunk_size=chunk_size,
-        )
+    chunks = iter_log_chunks(
+        rpc,
+        registry=registry,
+        bzz_token=bzz_token,
+        postage=postage,
+        from_block=from_block,
+        to_block=to_block,
+        chunk_size=chunk_size,
     )
-    # The fee leg: BZZ Transfer(registry -> postage).
-    logs.extend(
-        _chunked(
-            rpc,
-            from_block=from_block,
-            to_block=to_block,
-            address=bzz_token,
-            topics=[TRANSFER_TOPIC, _topic_address(registry), _topic_address(postage)],
-            chunk_size=chunk_size,
-        )
-    )
-    return logs
+    return [log for _, _, logs in chunks for log in logs]

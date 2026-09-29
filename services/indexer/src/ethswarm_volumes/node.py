@@ -8,7 +8,8 @@ This is the only module the ``sync`` path uses to touch a chain. It holds:
   ``price_oracle`` / ``grace_blocks``), read back from the registry + postage contracts so
   it never has to be configured by hand (``docs/usage.md`` §2).
 - :func:`find_genesis_block` / :func:`block_timestamp` — one-time genesis discovery and the
-  block-time lookups the decoder needs.
+  genesis / head block times. Event timestamps need no lookup: they arrive on the logs
+  (``blockTimestamp``, :func:`ethswarm_volumes.decode.log_timestamp`).
 
 Everything here produces web3-free values; the rows it feeds downstream cross the
 ``event_log`` boundary as plain data.
@@ -39,9 +40,16 @@ _WIRING_ABI: list[dict[str, Any]] = [
 ]
 
 
-def connect(rpc_url: str) -> Web3:
-    """A ``Web3`` connected to ``rpc_url`` (HTTP)."""
-    return Web3(Web3.HTTPProvider(rpc_url))
+#: Per-request HTTP timeout, seconds. Well below web3's 30 s default: a healthy node
+#: answers a 10k-block ``eth_getLogs`` in well under a second, and a hung request is
+#: better abandoned early and retried (web3 retries ``eth_getLogs`` and the other
+#: read methods on timeout, with backoff).
+DEFAULT_TIMEOUT = 10.0
+
+
+def connect(rpc_url: str, timeout: float = DEFAULT_TIMEOUT) -> Web3:
+    """A ``Web3`` connected to ``rpc_url`` (HTTP), with a ``timeout``-second request limit."""
+    return Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": timeout}))
 
 
 class Web3RpcClient:
@@ -102,11 +110,6 @@ def block_timestamp(w3: Web3, block_number: int) -> datetime:
     """The UTC, timezone-aware timestamp of ``block_number``."""
     ts = w3.eth.get_block(block_number)["timestamp"]
     return datetime.fromtimestamp(ts, tz=timezone.utc)
-
-
-def block_timestamps(w3: Web3, block_numbers: set[int]) -> dict[int, datetime]:
-    """Resolve many block timestamps (one ``eth_getBlockByNumber`` each)."""
-    return {n: block_timestamp(w3, n) for n in block_numbers}
 
 
 def find_genesis_block(w3: Web3, address: str) -> int:

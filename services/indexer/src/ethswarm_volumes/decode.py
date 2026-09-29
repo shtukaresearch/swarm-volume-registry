@@ -27,7 +27,7 @@ double as fixture directory names.
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from hexbytes import HexBytes
@@ -244,18 +244,39 @@ def map_event_args(
     return out
 
 
+class MissingBlockTimestampError(ValueError):
+    """The RPC endpoint returned a log without ``blockTimestamp``."""
+
+
+def log_timestamp(raw_log: dict[str, Any]) -> datetime:
+    """The UTC block timestamp carried on the log itself (``blockTimestamp``).
+
+    The field is part of the execution-apis Log object (ethereum/execution-apis#639) and is
+    served by every mainstream client (geth, Nethermind, Reth, Erigon, Besu, anvil), so the
+    indexer reads it rather than resolving each block with ``eth_getBlockByNumber``. There
+    is deliberately no fallback: a node that omits it is too old to index against.
+    """
+    value = raw_log.get("blockTimestamp")
+    if value is None:
+        raise MissingBlockTimestampError(
+            "the RPC endpoint returned a log without blockTimestamp; use a node that"
+            " implements the current execution-apis Log object (ethereum/execution-apis#639)"
+        )
+    seconds = int(value, 16) if isinstance(value, str) else int(value)
+    return datetime.fromtimestamp(seconds, tz=timezone.utc)
+
+
 def decode_log(
     raw_log: dict[str, Any],
     *,
     deployment_id: DeploymentId,
-    block_ts: datetime,
     registry_version: str,
 ) -> EventLogRow:
     """Decode one raw log into a web3-free :class:`EventLogRow`.
 
     Mechanical ABI decode (library + compiled ABI) to recover ``event_name`` and the
     ABI-named args, then :func:`map_event_args` to the ``event_log`` representation.
-    ``block_ts`` is supplied by the caller (resolved from the block).
+    ``block_ts`` comes from the log's own ``blockTimestamp`` (:func:`log_timestamp`).
     """
     topic0 = bytes(HexBytes(raw_log["topics"][0]))
     event_abi, decoder = _TOPIC_INDEX[registry_version][topic0]
@@ -270,7 +291,7 @@ def decode_log(
     return EventLogRow(
         deployment_id=deployment_id,
         block_number=int(raw_log["blockNumber"]),
-        block_ts=block_ts,
+        block_ts=log_timestamp(raw_log),
         tx_hash="0x" + bytes(HexBytes(raw_log["transactionHash"])).hex(),
         tx_index=int(raw_log["transactionIndex"]),
         log_index=int(raw_log["logIndex"]),

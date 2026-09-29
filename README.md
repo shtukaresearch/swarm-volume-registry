@@ -6,9 +6,9 @@ The contract does not custody BZZ, does not sign chunks, has no admin role, and 
 
 ## Deployments
 
-v2 — which removes unilateral volume ownership transfer — is deployed on Sepolia only, as
-release candidate `v2-rc1`. Gnosis is still the early-alpha v1 contract; a v2 Gnosis
-address will be added after deployment, and until then [`docs/usage.md`](./docs/usage.md)
+The v2 design — which removes unilateral volume ownership transfer — is on Sepolia as
+release candidate `v2-rc1` (testnets only run release candidates). Gnosis is still the
+early-alpha v1 contract; the final v2 Gnosis address will be added after deployment, and until then [`docs/usage.md`](./docs/usage.md)
 documents the deployed v1 ABI and its mitigations.
 
 | Chain | Release | `VolumeRegistry` | `graceBlocks` |

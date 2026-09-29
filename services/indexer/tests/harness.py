@@ -39,7 +39,7 @@ _FIXTURES = Path(__file__).resolve().parent / "fixtures"
 #: The registry versions this harness drives: every version with a pinned fixture dir. The
 #: ``chain`` fixture (``conftest.py``) runs each node-backed test once per version. The
 #: ``Chain`` driver's function signatures and oracle reads are as version-specific as the
-#: fixture bytecode; it uses only calls every version here shares (v2 dropped
+#: fixture bytecode; it uses only calls every version here shares (v2-rc1 dropped
 #: ``transferVolumeOwnership``, which the driver never calls), so a future version with
 #: changed semantics gets its own driver variant rather than edits to this one.
 REGISTRY_VERSIONS = tuple(

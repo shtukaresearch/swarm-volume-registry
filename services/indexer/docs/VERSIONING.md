@@ -14,7 +14,7 @@ How the system evolves over time: how a new contract deployment is absorbed, how
 
 ## What a `registry_version` is
 
-A contract version names a **deployed release**, extensionally ([ADR-0010](./adr/0010-extensional-contract-versions.md)). Release names are `vN` for a mainnet release and `vN-rcM` for a testnet release candidate of `vN`; each testnet deployment takes the next candidate, and a mainnet `vN` gets its own name even when identical to its last candidate ([ADR-0012](./adr/0012-release-names-and-latest-pointers.md)). One string is used everywhere, verbatim:
+A contract version names a **deployed release**, extensionally ([ADR-0010](./adr/0010-extensional-contract-versions.md)). Release names are `vN` for a mainnet release and `vN-rcM` for a testnet release candidate of `vN`; each testnet deployment takes the next candidate, testnets only ever run candidates, and a final `vN` (deployed to mainnets only) gets its own name even when identical to its last candidate ([ADR-0012](./adr/0012-release-names-and-latest-pointers.md)). One string is used everywhere, verbatim:
 
 | Site | Role |
 |---|---|

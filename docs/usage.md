@@ -54,11 +54,11 @@ The contract does not custody BZZ, does not sign chunks, is not upgradeable, and
 | `PriceOracle` | `0x47EeF336e7fE5bED98499A4696bce8f28c1B0a8b` |
 | `graceBlocks` | `17280` (≈ 24 h at 5-second blocks) |
 
-### Testnet — Sepolia (chain ID 11155111) — registry v2
+### Testnet — Sepolia (chain ID 11155111) — registry v2 (release `v2-rc1`)
 
 | Contract | Address |
 |---|---|
-| `VolumeRegistry` (v2) | `0x33a53c79a08ed1f863905cd4c6ce036a4c493729` |
+| `VolumeRegistry` (`v2-rc1`) | `0x33a53c79a08ed1f863905cd4c6ce036a4c493729` |
 | `PostageStamp` | `0xcdfdC3752caaA826fE62531E0000C40546eC56A6` |
 | `BZZ` (TestToken) | `0x543dDb01Ba47acB11de34891cD86B675F04840db` |
 | `PriceOracle` | `0x95Dc18380e92C13E4F8a4e94C99FB1b97250174B` |

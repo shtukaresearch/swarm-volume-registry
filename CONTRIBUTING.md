@@ -65,6 +65,9 @@ The configured `grace_blocks` must be at least
 See [`docs/DESIGN.md`](./docs/DESIGN.md) §10 for semantics and §10.1 for the survival
 bound the value implies.
 
+Exporting the deployment record, explorer verification, tagging and the indexer release
+steps are in [`RELEASING.md`](./RELEASING.md).
+
 ## Dependencies
 
 - [`forge-std`](https://github.com/foundry-rs/forge-std) — Foundry stdlib.
@@ -89,3 +92,23 @@ None of this needs chain access or Cloudflare credentials. CI runs the same
 steps (`.github/workflows/keeper-ci.yml`); deploys go through
 `.github/workflows/keeper-deploy.yml`. Setup, configuration and local runs are
 in its [README](./services/keeper/README.md).
+
+## Indexer
+
+[`services/indexer`](./services/indexer) is `ethswarm-volumes`: the indexer and CLI
+that turn `VolumeRegistry` events into a published artifact of fee volume, capacity and
+account measures. A standalone Python project managed with
+[uv](https://docs.astral.sh/uv/); nothing else in the repository depends on it. Its
+integration tests need `anvil` (Foundry) on `PATH`.
+
+```sh
+cd services/indexer
+uv run --group dev python -m pytest
+uvx ruff check . && uvx ruff format --check .
+```
+
+The suite deploys pinned per-release contract fixtures, not contracts `HEAD`, so contract
+changes never break it. CI runs the same steps (`.github/workflows/indexer-ci.yml`);
+publishing to PyPI goes through `.github/workflows/publish-python.yml`. Design and
+decision records are in its [docs](./services/indexer/docs/README.md); releasing is in
+[`RELEASING.md`](./RELEASING.md).

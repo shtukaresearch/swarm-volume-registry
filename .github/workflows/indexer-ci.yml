@@ -1,0 +1,55 @@
+# Indexer (ethswarm-volumes) CI. Lints and runs the full Python suite,
+# including the integration tiers against a real Anvil node.
+#
+# The suite deploys from the pinned per-version contract fixtures committed
+# under services/indexer/tests/fixtures/ (no forge build — it tests the
+# deployed contract versions, not contracts HEAD). Nothing here needs chain
+# access or credentials, so it runs the same on pull requests from forks.
+
+name: indexer-ci
+
+permissions: {}
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  # publish-python.yml runs this as its gate, so nothing publishes untested.
+  workflow_call:
+
+jobs:
+  check:
+    name: Indexer
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: services/indexer
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      # Foundry provides `anvil`, the node the integration tiers run against.
+      # Without it the node tiers fail under CI rather than skip (conftest.py).
+      # Pinned with the contracts job: the harness leans on specific anvil
+      # behaviour (evm_setNextBlockTimestamp, anvil_reset, instant finality),
+      # so a toolchain release must not change the test environment underneath us.
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.7.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Lint
+        run: uvx ruff@0.15.8 check .
+
+      - name: Format
+        run: uvx ruff@0.15.8 format --check .
+
+      - name: Test
+        run: uv run --group dev python -m pytest -q

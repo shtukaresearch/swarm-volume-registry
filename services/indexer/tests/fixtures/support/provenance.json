@@ -1,0 +1,5 @@
+{
+  "description": "Test-support contracts the harness deploys around every registry version: slim (abi + creation bytecode) Foundry build artifacts from the storage-incentives submodule. Not part of any release.",
+  "storage_incentives_commit": "169795d6ac31034d439efde58b4d169b5f8ea089",
+  "built_at": "0219d02d43cd8e96305f31dac83cfd060d51e297"
+}

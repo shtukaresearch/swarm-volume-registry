@@ -233,26 +233,24 @@ deployed; it is the package's acknowledgement that it can index the release
 
 ### B1. Vendor the pinned test fixture
 
-After `forge build` in `contracts/` (solc 0.8.19, per `foundry.toml`), from `main` or a
-checkout of the release tag:
+No build is needed: the fixture comes from the deployment records committed in Part A.
 
 ```sh
-python3 services/indexer/scripts/vendor_fixtures.py v2-rc2 --tag v2-rc2 \
-  --verify-record sepolia
+python3 services/indexer/scripts/vendor_fixtures.py release v2-rc2
 ```
 
-This freezes slim build artifacts at `services/indexer/tests/fixtures/v2-rc2/` and writes
-`provenance.json`, recording proof that the frozen build **is** the deployed code:
+This writes `services/indexer/tests/fixtures/v2-rc2/VolumeRegistry.json` with the record's
+ABI and the creation bytecode of the recorded CREATE transaction (its initcode from the
+broadcast, minus the constructor arguments, which are checked against the record's
+`args`), so the fixture is the deployed code by construction. It reads every network's
+`VolumeRegistry-v2-rc2.json` and fails if they disagree. `provenance.json` names the
+records, transactions and git tag. Commit the fixture directory; `test_fixtures.py`
+re-derives it from the records on every test run.
 
-- `--tag` refuses to vendor unless the tag's contract sources and build settings equal the
-  working tree's, and records the tag.
-- `--verify-record NETWORK` checks, offline, that the build's creation bytecode is exactly
-  (metadata hash included) the initcode of the CREATE transaction in the network's
-  committed deployment record and its broadcast.
-- `--verify NETWORK 0xREGISTRY "$RPC_URL"` additionally compares runtime bytecode with the
-  live chain (`eth_getCode`, immutables masked), where an RPC is reachable.
-
-Commit the fixture directory.
+The test-support contracts the harness deploys around the registry (`PostageStamp`,
+`PriceOracle`, `TestToken`) are shared across versions in `tests/fixtures/support/`. Only
+when the `storage-incentives` submodule pin moves, refresh them after `forge build` with
+`vendor_fixtures.py support`.
 
 ### B2. Add the decode reference data
 

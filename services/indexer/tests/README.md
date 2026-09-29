@@ -10,7 +10,8 @@ has since filled in.
 
 Run: `uv run --group dev pytest`. Needs `anvil`; **skips** the node tiers cleanly when it is
 absent. The contract artifacts the harness deploys are the pinned per-version fixtures in
-`fixtures/<registry_version>/` (committed — no `forge build` needed); see `docs/TESTING.md` §2a
+`fixtures/<registry_version>/` plus the shared `fixtures/support/` (committed — no `forge build`
+needed); see `docs/TESTING.md` §2a
 and each fixture dir's `provenance.json`.
 
 ## Layout

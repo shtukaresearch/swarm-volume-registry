@@ -1,28 +1,18 @@
 {
   "registry_version": "v2-rc1",
-  "description": "Pinned contract fixtures: slim (abi + creation bytecode) Foundry build artifacts the integration-test harness deploys from. VolumeRegistry is the versioned contract; PostageStamp / PriceOracle / TestToken are vendored test-support contracts.",
-  "source": {
-    "commit": "72ad519a276811f6e999050a46789881107452f9",
-    "tag": "v2-rc1",
-    "solc": "0.8.19+commit.7dd6d404",
-    "optimizer": {
-      "enabled": true,
-      "runs": 200,
-      "via_ir": true
-    }
+  "description": "Pinned VolumeRegistry fixture for this release, derived from the committed deployment records with no build: abi from the record; creation bytecode is the recorded CREATE transaction's initcode with its ABI-encoded constructor arguments (checked against the record's args) removed. The test-support contracts the harness deploys around it are shared, in ../support/.",
+  "tag": {
+    "name": "v2-rc1",
+    "commit": "8544b34c038616836d36d9f8b886e9a1c4927336"
   },
-  "verified_against": {
-    "date": "2026-09-29",
-    "method": "per deployment: 'eth_getCode' compares this build's deployedBytecode with the live runtime code, immutable references masked, CBOR metadata suffix compared separately; 'deployment_record' compares this build's creation bytecode byte-for-byte (metadata included) with the initcode of the CREATE transaction in the committed deployment record's Foundry broadcast",
-    "deployments": [
-      {
-        "label": "sepolia",
-        "method": "deployment_record",
-        "chain_id": 11155111,
-        "registry": "0x33a53c79a08ed1f863905cd4c6ce036a4c493729",
-        "transaction": "0x59dd245cd9d30e53175a38930b437f9048c5ce47ff20588ec46fd4359d225924",
-        "creation_code_match": true
-      }
-    ]
-  }
+  "deployments": [
+    {
+      "network": "sepolia",
+      "chain_id": 11155111,
+      "registry": "0x33a53c79a08ed1f863905cd4c6ce036a4c493729",
+      "transaction": "0x59dd245cd9d30e53175a38930b437f9048c5ce47ff20588ec46fd4359d225924",
+      "record": "contracts/deployments/sepolia/VolumeRegistry-v2-rc1.json",
+      "source_commit": "f606e9a"
+    }
+  ]
 }

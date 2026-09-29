@@ -13,8 +13,8 @@ of real transactions, and exposes:
   historical block) used as the independent source of truth.
 
 ABI + bytecode come from the **pinned per-version fixtures** (``tests/fixtures/<version>/``):
-slim Foundry build artifacts frozen at the deployed contract release (see ``provenance.json``
-there). The harness therefore tests each ``registry_version`` against the contracts actually
+the registry exactly as deployed under that release, derived from its deployment record
+(see ``provenance.json`` there), plus shared test-support contracts (``tests/fixtures/support/``). The harness therefore tests each ``registry_version`` against the contracts actually
 deployed under that version — contracts ``HEAD`` can drift without touching this suite, and
 no Foundry toolchain is needed to run it (only ``anvil``).
 """
@@ -42,7 +42,13 @@ _FIXTURES = Path(__file__).resolve().parent / "fixtures"
 #: fixture bytecode; it uses only calls every version here shares (v2 dropped
 #: ``transferVolumeOwnership``, which the driver never calls), so a future version with
 #: changed semantics gets its own driver variant rather than edits to this one.
-REGISTRY_VERSIONS = tuple(sorted(p.name for p in _FIXTURES.iterdir() if p.is_dir()))
+REGISTRY_VERSIONS = tuple(
+    sorted(p.name for p in _FIXTURES.iterdir() if p.is_dir() and p.name != "support")
+)
+
+#: Test-support contracts, shared by every version (``tests/fixtures/support/``); only
+#: ``VolumeRegistry`` is pinned per release.
+SUPPORT_CONTRACTS = ("PostageStamp", "PriceOracle", "TestToken")
 
 # Fixture constants mirroring RegistryFixture.sol.
 MIN_BUCKET_DEPTH = 16
@@ -54,8 +60,10 @@ ONE_BZZ_PLUR = 10**16  # TestToken has 16 decimals
 
 
 def load_artifact(name: str, version: str) -> tuple[list, str]:
-    """Return ``(abi, bytecode)`` for a contract from the pinned ``version`` fixtures."""
-    doc = json.loads((_FIXTURES / version / f"{name}.json").read_text())
+    """Return ``(abi, bytecode)`` for a contract: ``VolumeRegistry`` from the pinned
+    ``version`` fixture, test-support contracts from the shared ``support`` set."""
+    folder = "support" if name in SUPPORT_CONTRACTS else version
+    doc = json.loads((_FIXTURES / folder / f"{name}.json").read_text())
     return doc["abi"], doc["bytecode"]["object"]
 
 

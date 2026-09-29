@@ -26,6 +26,9 @@ Every deployment carries a release name, used verbatim as the git tag, the
 - **`vN`** — a mainnet release. It gets its own name even when its source is identical to
   the last release candidate.
 
+Testnets only ever run release candidates, and a final `vN` is deployed to mainnets only:
+a version is not known to be final until it has been tested as a candidate on a testnet.
+
 A network holds at most one deployment per name; a redeploy is a new name. Deploying the
 same release to another network reuses the name (no new tag).
 

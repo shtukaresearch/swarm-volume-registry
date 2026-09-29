@@ -39,7 +39,7 @@
   //   probe (5 s) + CYCLE_TIMEOUT_MS + RECEIPT_TIMEOUT_MS + 5 s slack ≤ interval
   // and also ≤ the 15 min Cron Trigger wall-clock limit.
   "env": {
-    // Sepolia — registry v2, graceBlocks = 12 (~2.4 min). The one-minute cron is
+    // Sepolia — registry v2-rc1, graceBlocks = 12 (~2.4 min). The one-minute cron is
     // the floor that keeps volumes alive, and it bounds a run to ~55 s: roughly
     // two volumes per tick at 12 s blocks. Warnings go to Telegram so skipped
     // top-ups, retirements and RPC failovers cannot make a run look healthy.

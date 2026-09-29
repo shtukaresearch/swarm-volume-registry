@@ -18,7 +18,7 @@ Alternatives weighed for resolving a bare network name:
 
 ## Decision
 
-**Release names.** A release name is `vN` (a mainnet release) or `vN-rcM` (a testnet release candidate for `vN`). It is the ADR-0010 version string — git tag, `registry_version`, `_VERSIONS` key, fixture directory — with one more site: the deployment-record filename. A mainnet `vN` gets its own name even when its source equals the last candidate; its `_VERSIONS` entry is then an alias. A network holds at most one deployment per name; a redeploy is a new name.
+**Release names.** A release name is `vN` (a mainnet release) or `vN-rcM` (a testnet release candidate for `vN`). It is the ADR-0010 version string — git tag, `registry_version`, `_VERSIONS` key, fixture directory — with one more site: the deployment-record filename. A mainnet `vN` gets its own name even when its source equals the last candidate; its `_VERSIONS` entry is then an alias. Testnets only ever run candidates: a version is not known to be final until it has been tested as one, so a final `vN` is deployed to mainnets only. A network holds at most one deployment per name; a redeploy is a new name.
 
 **Labels.** A deployment's label is `<network>-<release>` (`gnosis-v1`, `sepolia-v2-rc1`). Registry entries carry `network` and `registry_version` explicitly and the label is derived, never written down, so the two cannot disagree.
 

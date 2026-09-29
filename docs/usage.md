@@ -54,7 +54,7 @@ The contract does not custody BZZ, does not sign chunks, is not upgradeable, and
 | `PriceOracle` | `0x47EeF336e7fE5bED98499A4696bce8f28c1B0a8b` |
 | `graceBlocks` | `17280` (≈ 24 h at 5-second blocks) |
 
-### Testnet — Sepolia (chain ID 11155111) — registry v2 (release `v2-rc1`)
+### Testnet — Sepolia (chain ID 11155111) — registry `v2-rc1`
 
 | Contract | Address |
 |---|---|
@@ -64,7 +64,7 @@ The contract does not custody BZZ, does not sign chunks, is not upgradeable, and
 | `PriceOracle` | `0x95Dc18380e92C13E4F8a4e94C99FB1b97250174B` |
 | `graceBlocks` | `12` (≈ 2.4 min at 12-second blocks) |
 
-The two deployments are not the same contract version. Sepolia runs v2; Gnosis is still v1 and retains `transferVolumeOwnership`, so the unsolicited-transfer response in [§10](#10-revocation) applies there and only there. The superseded v1 Sepolia registry was `0x3a99b4b52a4bd75760667219ea93c627051b1af8` — it holds no active volumes and is no longer maintained.
+The two deployments are not the same contract version. Sepolia runs `v2-rc1`, a release candidate for v2; Gnosis is still v1 and retains `transferVolumeOwnership`, so the unsolicited-transfer response in [§10](#10-revocation) applies there and only there. The superseded v1 Sepolia registry was `0x3a99b4b52a4bd75760667219ea93c627051b1af8` — it holds no active volumes and is no longer maintained.
 
 The Sepolia `graceBlocks` is deliberately tiny so that topup and expiry cycles run on a short enough timescale to be observed within integration tests. An altruistic keeper runs every minute against this deployment on a best-effort basis; integration tests should not rely on it and should either call `trigger` directly or run their own keeper.
 

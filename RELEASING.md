@@ -263,12 +263,37 @@ In `services/indexer/src/ethswarm_volumes/decode.py`, add the `_VERSIONS["v2-rc2
 `test_decoder.py::test_pinned_abis_match_version_fixture` fails until this and the
 fixture from B1 agree verbatim.
 
-### B3. Extend the test suite (only if semantics changed)
+### B3. Handle changed semantics (only if they changed)
 
-A version that changes behaviour, not just bytes, gets its own `Chain` driver variant and
-scenarios in `services/indexer/tests/harness.py` — the existing driver is as
-version-specific as the fixture it deploys. See
-[`services/indexer/docs/TESTING.md`](services/indexer/docs/TESTING.md) §2a.
+B2 teaches the package to *decode* the release; this step checks it still *means* the same.
+Diff the contract source against the previous release tag
+(`git diff <previous-tag> <tag> -- contracts/src`) and ask whether anything the indexer
+relies on changed: what an event signifies, how fees flow to Postage, what adds a volume
+to or removes it from the active set, how accounts are authorized or revoked, or the
+wiring getters (`postage`, `bzz`, `graceBlocks`, `priceOracle`). A pure removal can need
+nothing — v2-rc1 dropped ownership transfer, and without transfer events every volume
+simply stays with its creator.
+
+If something changed, update the tests and the implementation together:
+
+- **Tests.** Run the suite first: the `chain` fixture runs every existing scenario against
+  the new fixture and checks the projection against state read back from the node, so a
+  changed fee flow, capacity rule or authorization rule already fails there. For
+  behaviour the existing scenarios don't reach, add scenarios, and give the release its
+  own `Chain` driver variant in `services/indexer/tests/harness.py` if its calls or
+  signatures changed (see
+  [`services/indexer/docs/TESTING.md`](services/indexer/docs/TESTING.md) §2a).
+- **Implementation.** Make the projection version-aware where the meaning changed:
+  `project.py` (the fold from `event_log` to the three measures; a single projector
+  serves every version today, so the first semantic change introduces dispatch on
+  `registry_version`) and `node.resolve_extra` (the wiring reads and the version-specific
+  `extra`, documented in
+  [`services/indexer/docs/SCHEMA.md`](services/indexer/docs/SCHEMA.md) §3).
+- **Artifact.** The three measures and the artifact kernel stay stable across contract
+  versions ([ADR-0001](services/indexer/docs/adr/0001-three-measures.md)); new
+  version-specific facts go in `extra` or an additive section (a `schema_version` minor
+  bump). A change the kernel cannot absorb is a `schema_version` major bump — see
+  [`services/indexer/docs/VERSIONING.md`](services/indexer/docs/VERSIONING.md).
 
 ### B4. Register the deployments and latest pointers
 

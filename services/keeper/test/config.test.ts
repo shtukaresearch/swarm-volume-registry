@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from "vitest";
 import { join } from "node:path";
 import { unstable_readConfig } from "wrangler";
 import { PROBE_TIMEOUT_MS } from "../src/client.js";
@@ -9,6 +9,7 @@ import {
   readTelegramConfig,
   type KeeperEnv,
 } from "../src/config.js";
+import { MAX_RUN_SECONDS, cronIntervalSeconds } from "../src/schedule.js";
 
 /** anvil account #1 — a well-known throwaway key, test fixtures only. */
 const KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
@@ -164,27 +165,14 @@ describe("reading around a broken config", () => {
 // accepts a misspelled key and cannot see secrets.
 // ---------------------------------------------------------------------------
 
-const WRANGLER = join(import.meta.dir, "..", "wrangler.jsonc");
+const WRANGLER = join(import.meta.dirname, "..", "wrangler.jsonc");
 const DEPLOYMENTS = ["sepolia", "gnosis"] as const;
 const SECRETS = ["PRIVATE_KEY", "RPC_URL", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"].sort();
 
-/** Cron Triggers stop a run at 15 minutes regardless of schedule. */
-const CRON_WALL_CLOCK_MS = 15 * 60_000;
+/** Cron Triggers and Lambda both stop a run at 15 minutes regardless of schedule. */
+const CRON_WALL_CLOCK_MS = MAX_RUN_SECONDS * 1000;
 /** Everything around the cycle: reads, the balance check, the alert. */
 const SLACK_MS = 5_000;
-
-/**
- * Seconds between runs, for the cron shapes this repo uses. Anything else
- * fails loudly so the budget check below cannot be skipped by accident.
- */
-function cronIntervalSeconds(expr: string): number {
-  const [minute, hour, dom, month, dow] = expr.trim().split(/\s+/);
-  if ([dom, month, dow].some((f) => f !== "*")) throw new Error(`unsupported cron: ${expr}`);
-  if (hour === "*" && minute === "*") return 60;
-  if (hour === "*" && /^\*\/\d+$/.test(minute!)) return Number(minute!.slice(2)) * 60;
-  if (hour === "*" && /^\d+$/.test(minute!)) return 3600;
-  throw new Error(`unsupported cron: ${expr} — teach cronIntervalSeconds about it`);
-}
 
 describe("committed deployments (wrangler.jsonc)", () => {
   for (const name of DEPLOYMENTS) {

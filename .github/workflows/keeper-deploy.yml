@@ -1,19 +1,24 @@
-# Deploys the keeper Worker. Never runs a keeper cycle: once deployed, each
-# Worker is driven by its own Cloudflare Cron Trigger and nothing else.
+# Deploys the keeper. Never runs a keeper cycle: once deployed, each
+# deployment is driven by its platform's scheduler and nothing else.
 #
 #   push to main     → keeper-sepolia (auto)
 #   manual dispatch  → keeper-gnosis (or keeper-sepolia from any ref), after
 #                      approval
 #
-# Keeper runs only in Cloudflare Workers; GitHub Actions only deploys.
+# Each deployment runs on exactly one platform, chosen by the repository
+# variable KEEPER_PLATFORM_SEPOLIA / KEEPER_PLATFORM_GNOSIS: `cloudflare` (the
+# default when unset) or `aws`. Never both: two keepers on one wallet race
+# each other's nonces. Switching is in services/keeper/README.md — this only
+# deploys to the chosen platform, it does not stop the other.
+#
 # The approval is the `gnosis` GitHub Environment's required reviewers, which
 # live in repository settings rather than in this file — see
 # services/keeper/README.md.
 #
 # Wallet, RPC and Telegram secrets are *not* passed from here. They live in
-# Cloudflare, set once per deployment with `wrangler secret put`, and never
-# pass through GitHub. `secrets.required` in wrangler.jsonc makes the deploy
-# below fail if any of them is unset on the target Worker.
+# Cloudflare and in SSM Parameter Store, set once per deployment, and never
+# pass through GitHub. Both deploys fail if any of them is unset: wrangler on
+# `secrets.required`, scripts/aws.ts by checking SSM for the same names.
 
 name: keeper-deploy
 
@@ -34,7 +39,7 @@ on:
         options: [sepolia, gnosis]
         required: true
 
-# One deploy per Worker at a time; queue rather than cancel mid-upload.
+# One deploy per deployment at a time; queue rather than cancel mid-upload.
 concurrency:
   group: keeper-deploy-${{ inputs.environment || 'sepolia' }}
   cancel-in-progress: false
@@ -46,17 +51,27 @@ jobs:
     permissions: {}
     outputs:
       environment: ${{ steps.choose.outputs.environment }}
+      platform: ${{ steps.choose.outputs.platform }}
     steps:
       - id: choose
         env:
           EVENT: ${{ github.event_name }}
           REQUESTED: ${{ inputs.environment }}
+          PLATFORM_SEPOLIA: ${{ vars.KEEPER_PLATFORM_SEPOLIA }}
+          PLATFORM_GNOSIS: ${{ vars.KEEPER_PLATFORM_GNOSIS }}
         run: |
-          if [ "$EVENT" = push ]; then
-            echo "environment=sepolia" >> "$GITHUB_OUTPUT"
-          else
-            echo "environment=$REQUESTED" >> "$GITHUB_OUTPUT"
-          fi
+          if [ "$EVENT" = push ]; then target=sepolia; else target="$REQUESTED"; fi
+          case "$target" in
+            sepolia) platform="${PLATFORM_SEPOLIA:-cloudflare}" ;;
+            gnosis) platform="${PLATFORM_GNOSIS:-cloudflare}" ;;
+            *) echo "::error::unknown deployment: $target"; exit 1 ;;
+          esac
+          case "$platform" in
+            cloudflare|aws) ;;
+            *) echo "::error::KEEPER_PLATFORM_${target^^} must be cloudflare or aws, not $platform"; exit 1 ;;
+          esac
+          echo "environment=$target" >> "$GITHUB_OUTPUT"
+          echo "platform=$platform" >> "$GITHUB_OUTPUT"
 
   check:
     needs: target
@@ -66,8 +81,9 @@ jobs:
       contents: read
 
   deploy:
-    name: Deploy keeper-${{ needs.target.outputs.environment }}
+    name: Deploy keeper-${{ needs.target.outputs.environment }} (Cloudflare)
     needs: [target, check]
+    if: needs.target.outputs.platform == 'cloudflare'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -84,16 +100,65 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: oven-sh/setup-bun@v2
+      # pnpm and Node from package.json, then a frozen install.
+      - uses: pnpm/setup@v3
         with:
-          bun-version: latest
-
-      - name: Install
-        run: bun install --frozen-lockfile
+          working-directory: services/keeper
+          cache: true
+          require-lockfile: true
 
       - name: Deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           TARGET: ${{ needs.target.outputs.environment }}
-        run: bunx wrangler deploy --env "$TARGET"
+        run: pnpm exec wrangler deploy --env "$TARGET"
+
+  deploy-aws:
+    name: Deploy keeper-${{ needs.target.outputs.environment }} (AWS)
+    needs: [target, check]
+    if: needs.target.outputs.platform == 'aws'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      # GitHub OIDC: the role trusts this repository's Environments, so no
+      # AWS key is stored anywhere (services/keeper/infra/github-oidc.yaml).
+      id-token: write
+    environment:
+      name: ${{ needs.target.outputs.environment }}
+    defaults:
+      run:
+        working-directory: services/keeper
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      # pnpm and Node from package.json, then a frozen install.
+      - uses: pnpm/setup@v3
+        with:
+          working-directory: services/keeper
+          cache: true
+          require-lockfile: true
+
+      - uses: aws-actions/setup-sam@v3
+        with:
+          use-installer: true
+
+      - name: AWS is set up
+        if: vars.AWS_DEPLOY_ROLE_ARN == '' || vars.AWS_REGION == ''
+        run: |
+          echo "::error::set the repository variables AWS_DEPLOY_ROLE_ARN and AWS_REGION (services/keeper/README.md)"
+          exit 1
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Deploy
+        env:
+          SAM_CLI_TELEMETRY: "0"
+          TARGET: ${{ needs.target.outputs.environment }}
+        run: pnpm aws deploy "$TARGET"

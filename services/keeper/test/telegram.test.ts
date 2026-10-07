@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from "vitest";
 import {
   TELEGRAM_MAX_LENGTH,
   formatTelegramMessage,
@@ -40,8 +40,8 @@ describe("formatTelegramMessage", () => {
   });
 
   test("leads with the status at a glance", () => {
-    expect(formatTelegramMessage(report())).toStartWith("🔴 keeper-gnosis: 1 volume failed");
-    expect(formatTelegramMessage(report({ status: "warning", summary: "s" }))).toStartWith("🟡");
+    expect(formatTelegramMessage(report())).toMatch(/^🔴 keeper-gnosis: 1 volume failed/);
+    expect(formatTelegramMessage(report({ status: "warning", summary: "s" }))).toMatch(/^🟡/);
   });
 
   test("an issue without a volume or tx is still a line of its own", () => {

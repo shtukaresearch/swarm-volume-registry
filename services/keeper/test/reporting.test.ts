@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { sepolia } from "viem/chains";
 import type { EndpointHealth } from "../src/client.js";
 import { runKeeperCycle } from "../src/keeper/actions/runKeeperCycle.js";
@@ -275,10 +275,10 @@ describe("brief", () => {
 });
 
 describe("logReport", () => {
-  const spies = [spyOn(console, "log"), spyOn(console, "warn"), spyOn(console, "error")];
+  const spies = [vi.spyOn(console, "log"), vi.spyOn(console, "warn"), vi.spyOn(console, "error")];
   afterEach(() => spies.forEach((s) => s.mockClear()));
 
-  // Workers Logs files each line under its console level, so the dashboard's
+  // Workers Logs and CloudWatch file each line under its console level, so the
   // level filter and a query on `status` have to agree.
   test.each([
     ["ok", 0],
@@ -288,7 +288,11 @@ describe("logReport", () => {
     const report = { ...abortedReport(run, ["x"]), status };
     logReport(report);
     expect(spies[index]!).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(spies[index]!.mock.calls[0]![0] as string)).toEqual(report);
+    const [logged] = spies[index]!.mock.calls[0]!;
+    // An object, so both platforms index its fields — and one that survives
+    // JSON as-is, so no bigint or Error reaches the log half-serialised.
+    expect(typeof logged).toBe("object");
+    expect(JSON.parse(JSON.stringify(logged))).toEqual(report);
     spies.filter((_, i) => i !== index).forEach((s) => expect(s).not.toHaveBeenCalled());
   });
 });

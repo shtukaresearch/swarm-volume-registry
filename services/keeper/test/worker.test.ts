@@ -1,12 +1,16 @@
 /**
- * Whole scheduled runs, through the Worker's own default export.
+ * Whole scheduled runs, through each platform's entry point: the Worker's own
+ * default export, and the Lambda handlers that wrap it. Every case runs on
+ * both.
  *
  * The mock chain is served over a stubbed `fetch`, so what runs is the real
  * path: bindings → config → endpoint probe → viem `http` transports → cycle →
- * report → log → Telegram. Nothing is injected past the network boundary.
+ * report → log → Telegram. Nothing is injected past the network boundary —
+ * on Lambda, but for the SSM read, which a stub stands in for.
  */
-import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { privateKeyToAccount } from "viem/accounts";
+import { createHandlers } from "../src/aws/handler.js";
 import worker, { KeeperRunFailed } from "../src/index.js";
 import type { KeeperEnv } from "../src/config.js";
 import type { KeeperReport } from "../src/reporting.js";
@@ -87,13 +91,13 @@ beforeEach(() => {
   for (const level of ["log", "warn", "error"] as const) {
     logs[level] = [];
     spies.push(
-      spyOn(console, level).mockImplementation((line: unknown) => {
-        logs[level].push(String(line));
+      vi.spyOn(console, level).mockImplementation((line: unknown) => {
+        logs[level].push(typeof line === "string" ? line : JSON.stringify(line));
       }),
     );
   }
   spies.push(
-    spyOn(globalThis, "fetch").mockImplementation(((input: RequestInfo | URL, init?: RequestInit) =>
+    vi.spyOn(globalThis, "fetch").mockImplementation(((input: RequestInfo | URL, init?: RequestInit) =>
       serve(String(input), init)) as typeof fetch),
   );
 });
@@ -113,211 +117,278 @@ function logged(): KeeperReport {
 
 const everything = () => [...logs.log, ...logs.warn, ...logs.error, ...telegram.sent].join("\n");
 
-async function scheduled(bindings: KeeperEnv) {
-  const noRetry = mock(() => {});
-  const controller = { cron: "* * * * *", scheduledTime: Date.now(), type: "scheduled", noRetry };
-  const outcome = await worker
-    .scheduled(controller as unknown as ScheduledController, bindings)
-    .then(
-      () => undefined,
-      (err: unknown) => err,
-    );
-  return { outcome, noRetry };
+// --- the platforms ----------------------------------------------------------
+
+type Mock = ReturnType<typeof vi.fn>;
+type FetchResponse = Awaited<ReturnType<typeof worker.fetch>>;
+
+interface Runtime {
+  name: string;
+  /** One scheduled run; `noRetry` where the platform has one to call. */
+  scheduled(bindings: KeeperEnv): Promise<{ outcome: unknown; noRetry?: Mock }>;
+  fetch(path: string, bindings: KeeperEnv): Promise<FetchResponse>;
 }
 
-// --- runs -------------------------------------------------------------------
+const settle = (run: Promise<unknown>) =>
+  run.then(
+    () => undefined,
+    (err: unknown) => err,
+  );
 
-describe("scheduled", () => {
-  test("a healthy run succeeds quietly", async () => {
-    const chain = mockChain({ volumes: [due(1), due(2)] });
-    rpc.set(LIVE, chain);
-
-    const { outcome } = await scheduled(env());
-
-    expect(outcome).toBeUndefined();
-    expect(chain.triggerCalls).toEqual([volumeId(1), volumeId(2)]);
-    expect(logged()).toMatchObject({ status: "ok", deployment: "keeper-test", cron: "* * * * *" });
-    expect(logs.log).toHaveLength(1);
-    expect(telegram.sent).toEqual([]);
-  });
-
-  // KEEPERS.md: never report a successful invocation for a run that failed.
-  test("a failed volume fails the invocation, and pages with where and what", async () => {
-    rpc.set(LIVE, mockChain({ volumes: [due(1)], revertTx: true }));
-
-    const { outcome, noRetry } = await scheduled(env());
-
-    expect(outcome).toBeInstanceOf(KeeperRunFailed);
-    expect((outcome as Error).message).toBe("keeper-test: 1 volume failed");
-    // The next tick is the retry; a platform retry could overlap it.
-    expect(noRetry).toHaveBeenCalled();
-
-    const report = logged();
-    expect(report.status).toBe("failure");
-    expect(logs.error).toHaveLength(1);
-
-    const hash = report.volumes![0]!.hash!;
-    expect(telegram.sent).toHaveLength(1);
-    const alert = telegram.sent[0]!;
-    for (const expected of ["keeper-test", "Sepolia (11155111)", REGISTRY, "transaction reverted", volumeId(1), hash]) {
-      expect(alert).toContain(expected);
-    }
-  });
-
-  // The reviewer's case: no wallet or RPC must not pass for an idle keeper.
-  test("a deployment without its wallet or RPC fails, pages, and touches no RPC", async () => {
-    const { outcome } = await scheduled(env({ PRIVATE_KEY: "", RPC_URL: "" }));
-
-    expect(outcome).toBeInstanceOf(KeeperRunFailed);
-    expect(rpcRequests).toEqual([]);
-    expect(logged().failures.map((f) => f.message)).toEqual([
-      "PRIVATE_KEY is required",
-      "RPC_URL is required",
-    ]);
-    expect(telegram.sent[0]).toContain("PRIVATE_KEY is required");
-    expect(telegram.sent[0]).toContain("keeper-test");
-  });
-
-  test("a broken alert channel still fails the run, and the log says why", async () => {
-    const { outcome } = await scheduled(env({ PRIVATE_KEY: "", TELEGRAM_CHAT_ID: "" }));
-    expect(outcome).toBeInstanceOf(KeeperRunFailed);
-    expect(telegram.sent).toEqual([]);
-    expect(logged().failures.map((f) => f.message)).toContain("TELEGRAM_CHAT_ID is required");
-  });
-
-  // An endpoint on the wrong network answers confidently and wrongly, which
-  // looks exactly like an empty registry.
-  test("an RPC on the wrong chain is never used", async () => {
-    const wrong = mockChain({ volumes: [due(1)], chainId: 1 });
-    rpc.set(LIVE, wrong);
-
-    const { outcome } = await scheduled(env());
-
-    expect(outcome).toBeInstanceOf(KeeperRunFailed);
-    expect(wrong.triggerCalls).toEqual([]);
-    expect(logged().failures.map((f) => f.message).join("\n")).toContain(
-      "reports chain id 1, expected 11155111",
+const cloudflare: Runtime = {
+  name: "Cloudflare Worker",
+  async scheduled(bindings) {
+    const noRetry = vi.fn(() => {});
+    const controller = { cron: "* * * * *", scheduledTime: Date.now(), type: "scheduled", noRetry };
+    const outcome = await settle(
+      worker.scheduled(controller as unknown as ScheduledController, bindings),
     );
-  });
-
-  test("failing over is a warning: the run succeeds, and pages only where wanted", async () => {
-    const chain = mockChain({ volumes: [due(1)] });
-    rpc.set(DEAD, "down");
-    rpc.set(LIVE, chain);
-
-    const quiet = await scheduled(env({ RPC_URL: `${DEAD},${LIVE}` }));
-    expect(quiet.outcome).toBeUndefined();
-    expect(chain.triggerCalls).toEqual([volumeId(1)]);
-    expect(logged().status).toBe("warning");
-    expect(logs.warn).toHaveLength(1);
-    expect(telegram.sent).toEqual([]);
-
-    logs.warn = [];
-    const loud = await scheduled(env({ RPC_URL: `${DEAD},${LIVE}`, NOTIFY_WARNINGS: "true" }));
-    expect(loud.outcome).toBeUndefined();
-    expect(telegram.sent).toHaveLength(1);
-    expect(telegram.sent[0]).toContain("primary RPC https://dead.example/… is down");
-  });
-
-  test("no usable endpoint at all is a failure", async () => {
-    rpc.set(DEAD, "down");
-    const { outcome } = await scheduled(env({ RPC_URL: DEAD }));
-    expect(outcome).toBeInstanceOf(KeeperRunFailed);
-    expect(logged().failures[0]!.message).toBe(
-      "no usable RPC endpoint: all 1 failed the pre-flight check",
-    );
-  });
-
-  // viem puts the full endpoint URL in its errors, and a dead endpoint's error
-  // goes straight into the report and the alert.
-  test("no secret reaches the log or the group", async () => {
-    rpc.set(DEAD, "down");
-    await scheduled(env({ RPC_URL: DEAD }));
-    expect(telegram.sent).toHaveLength(1);
-    const output = everything();
-    expect(output).toContain("dead.example");
-    for (const secret of SECRETS) expect(output).not.toContain(secret);
-  });
-
-  // The dangerous path: an endpoint that passes the probe and then fails
-  // mid-cycle. viem's full error — "URL: https://…/<key>" — is kept whole in the
-  // per-volume log detail, so only the scrubber stands between it and the log.
-  test("a mid-cycle RPC failure is logged in full, with the key scrubbed", async () => {
-    const chain = mockChain({ volumes: [due(1)] });
-    rpc.set(LIVE, { chain, httpErrorOn: ["eth_estimateGas"] });
-
-    const { outcome } = await scheduled(env());
-
-    expect(outcome).toBeInstanceOf(KeeperRunFailed);
-    const volume = logged().volumes![0]!;
-    expect(volume.status).toBe("failed");
-    expect(volume.error).toContain("URL: https://live.example/…");
-    const output = everything();
-    for (const secret of SECRETS) expect(output).not.toContain(secret);
-  });
-
-  test("a Telegram outage is logged without changing the run's outcome", async () => {
-    rpc.set(LIVE, mockChain({ volumes: [due(1)], revertTx: true }));
-    telegram.status = 500;
-
-    const { outcome } = await scheduled(env());
-
-    expect(outcome).toBeInstanceOf(KeeperRunFailed);
-    const notify = logs.error.map((l) => JSON.parse(l)).find((e) => e.kind === "keeper/notify-failed");
-    expect(notify).toMatchObject({ deployment: "keeper-test", status: "failure" });
-    expect(notify.reason).toContain("500");
-  });
-
-  test("DRY_RUN sends nothing, and says so rather than looking healthy", async () => {
-    const chain = mockChain({ volumes: [due(1)] });
-    rpc.set(LIVE, chain);
-
-    const { outcome } = await scheduled(env({ DRY_RUN: "true" }));
-
-    expect(outcome).toBeUndefined();
-    expect(chain.calls).not.toContain("eth_sendRawTransaction");
-    expect(logged()).toMatchObject({ status: "warning", dryRun: true });
-  });
-});
-
-describe("GET /health", () => {
-  const get = (path: string, bindings = env()) =>
+    return { outcome, noRetry };
+  },
+  fetch: (path, bindings) =>
     worker.fetch(
       new Request(`https://keeper-test.example.workers.dev${path}`) as unknown as Parameters<
         typeof worker.fetch
       >[0],
       bindings,
-    );
+    ),
+};
 
-  test("a valid deployment reports which wallet to fund", async () => {
-    const response = await get("/health");
-    expect(response.status).toBe(200);
-    expect(await response.json<Record<string, unknown>>()).toEqual({
-      status: "configured",
-      deployment: "keeper-test",
-      chainId: 11155111,
-      chainName: "Sepolia",
-      registry: REGISTRY,
-      keeper: privateKeyToAccount(KEY).address,
-      dryRun: false,
+/** wrangler.jsonc's `secrets.required`: in SSM on Lambda, not in KEEPER_VARS. */
+const SECRET_NAMES = ["PRIVATE_KEY", "RPC_URL", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"];
+
+/** The same bindings, split the way a Lambda deployment receives them. */
+function lambda(bindings: KeeperEnv) {
+  const vars: Record<string, string> = {};
+  const ssm: Record<string, string> = {};
+  for (const [name, value] of Object.entries(bindings)) {
+    // SSM cannot hold an empty value: an empty secret is a missing one.
+    if (typeof value === "string" && value !== "") (SECRET_NAMES.includes(name) ? ssm : vars)[name] = value;
+  }
+  return createHandlers(
+    async (names) => Object.fromEntries(names.filter((n) => n in ssm).map((n) => [n, ssm[n]!])),
+    {
+      KEEPER_VARS: JSON.stringify(vars),
+      KEEPER_SECRETS: SECRET_NAMES.join(","),
+      KEEPER_SECRETS_PATH: "/keeper-test/",
+    },
+  );
+}
+
+const aws: Runtime = {
+  name: "AWS Lambda",
+  // No noRetry: on Lambda, retries are off in template.yaml.
+  async scheduled(bindings) {
+    const event = { cron: "* * * * *", scheduledTime: new Date().toISOString() };
+    return { outcome: await settle(lambda(bindings).scheduled(event)) };
+  },
+  async fetch(path, bindings) {
+    const result = await lambda(bindings).health({
+      rawPath: path,
+      rawQueryString: "",
+      requestContext: { domainName: "abc.lambda-url.eu-central-1.on.aws", http: { method: "GET" } },
+    } as Parameters<ReturnType<typeof lambda>["health"]>[0]);
+    if (typeof result === "string") throw new Error("expected a structured result");
+    const response = new Response(result.body, {
+      status: result.statusCode,
+      headers: result.headers as Record<string, string>,
+    });
+    return response as unknown as FetchResponse;
+  },
+};
+
+// --- runs -------------------------------------------------------------------
+
+for (const runtime of [cloudflare, aws]) {
+  const scheduled = (bindings: KeeperEnv) => runtime.scheduled(bindings);
+
+  describe(`${runtime.name}: scheduled`, () => {
+    test("a healthy run succeeds quietly", async () => {
+      const chain = mockChain({ volumes: [due(1), due(2)] });
+      rpc.set(LIVE, chain);
+
+      const { outcome } = await scheduled(env());
+
+      expect(outcome).toBeUndefined();
+      expect(chain.triggerCalls).toEqual([volumeId(1), volumeId(2)]);
+      expect(logged()).toMatchObject({ status: "ok", deployment: "keeper-test", cron: "* * * * *" });
+      expect(logs.log).toHaveLength(1);
+      expect(telegram.sent).toEqual([]);
+    });
+
+    // KEEPERS.md: never report a successful invocation for a run that failed.
+    test("a failed volume fails the invocation, and pages with where and what", async () => {
+      rpc.set(LIVE, mockChain({ volumes: [due(1)], revertTx: true }));
+
+      const { outcome, noRetry } = await scheduled(env());
+
+      expect(outcome).toBeInstanceOf(KeeperRunFailed);
+      expect((outcome as Error).message).toBe("keeper-test: 1 volume failed");
+      // The next tick is the retry; a platform retry could overlap it. On
+      // Lambda, template.yaml switches retries off instead.
+      if (noRetry) expect(noRetry).toHaveBeenCalled();
+
+      const report = logged();
+      expect(report.status).toBe("failure");
+      expect(logs.error).toHaveLength(1);
+
+      const hash = report.volumes![0]!.hash!;
+      expect(telegram.sent).toHaveLength(1);
+      const alert = telegram.sent[0]!;
+      for (const expected of ["keeper-test", "Sepolia (11155111)", REGISTRY, "transaction reverted", volumeId(1), hash]) {
+        expect(alert).toContain(expected);
+      }
+    });
+
+    // The reviewer's case: no wallet or RPC must not pass for an idle keeper.
+    test("a deployment without its wallet or RPC fails, pages, and touches no RPC", async () => {
+      const { outcome } = await scheduled(env({ PRIVATE_KEY: "", RPC_URL: "" }));
+
+      expect(outcome).toBeInstanceOf(KeeperRunFailed);
+      expect(rpcRequests).toEqual([]);
+      expect(logged().failures.map((f) => f.message)).toEqual([
+        "PRIVATE_KEY is required",
+        "RPC_URL is required",
+      ]);
+      expect(telegram.sent[0]).toContain("PRIVATE_KEY is required");
+      expect(telegram.sent[0]).toContain("keeper-test");
+    });
+
+    test("a broken alert channel still fails the run, and the log says why", async () => {
+      const { outcome } = await scheduled(env({ PRIVATE_KEY: "", TELEGRAM_CHAT_ID: "" }));
+      expect(outcome).toBeInstanceOf(KeeperRunFailed);
+      expect(telegram.sent).toEqual([]);
+      expect(logged().failures.map((f) => f.message)).toContain("TELEGRAM_CHAT_ID is required");
+    });
+
+    // An endpoint on the wrong network answers confidently and wrongly, which
+    // looks exactly like an empty registry.
+    test("an RPC on the wrong chain is never used", async () => {
+      const wrong = mockChain({ volumes: [due(1)], chainId: 1 });
+      rpc.set(LIVE, wrong);
+
+      const { outcome } = await scheduled(env());
+
+      expect(outcome).toBeInstanceOf(KeeperRunFailed);
+      expect(wrong.triggerCalls).toEqual([]);
+      expect(logged().failures.map((f) => f.message).join("\n")).toContain(
+        "reports chain id 1, expected 11155111",
+      );
+    });
+
+    test("failing over is a warning: the run succeeds, and pages only where wanted", async () => {
+      const chain = mockChain({ volumes: [due(1)] });
+      rpc.set(DEAD, "down");
+      rpc.set(LIVE, chain);
+
+      const quiet = await scheduled(env({ RPC_URL: `${DEAD},${LIVE}` }));
+      expect(quiet.outcome).toBeUndefined();
+      expect(chain.triggerCalls).toEqual([volumeId(1)]);
+      expect(logged().status).toBe("warning");
+      expect(logs.warn).toHaveLength(1);
+      expect(telegram.sent).toEqual([]);
+
+      logs.warn = [];
+      const loud = await scheduled(env({ RPC_URL: `${DEAD},${LIVE}`, NOTIFY_WARNINGS: "true" }));
+      expect(loud.outcome).toBeUndefined();
+      expect(telegram.sent).toHaveLength(1);
+      expect(telegram.sent[0]).toContain("primary RPC https://dead.example/… is down");
+    });
+
+    test("no usable endpoint at all is a failure", async () => {
+      rpc.set(DEAD, "down");
+      const { outcome } = await scheduled(env({ RPC_URL: DEAD }));
+      expect(outcome).toBeInstanceOf(KeeperRunFailed);
+      expect(logged().failures[0]!.message).toBe(
+        "no usable RPC endpoint: all 1 failed the pre-flight check",
+      );
+    });
+
+    // viem puts the full endpoint URL in its errors, and a dead endpoint's error
+    // goes straight into the report and the alert.
+    test("no secret reaches the log or the group", async () => {
+      rpc.set(DEAD, "down");
+      await scheduled(env({ RPC_URL: DEAD }));
+      expect(telegram.sent).toHaveLength(1);
+      const output = everything();
+      expect(output).toContain("dead.example");
+      for (const secret of SECRETS) expect(output).not.toContain(secret);
+    });
+
+    // The dangerous path: an endpoint that passes the probe and then fails
+    // mid-cycle. viem's full error — "URL: https://…/<key>" — is kept whole in the
+    // per-volume log detail, so only the scrubber stands between it and the log.
+    test("a mid-cycle RPC failure is logged in full, with the key scrubbed", async () => {
+      const chain = mockChain({ volumes: [due(1)] });
+      rpc.set(LIVE, { chain, httpErrorOn: ["eth_estimateGas"] });
+
+      const { outcome } = await scheduled(env());
+
+      expect(outcome).toBeInstanceOf(KeeperRunFailed);
+      const volume = logged().volumes![0]!;
+      expect(volume.status).toBe("failed");
+      expect(volume.error).toContain("URL: https://live.example/…");
+      const output = everything();
+      for (const secret of SECRETS) expect(output).not.toContain(secret);
+    });
+
+    test("a Telegram outage is logged without changing the run's outcome", async () => {
+      rpc.set(LIVE, mockChain({ volumes: [due(1)], revertTx: true }));
+      telegram.status = 500;
+
+      const { outcome } = await scheduled(env());
+
+      expect(outcome).toBeInstanceOf(KeeperRunFailed);
+      const notify = logs.error.map((l) => JSON.parse(l)).find((e) => e.kind === "keeper/notify-failed");
+      expect(notify).toMatchObject({ deployment: "keeper-test", status: "failure" });
+      expect(notify.reason).toContain("500");
+    });
+
+    test("DRY_RUN sends nothing, and says so rather than looking healthy", async () => {
+      const chain = mockChain({ volumes: [due(1)] });
+      rpc.set(LIVE, chain);
+
+      const { outcome } = await scheduled(env({ DRY_RUN: "true" }));
+
+      expect(outcome).toBeUndefined();
+      expect(chain.calls).not.toContain("eth_sendRawTransaction");
+      expect(logged()).toMatchObject({ status: "warning", dryRun: true });
     });
   });
 
-  test("a broken one says what is wrong, without secrets", async () => {
-    const response = await get("/health", env({ RPC_URL: "", PRIVATE_KEY: "0xBOTSECRET" }));
-    expect(response.status).toBe(503);
-    const body = await response.json<Record<string, unknown>>();
-    expect(body).toMatchObject({ status: "misconfigured", deployment: "keeper-test" });
-    expect(JSON.stringify(body)).not.toContain("BOTSECRET");
-  });
+  describe(`${runtime.name}: GET /health`, () => {
+    const get = (path: string, bindings = env()) => runtime.fetch(path, bindings);
 
-  // A public URL must not be a way to spend the deployment's RPC quota.
-  test("makes no RPC calls", async () => {
-    await get("/health");
-    expect(rpcRequests).toEqual([]);
-  });
+    test("a valid deployment reports which wallet to fund", async () => {
+      const response = await get("/health");
+      expect(response.status).toBe(200);
+      expect(await response.json<Record<string, unknown>>()).toEqual({
+        status: "configured",
+        deployment: "keeper-test",
+        chainId: 11155111,
+        chainName: "Sepolia",
+        registry: REGISTRY,
+        keeper: privateKeyToAccount(KEY).address,
+        dryRun: false,
+      });
+    });
 
-  test("anything else is a 404", async () => {
-    expect((await get("/")).status).toBe(404);
+    test("a broken one says what is wrong, without secrets", async () => {
+      const response = await get("/health", env({ RPC_URL: "", PRIVATE_KEY: "0xBOTSECRET" }));
+      expect(response.status).toBe(503);
+      const body = await response.json<Record<string, unknown>>();
+      expect(body).toMatchObject({ status: "misconfigured", deployment: "keeper-test" });
+      expect(JSON.stringify(body)).not.toContain("BOTSECRET");
+    });
+
+    // A public URL must not be a way to spend the deployment's RPC quota.
+    test("makes no RPC calls", async () => {
+      await get("/health");
+      expect(rpcRequests).toEqual([]);
+    });
+
+    test("anything else is a 404", async () => {
+      expect((await get("/")).status).toBe(404);
+    });
   });
-});
+}

@@ -1,6 +1,7 @@
 /**
  * The keeper Worker. One implementation, deployed once per chain — see the
- * envs in wrangler.jsonc. Cloudflare Cron Triggers are the only scheduler.
+ * envs in wrangler.jsonc. Cron Triggers drive it on Cloudflare; on AWS,
+ * src/aws/handler.ts drives this same export from EventBridge Scheduler.
  *
  * Each scheduled run: validate the configuration, probe the RPC endpoints,
  * run one keeper cycle, and turn what happened into a single report. That
@@ -83,14 +84,12 @@ export async function runScheduled(
   if (telegram && shouldNotify(report, notifyWarnings)) {
     const { sent, reason } = await sendTelegram(telegram, formatTelegramMessage(report));
     if (!sent) {
-      console.error(
-        JSON.stringify({
-          kind: "keeper/notify-failed",
-          deployment: report.deployment,
-          status: report.status,
-          reason: scrub(reason ?? "unknown"),
-        }),
-      );
+      console.error({
+        kind: "keeper/notify-failed",
+        deployment: report.deployment,
+        status: report.status,
+        reason: scrub(reason ?? "unknown"),
+      });
     }
   }
 

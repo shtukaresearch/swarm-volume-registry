@@ -1,9 +1,10 @@
-# Keeper Worker CI. Installs, typechecks, tests, and bundles both deployments
-# with `wrangler deploy --dry-run`.
+# Keeper CI. Installs, typechecks, tests, and bundles both deployments for
+# both platforms: `wrangler deploy --dry-run` for Cloudflare, the Lambda
+# bundle plus `sam validate --lint` for AWS.
 #
-# It never runs a keeper cycle: Cloudflare Cron Triggers are the only
-# scheduler. Nothing here needs Cloudflare credentials either — a dry run
-# bundles locally — so it runs the same on pull requests from forks.
+# It never runs a keeper cycle: the platforms' schedulers are the only ones.
+# Nothing here needs cloud credentials either — both checks run locally — so
+# it runs the same on pull requests from forks.
 
 name: keeper-ci
 
@@ -18,7 +19,7 @@ on:
 
 jobs:
   check:
-    name: Keeper Worker
+    name: Keeper
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -31,27 +32,39 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: oven-sh/setup-bun@v2
+      # pnpm from package.json's `packageManager`, Node from its
+      # `devEngines.runtime`, then `pnpm install --frozen-lockfile`.
+      - uses: pnpm/setup@v3
         with:
-          bun-version: latest
-
-      - name: Install
-        run: bun install --frozen-lockfile
+          working-directory: services/keeper
+          cache: true
+          require-lockfile: true
 
       # worker-configuration.d.ts is generated from wrangler.jsonc and
       # committed. Stale, it types the Worker against bindings that no longer
       # exist.
       - name: Generated types are current
-        run: bun run check:types
+        run: pnpm check:types
 
       - name: Typecheck
-        run: bun run typecheck
+        run: pnpm typecheck
 
       # Includes test/config.test.ts, which validates each deployment in
       # wrangler.jsonc against the Worker's own config rules — the part a dry
-      # run does not check.
+      # run does not check — and test/aws.test.ts, which holds the AWS stacks
+      # derived from it to template.yaml.
       - name: Test
-        run: bun test
+        run: pnpm test
 
-      - name: Bundle both deployments
-        run: bun run check:deploy
+      - name: Bundle both deployments (Cloudflare)
+        run: pnpm check:deploy
+
+      - uses: aws-actions/setup-sam@v3
+        with:
+          use-installer: true
+
+      - name: Bundle and validate the stack (AWS)
+        env:
+          AWS_DEFAULT_REGION: us-east-1
+          SAM_CLI_TELEMETRY: "0"
+        run: pnpm check:aws

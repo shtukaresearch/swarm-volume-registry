@@ -310,12 +310,13 @@ const MAX_LOGGED_ERROR = 2_000;
 // --- out --------------------------------------------------------------------
 
 /**
- * Write the report to Workers Logs as one JSON object, at the level matching
- * its status, so the dashboard's level filter and a query on `status` agree.
+ * Write the report to the log as one object, at the level matching its
+ * status, so the level filter and a query on `status` agree. An object, not a
+ * JSON string: Workers Logs and Lambda's JSON log format both index an
+ * object's fields, but keep a string as one opaque message.
  */
 export function logReport(report: KeeperReport): void {
-  const line = JSON.stringify(report);
-  if (report.status === "failure") console.error(line);
-  else if (report.status === "warning") console.warn(line);
-  else console.log(line);
+  if (report.status === "failure") console.error(report);
+  else if (report.status === "warning") console.warn(report);
+  else console.log(report);
 }

@@ -3,23 +3,39 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Swarm VolumeRegistry keeper — one Cloudflare Worker, deployed once per chain",
+  "description": "Swarm VolumeRegistry keeper — one implementation, deployed once per chain to Cloudflare Workers or AWS Lambda",
   "scripts": {
     "dev": "wrangler dev --env sepolia",
     "deploy:sepolia": "wrangler deploy --env sepolia",
     "deploy:gnosis": "wrangler deploy --env gnosis",
+    "deploy:aws:sepolia": "node scripts/aws.ts deploy sepolia",
+    "deploy:aws:gnosis": "node scripts/aws.ts deploy gnosis",
     "check:deploy": "wrangler deploy --dry-run --env sepolia --outdir dist/sepolia && wrangler deploy --dry-run --env gnosis --outdir dist/gnosis",
+    "aws": "node scripts/aws.ts",
+    "build:aws": "node scripts/aws.ts build",
+    "check:aws": "node scripts/aws.ts build sepolia gnosis && cfn-lint --ignore-checks W3002 -- infra/github-oidc.yaml dist/aws/*.json",
     "types": "wrangler types --strict-vars false",
     "check:types": "wrangler types --strict-vars false --check",
     "typecheck": "tsc --noEmit",
-    "test": "bun test"
+    "test": "vitest run"
   },
   "dependencies": {
     "viem": "2.55.16"
   },
   "devDependencies": {
-    "@types/bun": "^1.3.0",
+    "@types/aws-lambda": "^8.10.164",
+    "@types/node": "^24.19.1",
+    "esbuild": "^0.28.2",
     "typescript": "^5.6.3",
+    "vitest": "^5.0.3",
     "wrangler": "^4.134.0"
+  },
+  "packageManager": "pnpm@12.9.1",
+  "devEngines": {
+    "runtime": {
+      "name": "node",
+      "version": "^24",
+      "onFail": "download"
+    }
   }
 }

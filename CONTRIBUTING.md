@@ -76,19 +76,21 @@ steps are in [`RELEASING.md`](./RELEASING.md).
 
 ## Keeper
 
-[`services/keeper`](./services/keeper) is the keeper: one Cloudflare Worker,
-deployed as `keeper-sepolia` and `keeper-gnosis`. A standalone Bun project with
-its own lockfile; nothing else in the repository depends on it.
+[`services/keeper`](./services/keeper) is the keeper: one implementation,
+deployed as `keeper-sepolia` and `keeper-gnosis` to Cloudflare Workers or AWS
+Lambda. A standalone pnpm project on Node 24 with its own lockfile; nothing
+else in the repository depends on it.
 
 ```sh
 cd services/keeper
-bun install
-bun test
-bun run typecheck
-bun run check:deploy   # wrangler deploy --dry-run, both envs
+pnpm install
+pnpm test
+pnpm typecheck
+pnpm check:deploy   # wrangler deploy --dry-run, both envs
+pnpm check:aws      # Lambda bundle + both stacks, linted (needs cfn-lint)
 ```
 
-None of this needs chain access or Cloudflare credentials. CI runs the same
+None of this needs chain access or cloud credentials. CI runs the same
 steps (`.github/workflows/keeper-ci.yml`); deploys go through
 `.github/workflows/keeper-deploy.yml`. Setup, configuration and local runs are
 in its [README](./services/keeper/README.md).

@@ -5,7 +5,7 @@ dist/
 .dev.vars
 .dev.vars.*
 !.dev.vars.example
-# First-deploy secrets for `wrangler deploy --secrets-file`. Never commit.
+# Secrets for `wrangler deploy --secrets-file` and `pnpm aws deploy --secrets-file`. Never commit.
 .secrets.*
 .env
 *.log

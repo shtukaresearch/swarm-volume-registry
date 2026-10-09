@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from "vitest";
 import { decodeErrorResult, encodeErrorResult, encodeFunctionData } from "viem";
 import { registryAbi } from "../src/keeper/abi.js";
 

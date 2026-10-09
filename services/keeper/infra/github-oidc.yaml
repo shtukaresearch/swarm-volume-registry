@@ -1,0 +1,210 @@
+# One-time AWS setup for the keeper, deployed once per account and region by
+# an administrator, before the first `pnpm aws deploy`. Keep the stack name:
+# that deploy finds the artifacts bucket in keeper-bootstrap's outputs.
+#
+#   aws cloudformation deploy --stack-name keeper-bootstrap \
+#     --template-file infra/github-oidc.yaml --capabilities CAPABILITY_NAMED_IAM \
+#     --parameter-overrides GitHubRepository=<owner>/<repo>
+#
+# It creates:
+#   - keeper-permissions-boundary: the most any role a keeper stack creates
+#     may do. Every keeper stack sets it on each of its roles, so it must
+#     exist first.
+#   - the artifacts bucket, where `pnpm aws deploy` uploads the Lambda bundle.
+#   - github-deploy-keeper: the role .github/workflows/keeper-deploy.yml
+#     assumes through GitHub OIDC, from the `sepolia` and `gnosis` Environments
+#     only. No AWS key is stored in GitHub. Deliberately not named keeper-*,
+#     the roles it manages, so it cannot edit its own trust or policies.
+#
+# The deploy role can manage only keeper-* resources, and can create IAM
+# roles only under the boundary, so it cannot grant itself or a function more
+# than the boundary allows. CI never handles a secret: a deploy that sets
+# none keeps the stack's. The role could still read them, as anyone who can
+# read a keeper function's configuration can — they are its environment
+# variables.
+
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Swarm VolumeRegistry keeper — GitHub deploy role, permissions boundary and artifacts bucket
+
+Parameters:
+  GitHubRepository:
+    Type: String
+    AllowedPattern: "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+    Description: owner/repo allowed to deploy.
+  CreateOidcProvider:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: There is one GitHub OIDC provider per account. Set false if the account already has it.
+
+Conditions:
+  CreateProvider: !Equals [!Ref CreateOidcProvider, "true"]
+
+Resources:
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList: [sts.amazonaws.com]
+
+  # What the keeper's functions and schedules need, and nothing more.
+  PermissionsBoundary:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: keeper-permissions-boundary
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: Logs
+            Effect: Allow
+            Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
+            Resource: !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/keeper-*
+          - Sid: ScheduleInvokesKeeper
+            Effect: Allow
+            Action: lambda:InvokeFunction
+            Resource:
+              - !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:keeper-*
+              - !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:keeper-*:*
+
+  # The Lambda bundles `aws cloudformation package` uploads, one object per
+  # distinct bundle. Private, as every new bucket is; named by CloudFormation,
+  # so no other account can hold the name first.
+  ArtifactsBucket:
+    Type: AWS::S3::Bucket
+
+  DeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: github-deploy-keeper
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If
+                - CreateProvider
+                - !Ref GitHubOidcProvider
+                - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              StringLike:
+                token.actions.githubusercontent.com:sub:
+                  - !Sub repo:${GitHubRepository}:environment:sepolia
+                  - !Sub repo:${GitHubRepository}:environment:gnosis
+      Policies:
+        - PolicyName: keeper-deploy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: Stacks
+                Effect: Allow
+                Action: cloudformation:*
+                Resource: !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/keeper-*/*
+              - Sid: StacksReadOnly
+                Effect: Allow
+                Action: [cloudformation:GetTemplateSummary, cloudformation:ValidateTemplate, cloudformation:ListStacks]
+                Resource: "*"
+              # `aws cloudformation package` uploads the bundle; creating or
+              # updating a function from it reads it back as the caller.
+              - Sid: Artifacts
+                Effect: Allow
+                Action: [s3:PutObject, s3:GetObject]
+                Resource: !Sub ${ArtifactsBucket.Arn}/*
+              - Sid: Functions
+                Effect: Allow
+                Action: lambda:*
+                Resource:
+                  - !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:keeper-*
+                  - !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:keeper-*:*
+              - Sid: Schedules
+                Effect: Allow
+                Action: scheduler:*
+                Resource: !Sub arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/default/keeper-*
+              - Sid: LogGroups
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:DeleteLogGroup
+                  - logs:PutRetentionPolicy
+                  - logs:DeleteRetentionPolicy
+                  - logs:TagResource
+                  - logs:UntagResource
+                  - logs:ListTagsForResource
+                Resource: !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/keeper-*
+              - Sid: LogGroupsReadOnly
+                Effect: Allow
+                Action: logs:DescribeLogGroups
+                Resource: "*"
+              - Sid: Alarms
+                Effect: Allow
+                Action: [cloudwatch:PutMetricAlarm, cloudwatch:DeleteAlarms, cloudwatch:TagResource, cloudwatch:UntagResource]
+                Resource: !Sub arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:keeper-*
+              - Sid: AlarmsReadOnly
+                Effect: Allow
+                Action: [cloudwatch:DescribeAlarms, cloudwatch:ListTagsForResource]
+                Resource: "*"
+              - Sid: AlarmTopics
+                Effect: Allow
+                Action:
+                  - sns:CreateTopic
+                  - sns:DeleteTopic
+                  - sns:GetTopicAttributes
+                  - sns:SetTopicAttributes
+                  - sns:TagResource
+                  - sns:UntagResource
+                  - sns:ListTagsForResource
+                Resource: !Sub arn:${AWS::Partition}:sns:${AWS::Region}:${AWS::AccountId}:keeper-*
+              - Sid: RolesReadAndDelete
+                Effect: Allow
+                Action:
+                  - iam:GetRole
+                  - iam:GetRolePolicy
+                  - iam:ListRolePolicies
+                  - iam:ListAttachedRolePolicies
+                  - iam:DeleteRole
+                  - iam:TagRole
+                  - iam:UntagRole
+                  - iam:UpdateAssumeRolePolicy
+                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/keeper-*
+              # Any role it creates or grants to carries the boundary, so it
+              # can never grant more than the boundary allows.
+              - Sid: RolesUnderBoundary
+                Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:PutRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:PutRolePermissionsBoundary
+                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/keeper-*
+                Condition:
+                  StringEquals:
+                    iam:PermissionsBoundary: !Ref PermissionsBoundary
+              - Sid: PassRolesToKeeper
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/keeper-*
+                Condition:
+                  StringEquals:
+                    iam:PassedToService: [lambda.amazonaws.com, scheduler.amazonaws.com]
+              - Sid: KeepTheBoundary
+                Effect: Deny
+                Action: [iam:DeleteRolePermissionsBoundary, iam:CreatePolicyVersion, iam:DeletePolicy, iam:SetDefaultPolicyVersion]
+                Resource:
+                  - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/*
+                  - !Ref PermissionsBoundary
+
+Outputs:
+  DeployRoleArn:
+    Description: Set as the repository variable AWS_DEPLOY_ROLE_ARN.
+    Value: !GetAtt DeployRole.Arn
+  PermissionsBoundaryArn:
+    Value: !Ref PermissionsBoundary
+  ArtifactsBucket:
+    Description: Where `pnpm aws deploy` uploads the Lambda bundle. It reads this output.
+    Value: !Ref ArtifactsBucket

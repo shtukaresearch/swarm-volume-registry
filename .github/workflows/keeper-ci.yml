@@ -1,6 +1,6 @@
 # Keeper CI. Installs, typechecks, tests, and bundles both deployments for
 # both platforms: `wrangler deploy --dry-run` for Cloudflare, the Lambda
-# bundle plus `sam validate --lint` for AWS.
+# bundle plus each stack's template, linted with cfn-lint, for AWS.
 #
 # It never runs a keeper cycle: the platforms' schedulers are the only ones.
 # Nothing here needs cloud credentials either — both checks run locally — so
@@ -51,20 +51,18 @@ jobs:
 
       # Includes test/config.test.ts, which validates each deployment in
       # wrangler.jsonc against the Worker's own config rules — the part a dry
-      # run does not check — and test/aws.test.ts, which holds the AWS stacks
-      # derived from it to template.yaml.
+      # run does not check — and test/aws.test.ts, which checks the AWS stacks
+      # rendered from it.
       - name: Test
         run: pnpm test
 
       - name: Bundle both deployments (Cloudflare)
         run: pnpm check:deploy
 
-      - uses: aws-actions/setup-sam@v3
-        with:
-          use-installer: true
+      - name: Install cfn-lint
+        run: pipx install cfn-lint==1.57.2
 
-      - name: Bundle and validate the stack (AWS)
-        env:
-          AWS_DEFAULT_REGION: us-east-1
-          SAM_CLI_TELEMETRY: "0"
+      # Both stacks' templates, and infra/github-oidc.yaml, against
+      # CloudFormation's resource schemas.
+      - name: Bundle and lint both stacks (AWS)
         run: pnpm check:aws

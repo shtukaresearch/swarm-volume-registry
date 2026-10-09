@@ -13,14 +13,13 @@
     "check:deploy": "wrangler deploy --dry-run --env sepolia --outdir dist/sepolia && wrangler deploy --dry-run --env gnosis --outdir dist/gnosis",
     "aws": "node scripts/aws.ts",
     "build:aws": "node scripts/aws.ts build",
-    "check:aws": "node scripts/aws.ts build && sam validate --lint --template-file template.yaml",
+    "check:aws": "node scripts/aws.ts build sepolia gnosis && cfn-lint --ignore-checks W3002 -- infra/github-oidc.yaml dist/aws/*.json",
     "types": "wrangler types --strict-vars false",
     "check:types": "wrangler types --strict-vars false --check",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
-    "@aws-sdk/client-ssm": "3.1146.0",
     "viem": "2.55.16"
   },
   "devDependencies": {

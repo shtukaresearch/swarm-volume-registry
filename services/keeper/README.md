@@ -22,10 +22,9 @@ Both are envs in [`wrangler.jsonc`](./wrangler.jsonc), with independent wallets 
 | `src/reporting.ts` | the one structured report per run that logs and alerts are both rendered from |
 | `src/notifications/telegram.ts` | formats that report for Telegram and sends it |
 | `src/schedule.ts` | reads the cron shapes the deployments use, for the run budget and for EventBridge |
-| `src/aws/handler.ts` | the Lambda adapter: drives the Worker's own `scheduled()` and `fetch()`, with secrets from SSM |
-| `template.yaml` | the AWS stack (SAM): both functions, the schedule, log groups, alarms |
-| `scripts/aws.ts` | derives each stack from `wrangler.jsonc`, bundles, checks secrets, runs `sam deploy` |
-| `infra/github-oidc.yaml` | one-time AWS setup: the GitHub deploy role and the permissions boundary |
+| `src/aws/handler.ts` | the Lambda adapter: drives the Worker's own `scheduled()` and `fetch()`, with the function's environment variables as its bindings |
+| `scripts/aws.ts` | renders each AWS stack from `wrangler.jsonc` — both functions, the schedule, log groups, alarms — and deploys it with the AWS CLI |
+| `infra/github-oidc.yaml` | one-time AWS setup: the GitHub deploy role, the permissions boundary, the artifacts bucket |
 
 ## What a run reports
 
@@ -39,7 +38,7 @@ Every run logs one JSON object (`kind: "keeper/run"`) — to Workers Logs, or to
 
 Failures and warnings go to Telegram in both deployments. `NOTIFY_WARNINGS` remains configurable, but defaults to `true` so skipped top-ups, retirements and RPC failovers are visible.
 
-A failed run is not retried by the platform — `noRetry()` on Cloudflare, retries switched off in `template.yaml` on AWS: the next tick is the retry, and an overlapping one would race the same wallet's nonce. `trigger` is idempotent, so nothing is lost by waiting.
+A failed run is not retried by the platform — `noRetry()` on Cloudflare, retries switched off in the stack on AWS: the next tick is the retry, and an overlapping one would race the same wallet's nonce. `trigger` is idempotent, so nothing is lost by waiting.
 
 RPC URLs are reduced to scheme and host, and the bot token and private key are masked, everywhere a report goes — viem puts the full endpoint URL in its error text.
 
@@ -56,9 +55,9 @@ Secrets, per deployment — never shared between them:
 | `TELEGRAM_BOT_TOKEN` | From @BotFather. |
 | `TELEGRAM_CHAT_ID` | Numeric user or private-group chat ID. Both deployments may post to the same group, but store it independently. |
 
-Declared in `secrets.required`. On Cloudflare they are Worker secrets; on AWS, SSM SecureStrings named `/keeper-<env>/<NAME>`, read on every run. Either deploy refuses to ship a deployment with any of them unset. The keeper validates their shape too: a key or URL set to the wrong thing fails the run and alerts, rather than passing for an idle keeper.
+Declared in `secrets.required`. On Cloudflare they are Worker secrets; on AWS, environment variables of both functions, set through the stack's NoEcho parameters — so anyone who can read a function's configuration can read them. Either deploy refuses to ship a deployment with any of them unset. The keeper validates their shape too: a key or URL set to the wrong thing fails the run and alerts, rather than passing for an idle keeper.
 
-Variables, in `wrangler.jsonc` per env: `DEPLOYMENT_NAME`, `CHAIN_ID`, `REGISTRY_ADDRESS`, `NOTIFY_WARNINGS`, `MIN_BALANCE_WEI` (0 disables the warning), and the cycle limits `MAX_VOLUMES_PER_CYCLE`, `CYCLE_TIMEOUT_MS`, `RECEIPT_TIMEOUT_MS`, `CONFIRMATIONS`. Not set by either deployment, but accepted: `DRY_RUN`, `VOLUME_IDS` (maintain only these), `PAGE_SIZE`. On AWS they reach the function as one JSON variable, `KEEPER_VARS`, so a change to `wrangler.jsonc` needs a redeploy on either platform.
+Variables, in `wrangler.jsonc` per env: `DEPLOYMENT_NAME`, `CHAIN_ID`, `REGISTRY_ADDRESS`, `NOTIFY_WARNINGS`, `MIN_BALANCE_WEI` (0 disables the warning), and the cycle limits `MAX_VOLUMES_PER_CYCLE`, `CYCLE_TIMEOUT_MS`, `RECEIPT_TIMEOUT_MS`, `CONFIRMATIONS`. Not set by either deployment, but accepted: `DRY_RUN`, `VOLUME_IDS` (maintain only these), `PAGE_SIZE`. On AWS each is an environment variable of the same name, so a change to `wrangler.jsonc` needs a redeploy on either platform.
 
 **A run must fit inside its cron interval**, so two runs never share the wallet at once: 5 s of RPC probing, plus `CYCLE_TIMEOUT_MS` (no new transaction starts after it), plus `RECEIPT_TIMEOUT_MS` for the last one, plus 5 s of slack. `test/config.test.ts` holds each env to that, and to the 15-minute limit both platforms put on a scheduled run. On AWS the function's timeout is the interval itself, and it may run only one invocation at a time. On Sepolia that leaves about two volumes a minute at 12 s blocks — if it ever maintains more, that budget is what to revisit.
 
@@ -68,13 +67,13 @@ Repository variables `KEEPER_PLATFORM_SEPOLIA` and `KEEPER_PLATFORM_GNOSIS` — 
 
 To move a deployment from Cloudflare to AWS:
 
-1. Set up AWS (below) and deploy the stack with its schedule off: `pnpm aws deploy <env> --paused`. Check `/health` reports the same wallet as the Worker's.
+1. Set up AWS (below) and deploy the stack with its schedule off (*Initial deployment*). Check `/health` reports the same wallet as the Worker's.
 2. Stop the Worker: `pnpm exec wrangler delete --env <env>`. Its secrets go with it.
 3. Set `KEEPER_PLATFORM_<ENV>=aws` and deploy without `--paused` — dispatch `keeper-deploy`, or `pnpm aws deploy <env>`.
 
 A paused stack is safe to keep beside a live Worker; an unpaused one is not, even with `DRY_RUN` — a dry run still spends RPC quota and posts warnings every tick.
 
-Back to Cloudflare is the same in reverse: `aws cloudformation delete-stack --stack-name keeper-<env>` (the SSM secrets stay), then set the variable to `cloudflare` and redeploy the Worker with its secrets (*Initial worker deployment*).
+Back to Cloudflare is the same in reverse: `aws cloudformation delete-stack --stack-name keeper-<env>` (its secrets go with it), then set the variable to `cloudflare` and redeploy the Worker with its secrets (*Initial worker deployment*).
 
 ## Working on it
 
@@ -85,7 +84,7 @@ pnpm install
 pnpm test            # Vitest; includes whole scheduled runs against a mock chain, on both platforms' entry points
 pnpm typecheck
 pnpm check:deploy    # bundles both envs for Cloudflare, as CI does
-pnpm check:aws       # bundles the Lambda and runs `sam validate --lint` (needs the SAM CLI)
+pnpm check:aws       # bundles the Lambda, renders both stacks and lints them (needs cfn-lint)
 ```
 
 After changing `wrangler.jsonc`, run `pnpm types` and commit `worker-configuration.d.ts`; CI fails if it is stale.
@@ -150,13 +149,15 @@ The next cron tick uses the new value; no restart needed.
 
 ## AWS
 
-One CloudFormation stack per deployment, named like the Worker (`keeper-sepolia`), from [`template.yaml`](./template.yaml):
+One CloudFormation stack per deployment, named like the Worker (`keeper-sepolia`), rendered from `wrangler.jsonc` by [`scripts/aws.ts`](./scripts/aws.ts) — plain CloudFormation, no transform:
 
 - **`keeper-<env>`** — the keeper function (Node 24, arm64), run by an EventBridge schedule derived from the env's cron. One invocation at a time, timeout = the cron interval, no retries.
-- **`keeper-<env>-health`** — `GET /health` on a public Function URL. Its own function, so traffic on the URL can never take the keeper's one concurrent run; it reuses the secrets it read for a minute, so the URL cannot be used to spend SSM throughput either.
+- **`keeper-<env>-health`** — `GET /health` on a public Function URL. Its own function, so traffic on the URL can never take the keeper's one concurrent run.
 - Log groups (30 days), the alarm topic and three alarms.
 
-`pnpm aws deploy <env>` ([`scripts/aws.ts`](./scripts/aws.ts)) derives every stack parameter from `wrangler.jsonc`, checks that SSM holds every `secrets.required` name — names only, it never reads a value — bundles the Lambda, and runs `sam deploy`. It needs the [SAM CLI](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-sam-cli.html) and AWS credentials for the target account and region (`AWS_PROFILE` / `AWS_REGION`).
+Both functions get the Worker's bindings as their environment variables, under the same names: the env's `vars` as they are, its `secrets.required` from NoEcho stack parameters (`PRIVATE_KEY` is `PrivateKey`), so no template holds them.
+
+`pnpm aws deploy <env>` checks the stack will have a value for every `secrets.required` name, bundles the Lambda, renders the template, and ships both with the AWS CLI: `aws cloudformation package` uploads the bundle to the artifacts bucket, `aws cloudformation deploy` creates or updates the stack. It needs the [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) and credentials for the target account and region (`AWS_PROFILE` / `AWS_REGION`). `pnpm aws build <env>` renders the template without deploying, to `dist/aws/keeper-<env>.json`.
 
 ### One-time account setup
 
@@ -168,7 +169,7 @@ One CloudFormation stack per deployment, named like the Worker (`keeper-sepolia`
 
 2. **Public Function URLs.** If the account is in an AWS Organization, check no SCP or Lambda public-access block denies `lambda:InvokeFunctionUrl` with `FunctionUrlAuthType: NONE`; `/health` needs it.
 
-3. **Deploy role and permissions boundary**, as an administrator:
+3. **Deploy role, permissions boundary and artifacts bucket**, as an administrator:
 
    ```bash
    aws cloudformation deploy --stack-name keeper-bootstrap \
@@ -177,7 +178,7 @@ One CloudFormation stack per deployment, named like the Worker (`keeper-sepolia`
    # CreateOidcProvider=false if the account already has GitHub's OIDC provider
    ```
 
-   `template.yaml` puts every role it creates under the `keeper-permissions-boundary` this creates, so it must exist before any keeper stack — even one deployed by hand.
+   Every keeper stack puts its roles under the `keeper-permissions-boundary` this creates, and its bundle in the bucket, so it must exist before any keeper stack — even one deployed by hand. Keep the stack name: `pnpm aws deploy` finds the bucket in `keeper-bootstrap`'s outputs.
 
 4. **CI.** Set repository variables `AWS_DEPLOY_ROLE_ARN` (the stack's `DeployRoleArn` output) and `AWS_REGION`. They must be repository variables: the deploy job checks them before it enters an Environment.
 
@@ -186,14 +187,15 @@ One CloudFormation stack per deployment, named like the Worker (`keeper-sepolia`
 ```bash
 cd services/keeper && pnpm install
 printf 'PRIVATE_KEY=0x…\nRPC_URL=https://…,https://…\nTELEGRAM_BOT_TOKEN=…\nTELEGRAM_CHAT_ID=-100…\n' > .secrets.sepolia
-pnpm aws put-secrets sepolia .secrets.sepolia     # SSM SecureStrings under /keeper-sepolia/
+pnpm aws deploy sepolia --paused --secrets-file .secrets.sepolia   # schedule off while the Worker still runs
 rm .secrets.sepolia
-pnpm aws deploy sepolia --paused                  # schedule off while the Worker still runs
 ```
 
 On an account with no Worker for this deployment, `--var DRY_RUN:true` instead of `--paused` runs on schedule but sends nothing, reporting each run as a warning.
 
-`put-secrets` reads the same file `wrangler deploy --secrets-file` does, and refuses names that are not in `secrets.required`. `--var` overrides a variable for this deploy only, as with `wrangler dev`.
+`--secrets-file` reads the same file `wrangler deploy --secrets-file` does, and refuses names that are not in `secrets.required`; a new stack needs all of them. The AWS CLI gets them in a file only you can read, never on its command line. `--var` overrides a variable for this deploy only, as with `wrangler dev`.
+
+A first deploy that fails leaves the stack in `ROLLBACK_COMPLETE`, which cannot be updated: delete it (`aws cloudformation delete-stack --stack-name keeper-sepolia`) and deploy again.
 
 Then:
 
@@ -206,16 +208,16 @@ Then:
   ```
 
 - **Fund the wallet.** The stack's `HealthUrl` output, plus `health`, answers exactly as the Worker's `/health` does.
-- **Watch a run:** `sam logs --stack-name keeper-sepolia --tail`.
+- **Watch a run:** `aws logs tail /aws/lambda/keeper-sepolia --follow`.
 - **Go live**, once the Worker is stopped (*Choosing the platform*): `pnpm aws deploy sepolia`.
 
 ### Secret rotation
 
 ```bash
-pnpm aws put-secrets sepolia .secrets.sepolia     # any subset of the four names
+pnpm aws deploy sepolia --secrets-file .secrets.sepolia   # any subset of the four names
 ```
 
-The next scheduled run reads the new value — SSM is read every run, so no redeploy; `/health` within a minute. `aws ssm put-parameter --name /keeper-sepolia/RPC_URL --type SecureString --overwrite --value …` works for a single value too.
+A secret the file leaves out keeps its value. The deploy updates both functions' environment, and Lambda starts new instances with it, so the next run and `/health` use the new value. It deploys the checked-out code too, as `wrangler deploy --secrets-file` does: rotate from an up-to-date `main`. Rotate only through the stack, never by editing a function's environment: a later deploy would put the stack's value back.
 
 ### Pausing
 

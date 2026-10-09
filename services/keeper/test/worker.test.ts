@@ -5,8 +5,7 @@
  *
  * The mock chain is served over a stubbed `fetch`, so what runs is the real
  * path: bindings → config → endpoint probe → viem `http` transports → cycle →
- * report → log → Telegram. Nothing is injected past the network boundary —
- * on Lambda, but for the SSM read, which a stub stands in for.
+ * report → log → Telegram. Nothing is injected past the network boundary.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { privateKeyToAccount } from "viem/accounts";
@@ -154,40 +153,20 @@ const cloudflare: Runtime = {
     ),
 };
 
-/** wrangler.jsonc's `secrets.required`: in SSM on Lambda, not in KEEPER_VARS. */
-const SECRET_NAMES = ["PRIVATE_KEY", "RPC_URL", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"];
-
-/** The same bindings, split the way a Lambda deployment receives them. */
-function lambda(bindings: KeeperEnv) {
-  const vars: Record<string, string> = {};
-  const ssm: Record<string, string> = {};
-  for (const [name, value] of Object.entries(bindings)) {
-    // SSM cannot hold an empty value: an empty secret is a missing one.
-    if (typeof value === "string" && value !== "") (SECRET_NAMES.includes(name) ? ssm : vars)[name] = value;
-  }
-  return createHandlers(
-    async (names) => Object.fromEntries(names.filter((n) => n in ssm).map((n) => [n, ssm[n]!])),
-    {
-      KEEPER_VARS: JSON.stringify(vars),
-      KEEPER_SECRETS: SECRET_NAMES.join(","),
-      KEEPER_SECRETS_PATH: "/keeper-test/",
-    },
-  );
-}
-
+// On Lambda, the same bindings are the function's environment variables.
 const aws: Runtime = {
   name: "AWS Lambda",
-  // No noRetry: on Lambda, retries are off in template.yaml.
+  // No noRetry: on Lambda, retries are off in the stack.
   async scheduled(bindings) {
     const event = { cron: "* * * * *", scheduledTime: new Date().toISOString() };
-    return { outcome: await settle(lambda(bindings).scheduled(event)) };
+    return { outcome: await settle(createHandlers(bindings).scheduled(event)) };
   },
   async fetch(path, bindings) {
-    const result = await lambda(bindings).health({
+    const result = await createHandlers(bindings).health({
       rawPath: path,
       rawQueryString: "",
       requestContext: { domainName: "abc.lambda-url.eu-central-1.on.aws", http: { method: "GET" } },
-    } as Parameters<ReturnType<typeof lambda>["health"]>[0]);
+    } as Parameters<ReturnType<typeof createHandlers>["health"]>[0]);
     if (typeof result === "string") throw new Error("expected a structured result");
     const response = new Response(result.body, {
       status: result.statusCode,
@@ -225,7 +204,7 @@ for (const runtime of [cloudflare, aws]) {
       expect(outcome).toBeInstanceOf(KeeperRunFailed);
       expect((outcome as Error).message).toBe("keeper-test: 1 volume failed");
       // The next tick is the retry; a platform retry could overlap it. On
-      // Lambda, template.yaml switches retries off instead.
+      // Lambda, the stack switches retries off instead.
       if (noRetry) expect(noRetry).toHaveBeenCalled();
 
       const report = logged();

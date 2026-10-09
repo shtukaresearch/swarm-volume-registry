@@ -1,13 +1,16 @@
 # One-time AWS setup for the keeper, deployed once per account and region by
-# an administrator, before the first `pnpm aws deploy`:
+# an administrator, before the first `pnpm aws deploy`. Keep the stack name:
+# that deploy finds the artifacts bucket in keeper-bootstrap's outputs.
 #
 #   aws cloudformation deploy --stack-name keeper-bootstrap \
 #     --template-file infra/github-oidc.yaml --capabilities CAPABILITY_NAMED_IAM \
 #     --parameter-overrides GitHubRepository=<owner>/<repo>
 #
 # It creates:
-#   - keeper-permissions-boundary: the most any role template.yaml creates
-#     may do. template.yaml sets it on every role, so it must exist first.
+#   - keeper-permissions-boundary: the most any role a keeper stack creates
+#     may do. Every keeper stack sets it on each of its roles, so it must
+#     exist first.
+#   - the artifacts bucket, where `pnpm aws deploy` uploads the Lambda bundle.
 #   - github-deploy-keeper: the role .github/workflows/keeper-deploy.yml
 #     assumes through GitHub OIDC, from the `sepolia` and `gnosis` Environments
 #     only. No AWS key is stored in GitHub. Deliberately not named keeper-*,
@@ -15,11 +18,13 @@
 #
 # The deploy role can manage only keeper-* resources, and can create IAM
 # roles only under the boundary, so it cannot grant itself or a function more
-# than the boundary allows. It never reads a secret: it can list SSM
-# parameter names, not decrypt their values.
+# than the boundary allows. CI never handles a secret: a deploy that sets
+# none keeps the stack's. The role could still read them, as anyone who can
+# read a keeper function's configuration can — they are its environment
+# variables.
 
 AWSTemplateFormatVersion: "2010-09-09"
-Description: Swarm VolumeRegistry keeper — GitHub deploy role and permissions boundary
+Description: Swarm VolumeRegistry keeper — GitHub deploy role, permissions boundary and artifacts bucket
 
 Parameters:
   GitHubRepository:
@@ -55,16 +60,18 @@ Resources:
             Effect: Allow
             Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
             Resource: !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/keeper-*
-          - Sid: ReadKeeperSecrets
-            Effect: Allow
-            Action: [ssm:GetParameter, ssm:GetParameters, ssm:GetParametersByPath]
-            Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/keeper-*
           - Sid: ScheduleInvokesKeeper
             Effect: Allow
             Action: lambda:InvokeFunction
             Resource:
               - !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:keeper-*
               - !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:keeper-*:*
+
+  # The Lambda bundles `aws cloudformation package` uploads, one object per
+  # distinct bundle. Private, as every new bucket is; named by CloudFormation,
+  # so no other account can hold the name first.
+  ArtifactsBucket:
+    Type: AWS::S3::Bucket
 
   DeployRole:
     Type: AWS::IAM::Role
@@ -96,25 +103,17 @@ Resources:
               - Sid: Stacks
                 Effect: Allow
                 Action: cloudformation:*
-                Resource:
-                  - !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/keeper-*/*
-                  - !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/aws-sam-cli-managed-default/*
-              - Sid: SamTransform
-                Effect: Allow
-                Action: cloudformation:CreateChangeSet
-                Resource: !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:aws:transform/Serverless-2016-10-31
+                Resource: !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/keeper-*/*
               - Sid: StacksReadOnly
                 Effect: Allow
                 Action: [cloudformation:GetTemplateSummary, cloudformation:ValidateTemplate, cloudformation:ListStacks]
                 Resource: "*"
-              # `sam deploy --resolve-s3` uploads the bundle here, creating the
-              # bucket through the aws-sam-cli-managed-default stack once.
-              - Sid: SamArtifacts
+              # `aws cloudformation package` uploads the bundle; creating or
+              # updating a function from it reads it back as the caller.
+              - Sid: Artifacts
                 Effect: Allow
-                Action: s3:*
-                Resource:
-                  - !Sub arn:${AWS::Partition}:s3:::aws-sam-cli-managed-default-samclisourcebucket-*
-                  - !Sub arn:${AWS::Partition}:s3:::aws-sam-cli-managed-default-samclisourcebucket-*/*
+                Action: [s3:PutObject, s3:GetObject]
+                Resource: !Sub ${ArtifactsBucket.Arn}/*
               - Sid: Functions
                 Effect: Allow
                 Action: lambda:*
@@ -159,12 +158,6 @@ Resources:
                   - sns:UntagResource
                   - sns:ListTagsForResource
                 Resource: !Sub arn:${AWS::Partition}:sns:${AWS::Region}:${AWS::AccountId}:keeper-*
-              # scripts/aws.ts checks the secrets exist before deploying. Names
-              # only: no ssm:GetParameter*, no kms:Decrypt.
-              - Sid: SecretNames
-                Effect: Allow
-                Action: ssm:DescribeParameters
-                Resource: "*"
               - Sid: RolesReadAndDelete
                 Effect: Allow
                 Action:
@@ -212,3 +205,6 @@ Outputs:
     Value: !GetAtt DeployRole.Arn
   PermissionsBoundaryArn:
     Value: !Ref PermissionsBoundary
+  ArtifactsBucket:
+    Description: Where `pnpm aws deploy` uploads the Lambda bundle. It reads this output.
+    Value: !Ref ArtifactsBucket

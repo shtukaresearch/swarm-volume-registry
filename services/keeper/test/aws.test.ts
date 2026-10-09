@@ -1,32 +1,32 @@
 /**
  * What the AWS deployment adds around the Worker: deriving each stack from
- * wrangler.jsonc, reading secrets from SSM, and the Lambda event shapes.
- * Whole runs through the Lambda handlers are in worker.test.ts, alongside the
- * Worker's.
+ * wrangler.jsonc, and the Lambda event shapes. Whole runs through the Lambda
+ * handlers are in worker.test.ts, alongside the Worker's.
  */
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { SSMClient } from "@aws-sdk/client-ssm";
 import { unstable_readConfig } from "wrangler";
 import {
-  TEMPLATE,
+  PERMISSIONS_BOUNDARY,
   awsDeployment,
   missingSecrets,
   parseSecretsFile,
-  samParameter,
+  secretOverrides,
+  secretParameter,
+  template,
 } from "../scripts/aws.js";
-import { HEALTH_SECRETS_TTL_MS, createHandlers, ssmSecrets } from "../src/aws/handler.js";
+import { createHandlers, health } from "../src/aws/handler.js";
+import type { KeeperEnv } from "../src/config.js";
 import { KeeperRunFailed } from "../src/index.js";
 import { cronIntervalSeconds, toEventBridgeCron } from "../src/schedule.js";
 
 const DEPLOYMENTS = ["sepolia", "gnosis"] as const;
 
-/** An SSM client that answers each command with `respond(input)`. */
-function fakeSsm(respond: (input: Record<string, unknown>) => unknown) {
-  const send = vi.fn(async (command: { input: Record<string, unknown> }) => respond(command.input));
-  return { client: { send } as unknown as Pick<SSMClient, "send">, send };
-}
+const spies: Array<{ mockRestore(): void }> = [];
+afterEach(() => {
+  while (spies.length) spies.pop()!.mockRestore();
+  vi.unstubAllEnvs();
+});
 
 describe("schedule", () => {
   test.each([
@@ -49,38 +49,21 @@ describe("awsDeployment", () => {
   for (const env of DEPLOYMENTS) {
     test(`${env}: everything comes from wrangler.jsonc`, () => {
       const worker = unstable_readConfig({ config: join(import.meta.dirname, "..", "wrangler.jsonc"), env });
-      const aws = awsDeployment(env);
       const cron = worker.triggers.crons![0]!;
 
-      expect(aws.name).toBe(`keeper-${env}`);
-      expect(aws.secretsPath).toBe(`/keeper-${env}/`);
-      expect(aws.secrets).toEqual(worker.secrets!.required!);
-      expect(JSON.parse(aws.parameters.KeeperVars!)).toEqual(worker.vars);
-      expect(aws.parameters).toMatchObject({
-        DeploymentName: worker.name,
-        KeeperSecrets: worker.secrets!.required!.join(","),
-        Cron: cron,
-        ScheduleExpression: toEventBridgeCron(cron),
-        IntervalSeconds: String(cronIntervalSeconds(cron)),
+      expect(awsDeployment(env)).toEqual({
+        name: `keeper-${env}`,
+        vars: worker.vars,
+        secrets: worker.secrets!.required,
+        cron,
+        interval: cronIntervalSeconds(cron),
+        paused: false,
       });
-      // Every parameter must survive SAM CLI's --parameter-overrides parsing.
-      for (const [key, value] of Object.entries(aws.parameters)) samParameter(key, value);
     });
   }
 
-  test("a run cannot outlast its interval, nor Lambda's 15 minutes", () => {
-    expect(awsDeployment("sepolia").parameters.TimeoutSeconds).toBe("60");
-    expect(awsDeployment("gnosis").parameters.TimeoutSeconds).toBe("900");
-  });
-
-  // Every deploy states it, so no deploy can leave the schedule as it found it.
-  test("--paused deploys with the schedule off; anything else turns it on", () => {
-    expect(awsDeployment("sepolia").parameters.ScheduleState).toBe("ENABLED");
-    expect(awsDeployment("sepolia", {}, { paused: true }).parameters.ScheduleState).toBe("DISABLED");
-  });
-
   test("--var overrides a var for one deploy", () => {
-    const vars = JSON.parse(awsDeployment("sepolia", { DRY_RUN: "true" }).parameters.KeeperVars!);
+    const { vars } = awsDeployment("sepolia", { DRY_RUN: "true" });
     expect(vars.DRY_RUN).toBe("true");
     expect(vars.DEPLOYMENT_NAME).toBe("keeper-sepolia");
   });
@@ -89,29 +72,132 @@ describe("awsDeployment", () => {
   test("the root config has no cron, so no stack", () => {
     expect(() => awsDeployment("")).toThrow("expected exactly one cron trigger");
   });
+});
 
-  test("passes exactly the parameters template.yaml requires", () => {
-    const template = readFileSync(TEMPLATE, "utf8");
-    const section = template.slice(template.indexOf("\nParameters:\n"), template.indexOf("\nConditions:\n"));
-    const declared = [...section.matchAll(/^ {2}(\w+):\n((?: {4}.*\n)*)/gm)];
-    const required = declared.filter(([, , body]) => !/^ {4}Default:/m.test(body!)).map(([, name]) => name!);
-    const all = declared.map(([, name]) => name!);
+describe("template", () => {
+  type Resource = { Type: string; Properties: Record<string, unknown> };
+  const resources = (deployment = awsDeployment("sepolia")) =>
+    Object.values(template(deployment).Resources) as Resource[];
 
-    const passed = Object.keys(awsDeployment("sepolia").parameters);
-    expect(passed.sort()).toEqual(required.sort());
-    for (const name of passed) expect(all).toContain(name);
+  for (const env of DEPLOYMENTS) {
+    // The Worker's bindings, under the same names: vars as they are, secrets
+    // from the stack's parameters.
+    test(`${env}: both functions get the Worker's bindings as environment variables`, () => {
+      const deployment = awsDeployment(env);
+      const { KeeperFunction, HealthFunction } = template(deployment).Resources;
+      const expected = {
+        ...deployment.vars,
+        PRIVATE_KEY: { Ref: "PrivateKey" },
+        RPC_URL: { Ref: "RpcUrl" },
+        TELEGRAM_BOT_TOKEN: { Ref: "TelegramBotToken" },
+        TELEGRAM_CHAT_ID: { Ref: "TelegramChatId" },
+        NODE_OPTIONS: "--enable-source-maps",
+      };
+      expect(KeeperFunction.Properties.Environment.Variables).toEqual(expected);
+      expect(HealthFunction.Properties.Environment.Variables).toEqual(expected);
+    });
+  }
+
+  test("--var reaches the functions' environment", () => {
+    const { KeeperFunction } = template(awsDeployment("sepolia", { DRY_RUN: "true" })).Resources;
+    expect(KeeperFunction.Properties.Environment.Variables).toMatchObject({ DRY_RUN: "true" });
+  });
+
+  // NoEcho keeps a value out of every description of the stack, and a deploy
+  // that does not pass one keeps the stack's.
+  test("the secrets are its only parameters: NoEcho, and never empty", () => {
+    const { Parameters } = template(awsDeployment("sepolia"));
+    expect(Object.keys(Parameters)).toEqual(["PrivateKey", "RpcUrl", "TelegramBotToken", "TelegramChatId"]);
+    for (const parameter of Object.values(Parameters)) {
+      expect(parameter).toMatchObject({ Type: "String", NoEcho: true, MinLength: 1 });
+    }
+  });
+
+  test("the schedule runs the env's cron, and tells each run which", () => {
+    const { Schedule } = template(awsDeployment("gnosis")).Resources;
+    expect(Schedule.Properties).toMatchObject({
+      Name: "keeper-gnosis",
+      ScheduleExpression: "cron(0 * * * ? *)",
+      ScheduleExpressionTimezone: "UTC",
+    });
+    expect(JSON.parse(Schedule.Properties.Target.Input)).toEqual({
+      cron: "0 * * * *",
+      scheduledTime: "<aws.scheduler.scheduled-time>",
+    });
+  });
+
+  test("a run cannot outlast its interval, nor Lambda's 15 minutes", () => {
+    expect(template(awsDeployment("sepolia")).Resources.KeeperFunction.Properties.Timeout).toBe(60);
+    expect(template(awsDeployment("gnosis")).Resources.KeeperFunction.Properties.Timeout).toBe(900);
+  });
+
+  // The Worker's noRetry(), and docs/KEEPERS.md's one run at a time.
+  test("one keeper run at a time, never retried", () => {
+    const { KeeperFunction, KeeperInvokeConfig, Schedule } = template(awsDeployment("sepolia")).Resources;
+    expect(KeeperFunction.Properties.ReservedConcurrentExecutions).toBe(1);
+    expect(KeeperInvokeConfig.Properties.MaximumRetryAttempts).toBe(0);
+    expect(Schedule.Properties.Target.RetryPolicy.MaximumRetryAttempts).toBe(0);
+  });
+
+  // Every deploy states it, so no deploy can leave the schedule as it found it.
+  test("--paused deploys with the schedule and its alarm off; anything else turns them on", () => {
+    const live = template(awsDeployment("sepolia")).Resources;
+    const paused = template(awsDeployment("sepolia", {}, { paused: true })).Resources;
+    expect(live.Schedule.Properties.State).toBe("ENABLED");
+    expect(live.NotRunningAlarm.Properties.ActionsEnabled).toBe(true);
+    expect(paused.Schedule.Properties.State).toBe("DISABLED");
+    expect(paused.NotRunningAlarm.Properties.ActionsEnabled).toBe(false);
+  });
+
+  test("the not-running alarm counts in the env's own intervals", () => {
+    const { NotRunningAlarm } = template(awsDeployment("gnosis")).Resources;
+    expect(NotRunningAlarm.Properties).toMatchObject({ Period: 3600, EvaluationPeriods: 3 });
+  });
+
+  // The deploy role creates roles only under it (infra/github-oidc.yaml).
+  test("every role carries the permissions boundary", () => {
+    const roles = resources().filter((r) => r.Type === "AWS::IAM::Role");
+    expect(roles).toHaveLength(2);
+    for (const role of roles) expect(role.Properties.PermissionsBoundary).toEqual(PERMISSIONS_BOUNDARY);
+  });
+
+  // The deploy role manages keeper-* resources only.
+  test("names everything after the deployment", () => {
+    const names = resources().flatMap((r) =>
+      ["FunctionName", "Name", "LogGroupName", "TopicName", "AlarmName"]
+        .map((key) => r.Properties[key])
+        .filter((name) => typeof name === "string"),
+    );
+    expect(names).toHaveLength(9);
+    for (const name of names) expect(name).toMatch(/^(\/aws\/lambda\/)?keeper-sepolia(-|$)/);
+  });
+
+  test("the public URL reaches the health function only", () => {
+    const { HealthUrl } = template(awsDeployment("sepolia")).Resources;
+    expect(HealthUrl.Properties).toEqual({ TargetFunctionArn: { "Fn::GetAtt": ["HealthFunction", "Arn"] }, AuthType: "NONE" });
+    const grants = resources().filter((r) => r.Type === "AWS::Lambda::Permission");
+    expect(grants).toHaveLength(2);
+    for (const grant of grants) expect(grant.Properties.FunctionName).toEqual({ Ref: "HealthFunction" });
   });
 });
 
-describe("samParameter", () => {
-  test("quotes the value and escapes its quotes", () => {
-    expect(samParameter("KeeperVars", '{"A":"1"}')).toBe('KeeperVars="{\\"A\\":\\"1\\"}"');
-    expect(samParameter("Cron", "* * * * *")).toBe('Cron="* * * * *"');
+describe("secret parameters", () => {
+  test.each([
+    ["PRIVATE_KEY", "PrivateKey"],
+    ["RPC_URL", "RpcUrl"],
+    ["TELEGRAM_BOT_TOKEN", "TelegramBotToken"],
+    ["TELEGRAM_CHAT_ID", "TelegramChatId"],
+  ])("%s is set through %s", (name, parameter) => {
+    expect(secretParameter(name)).toBe(parameter);
   });
 
-  // SAM CLI unescapes \" and nothing else.
-  test("refuses a backslash, which cannot round-trip", () => {
-    expect(() => samParameter("KeeperVars", '{"A":"\\""}')).toThrow("backslash");
+  // AWS CLI v2 also takes CloudFormation's {ParameterKey, ParameterValue}
+  // objects from a file; v1 rejects them.
+  test("are passed as Key=Value strings, each value as it is", () => {
+    expect(secretOverrides({ PRIVATE_KEY: "0xabc", RPC_URL: "https://a.example/k?x=1,https://b.example" })).toEqual([
+      "PrivateKey=0xabc",
+      "RpcUrl=https://a.example/k?x=1,https://b.example",
+    ]);
   });
 });
 
@@ -148,61 +234,35 @@ describe("parseSecretsFile", () => {
 });
 
 describe("missingSecrets", () => {
-  test("names what SSM lacks, across pages, without reading values", async () => {
-    const deployment = awsDeployment("sepolia");
-    const pages = [
-      { Parameters: [{ Name: "/keeper-sepolia/PRIVATE_KEY" }], NextToken: "next" },
-      { Parameters: [{ Name: "/keeper-sepolia/RPC_URL" }] },
-    ];
-    const { client, send } = fakeSsm(() => pages.shift());
+  const deployment = awsDeployment("sepolia");
+  const everySecret = ["PrivateKey", "RpcUrl", "TelegramBotToken", "TelegramChatId"];
 
-    expect(await missingSecrets(deployment, client)).toEqual([
-      "/keeper-sepolia/TELEGRAM_BOT_TOKEN",
-      "/keeper-sepolia/TELEGRAM_CHAT_ID",
+  test("a new stack needs every secret given", () => {
+    expect(missingSecrets(deployment, ["PRIVATE_KEY"], [])).toEqual([
+      "RPC_URL",
+      "TELEGRAM_BOT_TOKEN",
+      "TELEGRAM_CHAT_ID",
     ]);
-    expect(send).toHaveBeenCalledTimes(2);
-    expect(send.mock.calls[1]![0].input).toMatchObject({ NextToken: "next" });
-    expect(send.mock.calls[0]![0].constructor.name).toBe("DescribeParametersCommand");
   });
-});
 
-describe("ssmSecrets", () => {
-  test("reads each name under the path, decrypted, and strips the path", async () => {
-    const { client, send } = fakeSsm((input) => ({
-      Parameters: (input.Names as string[])
-        .filter((name) => !name.endsWith("MISSING"))
-        .map((Name) => ({ Name, Value: `value of ${Name}` })),
-    }));
-    const names = Array.from({ length: 12 }, (_, i) => `S${i}`).concat("MISSING");
+  test("an existing stack keeps the secrets it has", () => {
+    expect(missingSecrets(deployment, [], everySecret)).toEqual([]);
+    expect(missingSecrets(deployment, ["RPC_URL"], everySecret)).toEqual([]);
+  });
 
-    const found = await ssmSecrets("/keeper-test/", client)(names);
-
-    expect(Object.keys(found)).toHaveLength(12);
-    expect(found.S0).toBe("value of /keeper-test/S0");
-    expect(found).not.toHaveProperty("MISSING");
-    // GetParameters takes at most ten names.
-    expect(send).toHaveBeenCalledTimes(2);
-    expect(send.mock.calls[0]![0].input).toMatchObject({ WithDecryption: true });
-    expect((send.mock.calls[0]![0].input.Names as string[])[0]).toBe("/keeper-test/S0");
+  // As `secrets.required` does for a Worker deployed before the name was added.
+  test("a secret the stack has never had must be given", () => {
+    expect(missingSecrets(deployment, [], everySecret.slice(1))).toEqual(["PRIVATE_KEY"]);
   });
 });
 
 describe("Lambda handlers", () => {
-  const spies: Array<{ mockRestore(): void }> = [];
-  afterEach(() => {
-    while (spies.length) spies.pop()!.mockRestore();
-  });
-
-  const processEnv = {
-    KEEPER_VARS: JSON.stringify({ DEPLOYMENT_NAME: "keeper-test" }),
-    KEEPER_SECRETS: "PRIVATE_KEY,RPC_URL",
-    KEEPER_SECRETS_PATH: "/keeper-test/",
-  };
+  const env = { DEPLOYMENT_NAME: "keeper-test" } as KeeperEnv;
 
   test("a run reports the schedule's cron and tick time", async () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     spies.push(error);
-    const { scheduled } = createHandlers(async () => ({}), processEnv);
+    const { scheduled } = createHandlers(env);
 
     const outcome = await scheduled({ cron: "0 * * * *", scheduledTime: "2026-10-07T12:00:00Z" }).catch(
       (err: unknown) => err,
@@ -218,18 +278,6 @@ describe("Lambda handlers", () => {
     });
   });
 
-  test("asks for exactly the deployment's secrets", async () => {
-    spies.push(vi.spyOn(console, "error").mockImplementation(() => {}));
-    const source = vi.fn(async () => ({}));
-    await createHandlers(source, processEnv).scheduled({}).catch(() => {});
-    expect(source).toHaveBeenCalledWith(["PRIVATE_KEY", "RPC_URL"]);
-  });
-
-  test("an undeployable KEEPER_VARS throws, naming the fix", async () => {
-    const { scheduled } = createHandlers(async () => ({}), { ...processEnv, KEEPER_VARS: "{" });
-    await expect(scheduled({})).rejects.toThrow("KEEPER_VARS is not valid JSON");
-  });
-
   const request = (rawPath: string, rawQueryString = "") =>
     ({
       rawPath,
@@ -238,34 +286,20 @@ describe("Lambda handlers", () => {
     }) as Parameters<ReturnType<typeof createHandlers>["health"]>[0];
 
   test("health answers as a Function URL result", async () => {
-    const { health } = createHandlers(async () => ({}), processEnv);
-    const result = await health(request("/health", "verbose=1"));
+    const result = await createHandlers(env).health(request("/health", "verbose=1"));
     expect(result).toMatchObject({ statusCode: 503 });
     if (typeof result === "string") throw new Error("expected a structured result");
     expect(result.headers?.["content-type"]).toContain("application/json");
     expect(JSON.parse(result.body!)).toMatchObject({ status: "misconfigured", deployment: "keeper-test" });
-    expect(await health(request("/"))).toMatchObject({ statusCode: 404 });
+    expect(await createHandlers(env).health(request("/"))).toMatchObject({ statusCode: 404 });
   });
 
-  // The URL is public; SSM throughput is the scheduled run's.
-  test("health reuses its secrets for a minute, but never a failed read", async () => {
-    let now = 1_000_000;
-    spies.push(vi.spyOn(Date, "now").mockImplementation(() => now));
-    let fail = true;
-    const source = vi.fn(async () => {
-      if (fail) throw new Error("ssm down");
-      return {};
-    });
-    const { health } = createHandlers(source, processEnv);
-
-    await expect(health(request("/health"))).rejects.toThrow("ssm down");
-    fail = false;
-    await health(request("/health"));
-    await health(request("/health"));
-    expect(source).toHaveBeenCalledTimes(2);
-
-    now += HEALTH_SECRETS_TTL_MS;
-    await health(request("/health"));
-    expect(source).toHaveBeenCalledTimes(3);
+  // What Lambda runs: the exported handlers, over the function's own
+  // environment variables.
+  test("the exported handlers read the function's environment", async () => {
+    vi.stubEnv("DEPLOYMENT_NAME", "keeper-from-env");
+    const result = await health(request("/health"));
+    if (typeof result === "string") throw new Error("expected a structured result");
+    expect(JSON.parse(result.body!)).toMatchObject({ deployment: "keeper-from-env" });
   });
 });

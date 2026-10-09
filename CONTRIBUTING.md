@@ -87,7 +87,7 @@ pnpm install
 pnpm test
 pnpm typecheck
 pnpm check:deploy   # wrangler deploy --dry-run, both envs
-pnpm check:aws      # Lambda bundle + sam validate --lint (needs the SAM CLI)
+pnpm check:aws      # Lambda bundle + both stacks, linted (needs cfn-lint)
 ```
 
 None of this needs chain access or cloud credentials. CI runs the same

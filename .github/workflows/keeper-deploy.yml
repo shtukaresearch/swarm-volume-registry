@@ -16,9 +16,10 @@
 # services/keeper/README.md.
 #
 # Wallet, RPC and Telegram secrets are *not* passed from here. They live in
-# Cloudflare and in SSM Parameter Store, set once per deployment, and never
-# pass through GitHub. Both deploys fail if any of them is unset: wrangler on
-# `secrets.required`, scripts/aws.ts by checking SSM for the same names.
+# Cloudflare and in each AWS stack, set once per deployment, and never pass
+# through GitHub: an AWS deploy that sets none keeps the stack's. Both deploys
+# fail if any of them is unset: wrangler on `secrets.required`, scripts/aws.ts
+# by checking the stack for the same names.
 
 name: keeper-deploy
 
@@ -142,10 +143,6 @@ jobs:
           cache: true
           require-lockfile: true
 
-      - uses: aws-actions/setup-sam@v3
-        with:
-          use-installer: true
-
       - name: AWS is set up
         if: vars.AWS_DEPLOY_ROLE_ARN == '' || vars.AWS_REGION == ''
         run: |
@@ -157,8 +154,8 @@ jobs:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
+      # The runner's own AWS CLI packages and deploys the stack.
       - name: Deploy
         env:
-          SAM_CLI_TELEMETRY: "0"
           TARGET: ${{ needs.target.outputs.environment }}
         run: pnpm aws deploy "$TARGET"

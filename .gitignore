@@ -13,6 +13,7 @@ contracts/broadcast/*/31337/
 # Environment
 .env
 .env.*
+.envrc
 
 # Editor / OS
 .DS_Store

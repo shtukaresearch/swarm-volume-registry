@@ -152,7 +152,12 @@ def main(argv: list[str] | None = None) -> None:
     if args.account is not None:
         command.extend(("--account", args.account))
     if args.broadcast:
-        command.append("--broadcast")
+        # Forge's local simulation runs under the project's evm_version (paris,
+        # the newest solc 0.8.19 supports), so it misprices state creation on
+        # chains with EIP-8037 (Glamsterdam): about 2.2M gas instead of ~12M
+        # for this contract. --skip-simulation makes forge take each gas limit
+        # from the RPC's eth_estimateGas, times --gas-estimate-multiplier.
+        command.extend(("--broadcast", "--skip-simulation"))
 
     if not args.password_prompt:
         subprocess.run(command, cwd=CONTRACTS, check=True)

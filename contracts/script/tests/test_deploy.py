@@ -54,6 +54,23 @@ class FakeRun:
         raise AssertionError(f"unexpected command {command}")
 
 
+class GasEstimationTests(unittest.TestCase):
+    def test_broadcast_estimates_gas_via_rpc(self) -> None:
+        fake = FakeRun()
+        with mock.patch.object(deploy.subprocess, "run", fake):
+            deploy.main(BASE_ARGS + ["--broadcast"])
+        ((command, _),) = fake.script_calls
+        self.assertIn("--skip-simulation", command)
+
+    def test_dry_run_keeps_local_simulation(self) -> None:
+        fake = FakeRun()
+        with mock.patch.object(deploy.subprocess, "run", fake):
+            deploy.main(BASE_ARGS)
+        ((command, _),) = fake.script_calls
+        self.assertNotIn("--skip-simulation", command)
+        self.assertNotIn("--broadcast", command)
+
+
 class PasswordPromptTests(unittest.TestCase):
     def run_main(self, args: list[str], fake: FakeRun) -> None:
         with mock.patch.object(deploy.subprocess, "run", fake):
@@ -74,6 +91,7 @@ class PasswordPromptTests(unittest.TestCase):
         self.assertNotIn(PASSWORD, "".join(os.environ.values()))
         self.assertNotIn("env", kwargs)
         self.assertIn("--broadcast", command)
+        self.assertIn("--skip-simulation", command)
         with self.assertRaises(OSError):
             os.fstat(fd)  # closed after forge exits
 

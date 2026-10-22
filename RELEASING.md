@@ -76,7 +76,11 @@ python3 script/deploy.py sepolia-postage-v0.9.4 \
 ```
 
 Review the simulation output, including the constructor arguments and predicted
-contract address. A simulation is written below the broadcast directory's `dry-run/`
+contract address. Its gas figure comes from forge's local EVM, which runs under the
+project's `evm_version` (paris) and so does not charge EIP-8037 state gas: on chains that
+have activated Glamsterdam it under-reports a deployment by roughly 5×. The broadcast
+below therefore passes `--skip-simulation`, which makes forge take the gas limit from the
+RPC's `eth_estimateGas` instead. A simulation is written below the broadcast directory's `dry-run/`
 subdirectory and is not committed.
 
 ### A2. Broadcast

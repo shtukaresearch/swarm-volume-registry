@@ -101,10 +101,9 @@ Owner and payer are the same EOA. Chunk signing is done by the same key. One tra
 
 Owner is an EOA; payer is a Safe (or any smart-contract wallet that can execute ERC20 `approve` and an arbitrary call). Chunk signing is still done by the owner EOA.
 
-- **When to use:** any volume worth protecting. The Safe holds BZZ and the allowance; the owner EOA can only cause spending up to the outstanding allowance.
-- **Blast radius if the owner key is compromised:** bounded by the Safe's current allowance to the registry. Mitigated by (a) keeping the allowance sized to near-term needs rather than `type(uint256).max`, and (b) revoking the account in a single Safe transaction, which kills topups across every volume under the pair.
+- **When to use:** any volume worth protecting. The Safe holds BZZ and the allowance; the owner EOA can only cause spending up to the outstanding allowa\nce.
+- **Blast radius if the owner key is compromised:** First, the volume itself, via the upload signer calling `increaseDepth` directly on the `Postage` contract. If the upload signer key is compromised, there is nothing you can do to prevent this since owner keys cannot be cycled upstream. Second, payer assets bounded by the Safe's current allowance to the registry. Mitigated by (a) keeping the allowance sized to near-term needs rather than `type(uint256).max`, and (b) revoking the account in a single Safe transaction, which kills topups across every volume under the pair.
 - **Blast radius if the Safe is compromised:** outside the registry's protection boundary.
-- **Blast radius if the chunk-signer key is compromised (or the signer is untrusted):** the volume. The chunk signer is the Postage batch owner, so it can call `PostageStamp.increaseDepth` directly on the Postage contract, bypassing the registry, and dilute the batch. This cuts the batch's per-chunk balance, and thus its TTL, by `2^depthChange`. `immutableBatch` does not prevent it. The registry retires the volume (`DepthChanged`) on the next `trigger`, but the damage is already done. Only a revert for insufficient balance stands in the way, and it protects thinly funded volumes but not well funded ones, so do not rely on it. Do not delegate `chunkSigner` to a party you do not trust with the volume's existence.
 
 Separate chunk-signer addresses (owner ≠ signer) are supported by the contract but considered advanced usage, and do not contain this risk: the signer holds every batch-owner power on Postage regardless of what the registry permits. See [`DESIGN.md`](./DESIGN.md) §5.
 

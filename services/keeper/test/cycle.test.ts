@@ -414,6 +414,43 @@ describe("bounds and failures", () => {
   });
 });
 
+// Every RPC request is a subrequest, and Workers Free allows 50 an invocation.
+describe("RPC budget", () => {
+  const count = (calls: string[], method: string) => calls.filter((c) => c === method).length;
+
+  test("nonce and fees are read once a cycle, not once a volume", async () => {
+    const volumes = Array.from({ length: 5 }, (_, i) => due(i + 1));
+    const chain = mockChain({ volumes });
+    const result = await runKeeperCycle(chain.client, { registry: REGISTRY });
+
+    expect(result.ok).toBe(true);
+    expect(chain.triggerCalls).toHaveLength(5);
+    expect(count(chain.calls, "eth_getTransactionCount")).toBe(1);
+    expect(count(chain.calls, "eth_maxPriorityFeePerGas")).toBe(1);
+    expect(count(chain.calls, "eth_getBlockByNumber")).toBe(1);
+    // Nothing left to fill, so viem never asks the node to fill it.
+    expect(count(chain.calls, "eth_fillTransaction")).toBe(0);
+  });
+
+  test("consecutive sends carry consecutive nonces", async () => {
+    const chain = mockChain({ volumes: [due(1), due(2), due(3)] });
+    await runKeeperCycle(chain.client, { registry: REGISTRY });
+
+    expect(chain.sentNonces).toEqual([0, 1, 2]);
+  });
+
+  test("a failure makes the next send read nonce and fees again", async () => {
+    const chain = mockChain({ volumes: [due(1), { ...due(2), status: 2 }, due(3)] });
+    const result = await runKeeperCycle(chain.client, { registry: REGISTRY });
+
+    expect(result.failed).toEqual([volumeId(2)]);
+    expect(chain.triggerCalls).toHaveLength(2);
+    // Once at the start, once after the failure — unless the failure came last.
+    const last = inCycleOrder([1, 2, 3]).at(-1) === volumeId(2);
+    expect(count(chain.calls, "eth_getTransactionCount")).toBe(last ? 1 : 2);
+  });
+});
+
 describe("selected mode", () => {
   test("leaves other people's due volumes alone", async () => {
     const chain = mockChain({ volumes: [due(1), due(2)] });

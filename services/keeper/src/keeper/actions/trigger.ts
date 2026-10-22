@@ -15,6 +15,11 @@ export type TriggerParameters = {
   gasMultiplier?: number;
   /** Lower bound on the scaled estimate. Default 300_000 — see below. */
   gasFloor?: bigint;
+  /** Fetched by viem when omitted. */
+  nonce?: number;
+  /** EIP-1559 fees, fetched by viem when either is omitted. */
+  maxFeePerGas?: bigint;
+  maxPriorityFeePerGas?: bigint;
 };
 
 export type TriggerReturnType = Hex;
@@ -80,17 +85,27 @@ export async function trigger<
   } as const;
 
   // No separate simulate pass: estimation runs the same call and reverts the
-  // same way, so an eth_call first would only cost a round trip.
+  // same way, so an eth_call first would only cost a round trip. `prepare:
+  // false`, because the node needs only from, to and data to estimate, and
+  // for a local account viem would otherwise fetch a nonce, a block and a tip
+  // for every estimate — round trips the send then repeats.
   let gas = parameters.gas;
   if (gas === undefined) {
     const estimate = await getAction(
       client,
       estimateContractGas,
       "estimateContractGas",
-    )(call as never);
+    )({ ...call, prepare: false } as never);
     gas = scaleGas(estimate, gasMultiplier);
     if (gas < gasFloor) gas = gasFloor;
   }
 
-  return getAction(client, writeContract, "writeContract")({ ...call, gas } as never);
+  // With chainId, nonce and fees all supplied, viem has nothing left to fill
+  // and sends without first trying `eth_fillTransaction`.
+  const { nonce, maxFeePerGas, maxPriorityFeePerGas } = parameters;
+  return getAction(
+    client,
+    writeContract,
+    "writeContract",
+  )({ ...call, gas, chainId: chain?.id, nonce, maxFeePerGas, maxPriorityFeePerGas } as never);
 }

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
-import {RegistryFixture} from "../fixtures/RegistryFixture.sol";
 import {PayerHandler} from "./PayerHandler.sol";
+import {PayerHandlerFixture} from "./PayerHandlerFixture.sol";
 import {VolumeRegistry} from "../../src/VolumeRegistry.sol";
 
 /// @notice I3 invariant.
@@ -17,15 +17,12 @@ import {VolumeRegistry} from "../../src/VolumeRegistry.sol";
 /// emits only on the guarded path (DESIGN §8 steps 6-8 plus createVolume's
 /// transferFrom). If any unguarded path spent BZZ, `spentByPayer` would
 /// outstrip `allowedByPayer` and the invariant would fire.
-contract TransferOnlyIfGuardedInvariant is RegistryFixture {
+contract TransferOnlyIfGuardedInvariant is PayerHandlerFixture {
     PayerHandler internal handler;
 
     function setUp() public override {
         super.setUp();
-        address predicted = vm.computeCreateAddress(address(this), vm.getNonce(address(this)));
-        bzz.grantRole(bzz.MINTER_ROLE(), predicted);
-        handler =
-            new PayerHandler(registry, stamp, bzz, DEFAULT_DEPTH, DEFAULT_BUCKET, GRACE_BLOCKS);
+        handler = _deployPayerHandler();
         targetContract(address(handler));
     }
 

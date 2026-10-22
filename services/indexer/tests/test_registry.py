@@ -58,13 +58,16 @@ def test_label_is_network_and_version():
 
 def test_default_registry_is_the_live_fleet():
     labels = {s.label for s in registry.DEFAULT_REGISTRY}
-    assert {"gnosis-v1", "sepolia-v1", "sepolia-v2-rc1"} <= labels
+    assert {"gnosis-v1", "sepolia-v1", "sepolia-v2-rc1", "sepolia-v2-rc2"} <= labels
     assert registry.DEFAULT_REGISTRY.latest == {
         "gnosis": "gnosis-v1",
-        "sepolia": "sepolia-v2-rc1",
+        "sepolia": "sepolia-v2-rc2",
     }
-    # the bare network follows its pointer; the superseded deployment stays addressable
+    # the bare network follows its pointer; superseded deployments stay addressable
     assert registry.select(registry.DEFAULT_REGISTRY, "sepolia").registry == (
+        "0x00f72ee2970df8112fdf04c0225b33c43c5a4177"
+    )
+    assert registry.select(registry.DEFAULT_REGISTRY, "sepolia-v2-rc1").registry == (
         "0x33a53c79a08ed1f863905cd4c6ce036a4c493729"
     )
     assert registry.select(registry.DEFAULT_REGISTRY, "sepolia-v1").registry == (

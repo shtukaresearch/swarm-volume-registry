@@ -76,7 +76,11 @@ python3 script/deploy.py sepolia-postage-v0.9.4 \
 ```
 
 Review the simulation output, including the constructor arguments and predicted
-contract address. A simulation is written below the broadcast directory's `dry-run/`
+contract address. Its gas figure comes from forge's local EVM, which runs under the
+project's `evm_version` (paris) and so does not charge EIP-8037 state gas: on chains that
+have activated Glamsterdam it under-reports a deployment by roughly 5×. The broadcast
+below therefore passes `--skip-simulation`, which makes forge take the gas limit from the
+RPC's `eth_estimateGas` instead. A simulation is written below the broadcast directory's `dry-run/`
 subdirectory and is not committed.
 
 ### A2. Broadcast
@@ -90,7 +94,11 @@ python3 script/deploy.py sepolia-postage-v0.9.4 \
     --broadcast
 ```
 
-Foundry prompts for the account password. Once the transaction is confirmed, it writes
+Foundry prompts for the account password. On a Linux desktop with `zenity`, add
+`--password-prompt` to enter it in a desktop dialog instead; the launcher passes it to
+Foundry through an in-memory file descriptor, never argv, the environment or disk. This
+lets the command run from a non-interactive shell, such as an agent's. Once the
+transaction is confirmed, it writes
 a timestamped execution record and updates:
 
 ```text

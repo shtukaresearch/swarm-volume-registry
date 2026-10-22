@@ -38,7 +38,9 @@ python3 script/deploy.py sepolia-postage-v0.9.4 \
     --broadcast
 ```
 
-Foundry prompts for the account password. The launcher passes the selected profile's
+Foundry prompts for the account password; with `--password-prompt` it is asked for in
+a desktop dialog (`zenity`, Linux) and handed to Foundry through an in-memory file
+descriptor instead. The launcher passes the selected profile's
 constructor arguments to `script/DeployVolumeRegistry.s.sol` and lets Foundry derive
 the sender from the named account.
 

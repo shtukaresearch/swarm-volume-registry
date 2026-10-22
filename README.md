@@ -7,14 +7,14 @@ The contract does not custody BZZ, does not sign chunks, has no admin role, and 
 ## Deployments
 
 v2 — which removes unilateral volume ownership transfer — is deployed on Sepolia only, as
-release candidate `v2-rc1`. Gnosis is still the early-alpha v1 contract; a v2 Gnosis
+release candidate `v2-rc2`. Gnosis is still the early-alpha v1 contract; a v2 Gnosis
 address will be added after deployment, and until then [`docs/usage.md`](./docs/usage.md)
 documents the deployed v1 ABI and its mitigations.
 
 | Chain | Release | `VolumeRegistry` | `graceBlocks` |
 |---|---|---|---|
 | Gnosis (chain 100) | `v1` | `0x9639ae4c7a8fa9efe585738d516a3915ddd02aad` | `17280` (≈ 24 h at 5-second blocks) |
-| Sepolia (chain 11155111) | `v2-rc1` | `0x33a53c79a08ed1f863905cd4c6ce036a4c493729` | `12` (≈ 2.4 min at 12-second blocks) |
+| Sepolia (chain 11155111) | `v2-rc2` | `0x00f72ee2970df8112fdf04c0225b33c43c5a4177` | `300` (≈ 1 h at 12-second blocks) |
 
 Releases are named `vN` on mainnet and `vN-rcM` for testnet release candidates; each name is
 a git tag. Machine-readable records live in

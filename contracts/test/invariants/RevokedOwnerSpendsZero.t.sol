@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
-import {RegistryFixture} from "../fixtures/RegistryFixture.sol";
 import {PayerHandler} from "./PayerHandler.sol";
+import {PayerHandlerFixture} from "./PayerHandlerFixture.sol";
 import {VolumeRegistry} from "../../src/VolumeRegistry.sol";
 
 /// @notice I9 invariant.
@@ -18,15 +18,12 @@ import {VolumeRegistry} from "../../src/VolumeRegistry.sol";
 ///
 /// For explicit per-event scrutiny we walk every createdVolume and confirm
 /// the account's payer+active pair at the end of the run matches its view.
-contract RevokedOwnerSpendsZeroInvariant is RegistryFixture {
+contract RevokedOwnerSpendsZeroInvariant is PayerHandlerFixture {
     PayerHandler internal handler;
 
     function setUp() public override {
         super.setUp();
-        address predicted = vm.computeCreateAddress(address(this), vm.getNonce(address(this)));
-        bzz.grantRole(bzz.MINTER_ROLE(), predicted);
-        handler =
-            new PayerHandler(registry, stamp, bzz, DEFAULT_DEPTH, DEFAULT_BUCKET, GRACE_BLOCKS);
+        handler = _deployPayerHandler();
         targetContract(address(handler));
     }
 

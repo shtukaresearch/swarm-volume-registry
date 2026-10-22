@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import subprocess
 import sys
@@ -68,16 +69,56 @@ def rpc_chain_id(rpc_url: str) -> int:
     return int(result.stdout.strip())
 
 
-def main() -> None:
+def prompt_password(account: str) -> str:
+    """Ask for the keystore password in a desktop dialog (zenity).
+
+    The password is returned to this process only; it is never echoed, put in
+    argv or the environment, or written to disk. Cancelling the dialog aborts.
+    """
+    try:
+        result = subprocess.run(
+            ["zenity", "--password", f"--title=Unlock Foundry keystore {account!r}"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        fail("--password-prompt requires zenity")
+    if result.returncode != 0:
+        fail("password prompt cancelled")
+    return result.stdout.removesuffix("\n")
+
+
+def password_memfd(password: str) -> int:
+    """Return a file descriptor for an anonymous in-memory file holding `password`.
+
+    Forge reads it through `--password-file /dev/fd/<fd>`. Forge only accepts a
+    regular file there, which rules out a pipe; a memfd is a regular file that
+    lives in RAM, has no name in any filesystem and vanishes when closed.
+    Linux-only, like the zenity prompt.
+    """
+    fd = os.memfd_create("keystore-password", os.MFD_CLOEXEC)
+    os.write(fd, password.encode())
+    return fd
+
+
+def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("profile", help="profile name from deployments.toml")
     parser.add_argument("--rpc-url", required=True, help="target chain RPC URL")
     parser.add_argument("--account", help="Foundry keystore account name")
     parser.add_argument("--broadcast", action="store_true", help="send the deployment transaction")
-    args = parser.parse_args()
+    parser.add_argument(
+        "--password-prompt",
+        action="store_true",
+        help="ask for the keystore password in a desktop dialog instead of the terminal",
+    )
+    args = parser.parse_args(argv)
 
     if args.broadcast and args.account is None:
         parser.error("--account is required with --broadcast")
+    if args.password_prompt and args.account is None:
+        parser.error("--account is required with --password-prompt")
 
     version = foundry_version()
     if version < MIN_FOUNDRY:
@@ -111,9 +152,23 @@ def main() -> None:
     if args.account is not None:
         command.extend(("--account", args.account))
     if args.broadcast:
-        command.append("--broadcast")
+        # Forge's local simulation runs under the project's evm_version (paris,
+        # the newest solc 0.8.19 supports), so it misprices state creation on
+        # chains with EIP-8037 (Glamsterdam): about 2.2M gas instead of ~12M
+        # for this contract. --skip-simulation makes forge take each gas limit
+        # from the RPC's eth_estimateGas, times --gas-estimate-multiplier.
+        command.extend(("--broadcast", "--skip-simulation"))
 
-    subprocess.run(command, cwd=CONTRACTS, check=True)
+    if not args.password_prompt:
+        subprocess.run(command, cwd=CONTRACTS, check=True)
+        return
+
+    read_fd = password_memfd(prompt_password(args.account))
+    try:
+        command.extend(("--password-file", f"/dev/fd/{read_fd}"))
+        subprocess.run(command, cwd=CONTRACTS, check=True, pass_fds=(read_fd,))
+    finally:
+        os.close(read_fd)
 
 
 if __name__ == "__main__":

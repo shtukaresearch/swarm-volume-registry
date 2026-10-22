@@ -66,7 +66,7 @@ The contract does not custody BZZ, does not sign chunks, is not upgradeable, and
 
 The two deployments are not the same contract version. Sepolia runs v2; Gnosis is still v1 and retains `transferVolumeOwnership`, so the unsolicited-transfer response in [§10](#10-revocation) applies there and only there. The superseded v1 Sepolia registry was `0x3a99b4b52a4bd75760667219ea93c627051b1af8` — it holds no active volumes and is no longer maintained.
 
-The Sepolia `graceBlocks` is short (≈ 1 h) so that topup and expiry cycles can be observed on a testnet timescale. The previous Sepolia release, `v2-rc1` at `0x33a53c79a08ed1f863905cd4c6ce036a4c493729`, has the same source with `graceBlocks = 12` (≈ 2.4 min). The altruistic Sepolia keeper currently runs every minute against `v2-rc1`, not `v2-rc2`, on a best-effort basis; integration tests should not rely on it and should either call `trigger` directly or run their own keeper.
+The Sepolia `graceBlocks` is short (≈ 1 h) so that topup and expiry cycles can be observed on a testnet timescale. The previous Sepolia release, `v2-rc1` at `0x33a53c79a08ed1f863905cd4c6ce036a4c493729`, has the same source with `graceBlocks = 12` (≈ 2.4 min). An altruistic keeper runs every ten minutes against `v2-rc2` on a best-effort basis; integration tests should not rely on it and should either call `trigger` directly or run their own keeper.
 
 `graceBlocks` is constructor-immutable per deployment. A different runway target requires a fresh deployment.
 

@@ -10,7 +10,7 @@
   // Workers Logs and Traces. Every run emits one structured JSON line — the same
   // report the Telegram alert is rendered from — at the level matching its
   // status: log / warn / error. Traces capture the RPC and Telegram fetches
-  // each run makes. Both sample everything: at most one run a minute, volume is
+  // each run makes. Both sample everything: at most one run every ten minutes, volume is
   // not a concern.
   "observability": {
     "enabled": true,
@@ -39,15 +39,16 @@
   //   probe (5 s) + CYCLE_TIMEOUT_MS + RECEIPT_TIMEOUT_MS + 5 s slack ≤ interval
   // and also ≤ the 15 min Cron Trigger wall-clock limit.
   "env": {
-    // Sepolia — registry v2, graceBlocks = 12 (~2.4 min). The one-minute cron is
-    // the floor that keeps volumes alive, and it bounds a run to ~55 s: roughly
-    // two volumes per tick at 12 s blocks. Warnings go to Telegram so skipped
-    // top-ups, retirements and RPC failovers cannot make a run look healthy.
+    // Sepolia — registry v2-rc2, graceBlocks = 300 (~1 h at 12 s blocks). Every
+    // ten minutes leaves ~50 min of slack for missed runs. The cycle limits are
+    // unchanged from the one-minute schedule: roughly two volumes per run at
+    // 12 s blocks. Warnings go to Telegram so skipped top-ups, retirements and
+    // RPC failovers cannot make a run look healthy.
     "sepolia": {
       "vars": {
         "DEPLOYMENT_NAME": "keeper-sepolia",
         "CHAIN_ID": "11155111",
-        "REGISTRY_ADDRESS": "0x33a53c79a08ed1f863905cd4c6ce036a4c493729",
+        "REGISTRY_ADDRESS": "0x00f72ee2970df8112fdf04c0225b33c43c5a4177",
         "NOTIFY_WARNINGS": "true",
         "MIN_BALANCE_WEI": "50000000000000000",
         "MAX_VOLUMES_PER_CYCLE": "10",
@@ -58,7 +59,7 @@
       "secrets": {
         "required": ["PRIVATE_KEY", "RPC_URL", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"]
       },
-      "triggers": { "crons": ["* * * * *"] }
+      "triggers": { "crons": ["*/10 * * * *"] }
     },
 
     // Gnosis Chain — graceBlocks = 17280 (~24 h at 5 s blocks), so hourly leaves

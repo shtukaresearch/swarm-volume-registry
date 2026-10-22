@@ -6,7 +6,7 @@ Cloudflare Cron Triggers are the only scheduler. GitHub Actions tests and deploy
 
 | Deployment | Worker | Chain | Registry | Schedule |
 |---|---|---|---|---|
-| `sepolia` | `keeper-sepolia` | Sepolia (11155111) | v2 `0x33a53c79…4c493729` | every minute |
+| `sepolia` | `keeper-sepolia` | Sepolia (11155111) | v2-rc2 `0x00f72ee2…3c5a4177` | every 10 minutes |
 | `gnosis` | `keeper-gnosis` | Gnosis (100) | v1 `0x9639ae4c…ddd02aad` | hourly |
 
 Both are envs in [`wrangler.jsonc`](./wrangler.jsonc), with independent wallets and RPC credentials. They may share one Telegram group; every alert names its deployment, chain and registry.
@@ -53,7 +53,7 @@ Declared in `secrets.required`, so `wrangler deploy` refuses to ship a deploymen
 
 Variables, in `wrangler.jsonc` per env: `DEPLOYMENT_NAME`, `CHAIN_ID`, `REGISTRY_ADDRESS`, `NOTIFY_WARNINGS`, `MIN_BALANCE_WEI` (0 disables the warning), and the cycle limits `MAX_VOLUMES_PER_CYCLE`, `CYCLE_TIMEOUT_MS`, `RECEIPT_TIMEOUT_MS`, `CONFIRMATIONS`. Not set by either deployment, but accepted: `DRY_RUN`, `VOLUME_IDS` (maintain only these), `PAGE_SIZE`.
 
-**A run must fit inside its cron interval**, so two runs never share the wallet at once: 5 s of RPC probing, plus `CYCLE_TIMEOUT_MS` (no new transaction starts after it), plus `RECEIPT_TIMEOUT_MS` for the last one, plus 5 s of slack. `test/config.test.ts` holds each env to that, and to the 15-minute Cron Trigger limit. On Sepolia that leaves about two volumes a minute at 12 s blocks — if it ever maintains more, that budget is what to revisit.
+**A run must fit inside its cron interval**, so two runs never share the wallet at once: 5 s of RPC probing, plus `CYCLE_TIMEOUT_MS` (no new transaction starts after it), plus `RECEIPT_TIMEOUT_MS` for the last one, plus 5 s of slack. `test/config.test.ts` holds each env to that, and to the 15-minute Cron Trigger limit. On Sepolia that leaves about two volumes per run at 12 s blocks — if it ever maintains more, that budget is what to revisit.
 
 ## Setting up a deployment
 

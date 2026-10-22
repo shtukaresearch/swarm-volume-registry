@@ -31,7 +31,7 @@ export type RunKeeperCycleParameters = {
   maxVolumesPerCycle?: number;
   /** Headroom over the gas estimate. Default 1.2 — see {@link trigger}. */
   gasMultiplier?: number;
-  /** Lower bound on the scaled estimate. Default 300_000 — see {@link trigger}. */
+  /** Lower bound on the scaled estimate. Default 3_000_000 — see {@link trigger}. */
   gasFloor?: bigint;
   /** Default 1. */
   confirmations?: number;

@@ -83,17 +83,17 @@ describe("trigger", () => {
   });
 
   test("scales the estimate by gasMultiplier", async () => {
-    const chain = mockChain({ volumes: [due(1)], estimateGas: 500_000n });
+    const chain = mockChain({ volumes: [due(1)], estimateGas: 5_000_000n });
     await trigger(chain.client, { registry: REGISTRY, volumeId: volumeId(1) });
-    expect(chain.sentGas[0]).toBe(600_000n); // 500k × 1.2
+    expect(chain.sentGas[0]).toBe(6_000_000n); // 5M × 1.2
 
-    const custom = mockChain({ volumes: [due(1)], estimateGas: 500_000n });
+    const custom = mockChain({ volumes: [due(1)], estimateGas: 5_000_000n });
     await trigger(custom.client, {
       registry: REGISTRY,
       volumeId: volumeId(1),
       gasMultiplier: 2,
     });
-    expect(custom.sentGas[0]).toBe(1_000_000n);
+    expect(custom.sentGas[0]).toBe(10_000_000n);
   });
 
   // A volume that estimates as a ~28k no-op can need the whole transferFrom →
@@ -102,7 +102,7 @@ describe("trigger", () => {
   test("a no-op estimate is raised to the gas floor", async () => {
     const chain = mockChain({ volumes: [funded(1)], estimateGas: 28_000n });
     await trigger(chain.client, { registry: REGISTRY, volumeId: volumeId(1) });
-    expect(chain.sentGas[0]).toBe(300_000n);
+    expect(chain.sentGas[0]).toBe(3_000_000n);
 
     const custom = mockChain({ volumes: [funded(1)], estimateGas: 28_000n });
     await trigger(custom.client, {

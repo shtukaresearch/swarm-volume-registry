@@ -108,6 +108,9 @@ export function buildClient(
   return createWalletClient({
     account: privateKeyToAccount(privateKey),
     chain,
+    // Receipt waits poll this often. A block is the most that can change
+    // between polls, and each poll is a subrequest.
+    pollingInterval: chain.blockTime ?? 12_000,
     transport: fallback(
       endpoints.map((url) => http(url, { retryCount: 0, timeout: REQUEST_TIMEOUT_MS })),
       { retryCount: 2 },

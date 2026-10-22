@@ -173,6 +173,7 @@ export function mockChain(options: MockChainOptions = {}) {
 
   const triggerCalls: Hex[] = [];
   const sentGas: bigint[] = [];
+  const sentNonces: number[] = [];
   const calls: string[] = [];
   const receipts = new Map<Hex, { volumeId: Hex }>();
   let multicallCount = 0;
@@ -406,8 +407,9 @@ export function mockChain(options: MockChainOptions = {}) {
       case "eth_maxPriorityFeePerGas":
         return numberToHex(1_000_000n);
       case "eth_sendRawTransaction": {
-        const { data, gas } = parseTransaction(args[0] as Hex);
+        const { data, gas, nonce } = parseTransaction(args[0] as Hex);
         sentGas.push(gas ?? 0n);
+        sentNonces.push(nonce ?? 0);
         const { args: callArgs } = decodeFunctionData({
           abi: registryAbi,
           data: data as Hex,
@@ -462,6 +464,8 @@ export function mockChain(options: MockChainOptions = {}) {
     triggerCalls,
     /** Gas limit carried by each transaction actually sent. */
     sentGas,
+    /** Nonce carried by each transaction actually sent. */
+    sentNonces,
     calls,
     get multicallCount() {
       return multicallCount;

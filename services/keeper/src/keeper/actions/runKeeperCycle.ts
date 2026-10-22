@@ -1,7 +1,10 @@
 import type { Account, Address, Chain, Client, Hex, Transport } from "viem";
 import { hexToBigInt, keccak256, numberToHex } from "viem";
 import {
+  estimateMaxPriorityFeePerGas,
+  getBlock,
   getBlockNumber,
+  getTransactionCount,
   multicall,
   simulateContract,
   waitForTransactionReceipt,
@@ -76,6 +79,9 @@ export type RunKeeperCycleReturnType = {
 const message = (err: unknown): string =>
   err instanceof Error ? err.message : String(err);
 
+/** What every transaction in a cycle shares, read once — see {@link runKeeperCycle}. */
+type Sending = { nonce: number; maxFeePerGas: bigint; maxPriorityFeePerGas: bigint };
+
 /**
  * `ids`, rotated to start at a position derived from `blockNumber`.
  *
@@ -128,6 +134,14 @@ export function rotateVolumes<T>(ids: readonly T[], blockNumber: bigint): T[] {
  * against `graceBlocks`. Each cycle starts somewhere different in the list
  * ({@link rotateVolumes}), so what one cycle defers, a later one reaches.
  *
+ * **Nonce and fees are read once per cycle**, not once per transaction: every
+ * RPC request is a subrequest, and a platform's per-invocation cap on those
+ * (50 on Workers Free) bounds a cycle as surely as `cycleTimeout` does. That
+ * leaves a volume its estimate, its send and its receipt polls. The nonce is
+ * counted up locally, which is safe for the same reason sequential sending is:
+ * nothing else spends from this wallet mid-cycle. Any failure discards both,
+ * and the next send reads them fresh.
+ *
  * **Never throws.** Every failure is folded into the returned result, because
  * one volume failing must not stop the rest from being attempted, and a run
  * that fails part-way still owes a report of what it did. Check `ok` — the
@@ -163,6 +177,7 @@ export async function runKeeperCycle<
   } = parameters;
 
   const startedAt = Date.now();
+  let sending: Sending | undefined;
   const result: RunKeeperCycleReturnType = {
     ok: true,
     mode: mode.type,
@@ -277,6 +292,29 @@ export async function runKeeperCycle<
     return active;
   }
 
+  /**
+   * The fee cap is fixed for the whole cycle, so it carries twice the current
+   * base fee: enough for about six consecutive full blocks of increases. Only
+   * the base fee actually due, plus the tip, is paid.
+   */
+  async function readSending(): Promise<Sending> {
+    const address = client.account!.address;
+    const [nonce, block, maxPriorityFeePerGas] = await Promise.all([
+      getAction(client, getTransactionCount, "getTransactionCount")({
+        address,
+        blockTag: "pending",
+      }),
+      getAction(client, getBlock, "getBlock")({}),
+      getAction(
+        client,
+        estimateMaxPriorityFeePerGas,
+        "estimateMaxPriorityFeePerGas",
+      )({ chain: client.chain }),
+    ]);
+    const baseFee = block.baseFeePerGas ?? 0n;
+    return { nonce, maxFeePerGas: baseFee * 2n + maxPriorityFeePerGas, maxPriorityFeePerGas };
+  }
+
   async function sendOne(volumeId: Hex): Promise<VolumeResult> {
     let hash: Hex | undefined;
     try {
@@ -298,12 +336,15 @@ export async function runKeeperCycle<
         return { volumeId, status: "simulated" };
       }
 
+      sending ??= await readSending();
       hash = await trigger(client, {
         registry,
         volumeId,
         gasMultiplier: parameters.gasMultiplier,
         gasFloor: parameters.gasFloor,
+        ...sending,
       });
+      sending.nonce++;
 
       const receipt = await getAction(
         client,
@@ -352,6 +393,9 @@ export async function runKeeperCycle<
 
       return { ...mined, status: "success" as const, ...summary };
     } catch (err) {
+      // Whether a failed send used its nonce is unknowable from here, and a
+      // stuck transaction may mean the fees went stale: read both again.
+      sending = undefined;
       // A sent-but-unconfirmed transaction still reports its hash so it can be
       // followed up; the next cycle re-decides from chain state regardless.
       return {

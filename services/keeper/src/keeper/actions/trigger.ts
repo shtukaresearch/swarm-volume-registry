@@ -13,7 +13,7 @@ export type TriggerParameters = {
   gas?: bigint;
   /** Headroom over the estimate. Default 1.2 — see below for why it matters. */
   gasMultiplier?: number;
-  /** Lower bound on the scaled estimate. Default 300_000 — see below. */
+  /** Lower bound on the scaled estimate. Default 3_000_000 — see below. */
   gasFloor?: bigint;
   /** Fetched by viem when omitted. */
   nonce?: number;
@@ -49,6 +49,11 @@ const scaleGas = (gas: bigint, multiplier: number): bigint =>
  * covers the top-up path outright. Unused gas is refunded, so the floor costs
  * nothing on the no-op path it usually lands on.
  *
+ * The top-up path itself varies with PostageStamp state: on Sepolia it has
+ * cost from ~480k to ~1.5M, and a trigger estimated at ~680k one block ran out
+ * of gas inside `topUp` the next. Hence a floor well above anything observed,
+ * not just above a typical top-up.
+ *
  * Estimation doubles as the pre-flight check: `_triggerOne` reverts
  * `VolumeNotActive` on a volume retired since enumeration, and that revert
  * surfaces here — named, before a transaction is paid for.
@@ -72,7 +77,7 @@ export async function trigger<
     account = client.account,
     chain = client.chain,
     gasMultiplier = 1.2,
-    gasFloor = 300_000n,
+    gasFloor = 3_000_000n,
   } = parameters;
 
   const call = {

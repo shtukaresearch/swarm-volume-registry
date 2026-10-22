@@ -17,7 +17,16 @@ import deploy  # noqa: E402
 
 PROFILE_NAME = "sepolia-postage-v0.9.4-1h"
 PASSWORD = "correct horse battery staple"
-BASE_ARGS = [PROFILE_NAME, "--rpc-url", "http://rpc.invalid", "--account", "deployer"]
+VERSION = "v2-rc3"
+BASE_ARGS = [
+    PROFILE_NAME,
+    "--version",
+    VERSION,
+    "--rpc-url",
+    "http://rpc.invalid",
+    "--account",
+    "deployer",
+]
 
 
 class FakeRun:
@@ -27,8 +36,9 @@ class FakeRun:
     password through the file named by `--password-file`, as forge would.
     """
 
-    def __init__(self, zenity_returncode: int = 0) -> None:
+    def __init__(self, zenity_returncode: int = 0, factory_code: str = "0x7fffffff") -> None:
         self.zenity_returncode = zenity_returncode
+        self.factory_code = factory_code
         self.script_calls: list[tuple[list[str], dict]] = []
         self.password_read: str | None = None
         self.password_is_regular_file = False
@@ -39,6 +49,9 @@ class FakeRun:
             return subprocess.CompletedProcess(command, 0, "forge Version: 1.7.1-stable\n", "")
         if command[:2] == ["cast", "chain-id"]:
             return subprocess.CompletedProcess(command, 0, "11155111\n", "")
+        if command[:2] == ["cast", "code"]:
+            assert command[2] == deploy.CREATE2_FACTORY, command
+            return subprocess.CompletedProcess(command, 0, self.factory_code + "\n", "")
         if command[0] == "zenity":
             self.zenity_called = True
             return subprocess.CompletedProcess(command, self.zenity_returncode, PASSWORD + "\n", "")
@@ -52,6 +65,52 @@ class FakeRun:
                     self.password_read = password_file.read()
             return subprocess.CompletedProcess(command, 0, "", "")
         raise AssertionError(f"unexpected command {command}")
+
+
+class Create2Tests(unittest.TestCase):
+    def test_release_salt_is_the_padded_release_name(self) -> None:
+        # cast format-bytes32-string v2-rc3
+        self.assertEqual(
+            deploy.release_salt("v2-rc3"),
+            "0x76322d7263330000000000000000000000000000000000000000000000000000",
+        )
+
+    def test_release_salt_rejects_non_release_names(self) -> None:
+        for name in ("v0", "2", "v2-rc", "v2-beta1", "latest"):
+            with self.subTest(name=name), self.assertRaises(SystemExit):
+                deploy.release_salt(name)
+
+    def test_script_gets_salt_and_factory(self) -> None:
+        fake = FakeRun()
+        with mock.patch.object(deploy.subprocess, "run", fake):
+            deploy.main(BASE_ARGS + ["--broadcast"])
+        ((command, _),) = fake.script_calls
+        self.assertIn("run(address,address,uint64,bytes32)", command)
+        sig = command.index("run(address,address,uint64,bytes32)")
+        self.assertEqual(command[sig + 4], deploy.release_salt(VERSION))
+        self.assertEqual(
+            command[command.index("--create2-deployer") + 1], deploy.CREATE2_FACTORY
+        )
+
+    def test_missing_factory_aborts_before_forge(self) -> None:
+        fake = FakeRun(factory_code="0x")
+        with (
+            mock.patch.object(deploy.subprocess, "run", fake),
+            self.assertRaisesRegex(SystemExit, "has no code"),
+        ):
+            deploy.main(BASE_ARGS + ["--broadcast"])
+        self.assertEqual(fake.script_calls, [])
+
+    def test_invalid_release_name_aborts_before_forge(self) -> None:
+        fake = FakeRun()
+        args = list(BASE_ARGS)
+        args[args.index(VERSION)] = "rc3"
+        with (
+            mock.patch.object(deploy.subprocess, "run", fake),
+            self.assertRaisesRegex(SystemExit, "invalid release name"),
+        ):
+            deploy.main(args)
+        self.assertEqual(fake.script_calls, [])
 
 
 class GasEstimationTests(unittest.TestCase):
@@ -118,7 +177,10 @@ class PasswordPromptTests(unittest.TestCase):
 
     def test_prompt_requires_account(self) -> None:
         with mock.patch("sys.stderr"), self.assertRaises(SystemExit):
-            self.run_main([PROFILE_NAME, "--rpc-url", "http://rpc.invalid", "--password-prompt"], FakeRun())
+            self.run_main(
+                [PROFILE_NAME, "--version", VERSION, "--rpc-url", "http://rpc.invalid", "--password-prompt"],
+                FakeRun(),
+            )
 
     def test_without_prompt_forge_prompts_itself(self) -> None:
         fake = FakeRun()

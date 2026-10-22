@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Resolve a named deployment profile and invoke the Foundry script."""
+"""Resolve a named deployment profile and invoke the Foundry script.
+
+The registry is deployed with CREATE2 through ``CREATE2_FACTORY``, salted with the
+release name, so a release's address on a chain is fixed by the source, the profile and
+the release name alone.
+"""
 
 from __future__ import annotations
 
@@ -17,6 +22,12 @@ CONTRACTS = Path(__file__).resolve().parent.parent
 CONFIG = CONTRACTS / "deployments.toml"
 ADDRESS = re.compile(r"0x[0-9a-fA-F]{40}\Z")
 MIN_FOUNDRY = (1, 7, 1)
+# Release names: vN for a mainnet release, vN-rcM for a testnet release candidate. The
+# same grammar as the indexer's registry (services/indexer, registry.VERSION_NAME).
+VERSION_NAME = re.compile(r"v[1-9][0-9]*(-rc[1-9][0-9]*)?\Z")
+# Arachnid's deterministic deployment proxy, Foundry's default CREATE2 deployer. It is
+# deployed at this address on every chain we use; its calldata is salt ‖ initcode.
+CREATE2_FACTORY = "0x4e59b44847b379578588920ca78fbf26c0b4956c"
 
 
 def fail(message: str) -> NoReturn:
@@ -47,6 +58,18 @@ def load_profile(name: str) -> dict[str, Any]:
         fail(f"deployment profile {name!r} has an invalid grace_blocks")
 
     return profile
+
+
+def release_salt(version: str) -> str:
+    """The CREATE2 salt for a release: its name in ASCII, left-aligned and zero-padded.
+
+    This is what ``cast format-bytes32-string`` produces, so the salt reads as the
+    release name on a block explorer. A network holds at most one deployment per release
+    name, so the salt is never reused for the same initcode.
+    """
+    if not VERSION_NAME.fullmatch(version):
+        fail(f"invalid release name {version!r}; expected vN or vN-rcM")
+    return "0x" + version.encode("ascii").ljust(32, b"\0").hex()
 
 
 def foundry_version() -> tuple[int, int, int]:
@@ -102,9 +125,24 @@ def password_memfd(password: str) -> int:
     return fd
 
 
+def has_code(address: str, rpc_url: str) -> bool:
+    result = subprocess.run(
+        ["cast", "code", address, "--rpc-url", rpc_url],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip() not in ("", "0x")
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("profile", help="profile name from deployments.toml")
+    parser.add_argument(
+        "--version",
+        required=True,
+        help="release name (vN or vN-rcM); also the CREATE2 salt",
+    )
     parser.add_argument("--rpc-url", required=True, help="target chain RPC URL")
     parser.add_argument("--account", help="Foundry keystore account name")
     parser.add_argument("--broadcast", action="store_true", help="send the deployment transaction")
@@ -129,6 +167,7 @@ def main(argv: list[str] | None = None) -> None:
             f"upgrade to at least {required}"
         )
 
+    salt = release_salt(args.version)
     profile = load_profile(args.profile)
     actual_chain_id = rpc_chain_id(args.rpc_url)
     if actual_chain_id != profile["chain_id"]:
@@ -136,16 +175,21 @@ def main(argv: list[str] | None = None) -> None:
             f"profile {args.profile!r} requires chain {profile['chain_id']}, "
             f"but the RPC reports chain {actual_chain_id}"
         )
+    if not has_code(CREATE2_FACTORY, args.rpc_url):
+        fail(f"CREATE2 factory {CREATE2_FACTORY} has no code on chain {actual_chain_id}")
 
     command = [
         "forge",
         "script",
         "script/DeployVolumeRegistry.s.sol:DeployVolumeRegistry",
         "--sig",
-        "run(address,address,uint64)",
+        "run(address,address,uint64,bytes32)",
         profile["postage_stamp"],
         profile["bzz"],
         str(profile["grace_blocks"]),
+        salt,
+        "--create2-deployer",
+        CREATE2_FACTORY,
         "--rpc-url",
         args.rpc_url,
     ]

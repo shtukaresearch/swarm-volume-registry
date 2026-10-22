@@ -5,6 +5,11 @@ Each deployment is recorded once, immutably, as ``deployments/<network>/<Contrac
 where ``<version>`` is the release name (``vN`` on mainnets, ``vN-rcM`` for testnet release
 candidates). ``deployments/<network>/<Contract>.json`` is the network's *latest* pointer: a
 byte-identical copy of one versioned record, written only when ``--latest`` is passed.
+
+A deployment is either a plain contract-creation transaction (``CREATE``; releases up to
+v2-rc2) or a call to ``deploy.CREATE2_FACTORY`` whose calldata is salt ‖ initcode
+(``CREATE2``). A CREATE2 deployment must be salted with ``deploy.release_salt(version)``,
+and its address is recomputed from factory, salt and initcode with ``cast``.
 """
 
 from __future__ import annotations
@@ -12,10 +17,11 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import subprocess
 from pathlib import Path
 from typing import Any, NoReturn
 
-from deploy import CONTRACTS, load_profile
+from deploy import CONTRACTS, CREATE2_FACTORY, VERSION_NAME, load_profile, release_salt
 
 
 DEFAULT_SCRIPT = "DeployVolumeRegistry.s.sol"
@@ -25,9 +31,7 @@ DEFAULT_DEPLOYMENTS = Path("deployments")
 SAFE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 ADDRESS = re.compile(r"0x[0-9a-fA-F]{40}\Z")
 TRANSACTION_HASH = re.compile(r"0x[0-9a-fA-F]{64}\Z")
-# Release names: vN for a mainnet release, vN-rcM for a testnet release candidate. The
-# same grammar as the indexer's registry (services/indexer, registry.VERSION_NAME).
-VERSION_NAME = re.compile(r"v[1-9][0-9]*(-rc[1-9][0-9]*)?\Z")
+DEPLOYMENT_TYPES = ("CREATE", "CREATE2")
 
 
 def fail(message: str) -> NoReturn:
@@ -88,12 +92,12 @@ def find_deployment(
         transaction
         for transaction in transactions
         if isinstance(transaction, dict)
-        and transaction.get("transactionType") == "CREATE"
+        and transaction.get("transactionType") in DEPLOYMENT_TYPES
         and transaction.get("contractName") == contract_name
     ]
     if len(matches) != 1:
         fail(
-            f"broadcast must contain exactly one CREATE for {contract_name}; "
+            f"broadcast must contain exactly one CREATE or CREATE2 for {contract_name}; "
             f"found {len(matches)}"
         )
 
@@ -101,9 +105,9 @@ def find_deployment(
     transaction_hash = transaction.get("hash")
     address = transaction.get("contractAddress")
     if not isinstance(transaction_hash, str) or not TRANSACTION_HASH.fullmatch(transaction_hash):
-        fail(f"{contract_name} CREATE has an invalid transaction hash")
+        fail(f"{contract_name} deployment has an invalid transaction hash")
     if not isinstance(address, str) or not ADDRESS.fullmatch(address):
-        fail(f"{contract_name} CREATE has an invalid contract address")
+        fail(f"{contract_name} deployment has an invalid contract address")
 
     receipts = broadcast.get("receipts")
     if not isinstance(receipts, list):
@@ -124,10 +128,63 @@ def find_deployment(
     receipt = receipt_matches[0]
     if quantity(receipt.get("status"), "deployment receipt status") != 1:
         fail(f"deployment transaction {transaction_hash} did not succeed")
-    receipt_address = receipt.get("contractAddress")
-    if not isinstance(receipt_address, str) or receipt_address.lower() != address.lower():
-        fail("deployment receipt contract address does not match the CREATE transaction")
+    if transaction["transactionType"] == "CREATE":
+        # A contract-creation transaction: the receipt names the created contract.
+        receipt_address = receipt.get("contractAddress")
+        if not isinstance(receipt_address, str) or receipt_address.lower() != address.lower():
+            fail("deployment receipt contract address does not match the CREATE transaction")
+    else:
+        # A call to the factory: the receipt names no contract; the address is checked
+        # against the salt and initcode in deployment_initcode.
+        raw_transaction = transaction.get("transaction")
+        to = raw_transaction.get("to") if isinstance(raw_transaction, dict) else None
+        if not isinstance(to, str) or to.lower() != CREATE2_FACTORY:
+            fail(f"CREATE2 deployment was not sent to the factory {CREATE2_FACTORY}")
+        receipt_to = receipt.get("to")
+        if not isinstance(receipt_to, str) or receipt_to.lower() != CREATE2_FACTORY:
+            fail(f"deployment receipt is not for a call to the factory {CREATE2_FACTORY}")
     return transaction, receipt
+
+
+def create2_address(factory: str, salt: str, initcode: str) -> str:
+    """keccak256(0xff ‖ factory ‖ salt ‖ keccak256(initcode))[12:], computed by ``cast``."""
+    output = subprocess.run(
+        ["cast", "compute-address", factory, "--salt", salt, "--init-code", initcode],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    match = re.search(r"0x[0-9a-fA-F]{40}", output)
+    if match is None:
+        fail(f"could not parse cast compute-address output: {output!r}")
+    return match.group(0)
+
+
+def deployment_initcode(transaction: dict[str, Any], version: str) -> tuple[str, str | None]:
+    """``(initcode with constructor arguments, CREATE2 salt or None)`` of a deployment.
+
+    For CREATE the transaction input is the initcode. For CREATE2 it is salt ‖ initcode;
+    the salt must be the release's, and the address forge recorded must be the one the
+    factory derives from salt and initcode.
+    """
+    raw_transaction = transaction.get("transaction")
+    data = raw_transaction.get("input") if isinstance(raw_transaction, dict) else None
+    if not isinstance(data, str) or not data.startswith("0x"):
+        fail("deployment transaction is missing its input bytecode")
+    if transaction["transactionType"] == "CREATE":
+        return data, None
+
+    salt, initcode = "0x" + data[2:66].lower(), "0x" + data[66:]
+    expected_salt = release_salt(version)
+    if salt != expected_salt:
+        fail(f"CREATE2 salt {salt} is not release {version!r}'s salt {expected_salt}")
+    derived = create2_address(CREATE2_FACTORY, salt, initcode)
+    if derived.lower() != transaction["contractAddress"].lower():
+        fail(
+            f"CREATE2 address {derived} derived from factory, salt and initcode does not "
+            f"match the recorded {transaction['contractAddress']}"
+        )
+    return initcode, salt
 
 
 def validate_profile(
@@ -145,7 +202,7 @@ def validate_profile(
 
     arguments = transaction.get("arguments")
     if not isinstance(arguments, list) or len(arguments) != 3:
-        fail("deployment CREATE must contain its three constructor arguments")
+        fail("deployment must record its three constructor arguments")
 
     postage_matches = (
         isinstance(arguments[0], str)
@@ -187,23 +244,17 @@ def normalized_receipt(receipt: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def validate_artifact(artifact: dict[str, Any], transaction: dict[str, Any]) -> list[Any]:
+def validate_artifact(artifact: dict[str, Any], deployed_initcode: str) -> list[Any]:
     abi = artifact.get("abi")
     if not isinstance(abi, list):
         fail("contract artifact is missing its ABI array")
 
     bytecode = artifact.get("bytecode")
     artifact_initcode = bytecode.get("object") if isinstance(bytecode, dict) else None
-    raw_transaction = transaction.get("transaction")
-    deployed_initcode = (
-        raw_transaction.get("input") if isinstance(raw_transaction, dict) else None
-    )
     if not isinstance(artifact_initcode, str) or not artifact_initcode.startswith("0x"):
         fail("contract artifact is missing its creation bytecode")
-    if not isinstance(deployed_initcode, str) or not deployed_initcode.startswith("0x"):
-        fail("deployment CREATE is missing its input bytecode")
     if not deployed_initcode.lower().startswith(artifact_initcode.lower()):
-        fail("compiled artifact bytecode does not match the deployment CREATE bytecode")
+        fail("compiled artifact bytecode does not match the deployed initcode")
     return abi
 
 
@@ -219,7 +270,8 @@ def build_manifest(
     transaction, receipt = find_deployment(broadcast, contract_name)
     validate_profile(profile_name, profile, broadcast, transaction)
 
-    abi = validate_artifact(artifact, transaction)
+    initcode, salt = deployment_initcode(transaction, version)
+    abi = validate_artifact(artifact, initcode)
 
     source_broadcast = broadcast_path
     timestamp = broadcast.get("timestamp")
@@ -238,6 +290,8 @@ def build_manifest(
         linked_data["timestamp"] = timestamp
     if isinstance(broadcast.get("commit"), str):
         linked_data["commit"] = broadcast["commit"]
+    if salt is not None:
+        linked_data["create2"] = {"factory": CREATE2_FACTORY, "salt": salt}
 
     return {
         "address": transaction["contractAddress"],

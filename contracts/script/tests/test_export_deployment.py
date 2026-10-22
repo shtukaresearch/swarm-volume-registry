@@ -116,6 +116,85 @@ class BuildManifestTests(unittest.TestCase):
             )
 
 
+# CREATE2 through the factory, salted with release_salt(VERSION). The address is
+# `cast compute-address <factory> --salt <salt> --init-code 0x6000c0ffee`.
+CREATE2_SALT = "0x76322d7263310000000000000000000000000000000000000000000000000000"
+CREATE2_ADDRESS = "0xfc31a2aafb4f0ebaf814b3039f7b15dedfb7fded"
+FACTORY = "0x4e59b44847b379578588920ca78fbf26c0b4956c"
+
+
+def create2_broadcast_fixture(salt: str = CREATE2_SALT) -> dict:
+    broadcast = broadcast_fixture()
+    transaction = broadcast["transactions"][0]
+    transaction["transactionType"] = "CREATE2"
+    transaction["contractAddress"] = CREATE2_ADDRESS
+    transaction["transaction"] = {"to": FACTORY, "input": salt + "6000c0ffee"}
+    receipt = broadcast["receipts"][0]
+    receipt["contractAddress"] = None
+    receipt["to"] = FACTORY
+    return broadcast
+
+
+class Create2ManifestTests(unittest.TestCase):
+    def build(self, broadcast: dict) -> dict:
+        return export_deployment.build_manifest(
+            PROFILE_NAME,
+            VERSION,
+            PROFILE,
+            broadcast,
+            {
+                "abi": [{"type": "constructor", "inputs": []}],
+                "bytecode": {"object": "0x6000"},
+            },
+            "VolumeRegistry",
+            export_deployment.CONTRACTS / "broadcast/example/run-latest.json",
+        )
+
+    def test_records_factory_and_salt(self) -> None:
+        self.assertEqual(export_deployment.CREATE2_FACTORY, FACTORY)
+        manifest = self.build(create2_broadcast_fixture())
+
+        self.assertEqual(manifest["address"], CREATE2_ADDRESS)
+        self.assertEqual(
+            manifest["linkedData"]["create2"], {"factory": FACTORY, "salt": CREATE2_SALT}
+        )
+
+    def test_rejects_another_releases_salt(self) -> None:
+        salt = export_deployment.release_salt("v2-rc2")
+        with self.assertRaisesRegex(SystemExit, "is not release 'v2-rc1'"):
+            self.build(create2_broadcast_fixture(salt))
+
+    def test_rejects_address_not_derived_from_salt_and_initcode(self) -> None:
+        broadcast = create2_broadcast_fixture()
+        broadcast["transactions"][0]["contractAddress"] = ADDRESS
+        with self.assertRaisesRegex(SystemExit, "does not match the recorded"):
+            self.build(broadcast)
+
+    def test_rejects_call_to_another_factory(self) -> None:
+        broadcast = create2_broadcast_fixture()
+        broadcast["transactions"][0]["transaction"]["to"] = "0x" + "11" * 20
+        with self.assertRaisesRegex(SystemExit, "was not sent to the factory"):
+            self.build(broadcast)
+
+    def test_rejects_receipt_of_another_call(self) -> None:
+        broadcast = create2_broadcast_fixture()
+        broadcast["receipts"][0]["to"] = "0x" + "11" * 20
+        with self.assertRaisesRegex(SystemExit, "not for a call to the factory"):
+            self.build(broadcast)
+
+    def test_rejects_artifact_from_another_build(self) -> None:
+        with self.assertRaisesRegex(SystemExit, "artifact bytecode does not match"):
+            export_deployment.build_manifest(
+                PROFILE_NAME,
+                VERSION,
+                PROFILE,
+                create2_broadcast_fixture(),
+                {"abi": [], "bytecode": {"object": "0x1234"}},
+                "VolumeRegistry",
+                export_deployment.CONTRACTS / "broadcast/example/run-latest.json",
+            )
+
+
 class WriteManifestTests(unittest.TestCase):
     def write(self, root: Path, manifest: dict, *, version: str = VERSION, latest: bool = False):
         return export_deployment.write_manifest(

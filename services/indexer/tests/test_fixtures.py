@@ -56,3 +56,51 @@ def test_constructor_args_are_abi_encoded():
         + "ab" * 20
         + "000000000000000000000000000000000000000000000000000000000000000c"
     )
+
+
+def _create2_record(tmp_path, monkeypatch, *, recorded_salt):
+    """A CREATE2 record and its broadcast under ``tmp_path``, standing in for the repo."""
+    monkeypatch.setattr(vendor_fixtures, "REPO", tmp_path)
+    monkeypatch.setattr(vendor_fixtures, "CONTRACTS_DIR", tmp_path)
+    abi = [{"type": "constructor", "inputs": [{"type": "uint64"}]}]
+    salt = "0x" + b"v2-rc3".ljust(32, b"\0").hex()
+    tx_hash = "0x" + "12" * 32
+    arg = "00" * 31 + "0c"
+    broadcast = {
+        "transactions": [
+            {
+                "hash": tx_hash,
+                "transactionType": "CREATE2",
+                "transaction": {"input": salt + "6000c0ffee" + arg},
+            }
+        ]
+    }
+    (tmp_path / "run.json").write_text(json.dumps(broadcast))
+    record = {
+        "abi": abi,
+        "args": [12],
+        "address": "0x" + "ab" * 20,
+        "transactionHash": tx_hash,
+        "linkedData": {
+            "chainId": 11155111,
+            "broadcast": "run.json",
+            "create2": {"salt": recorded_salt or salt},
+        },
+    }
+    path = tmp_path / "sepolia" / "VolumeRegistry-v2-rc3.json"
+    path.parent.mkdir()
+    path.write_text(json.dumps(record))
+    return path
+
+
+def test_create2_fixture_is_initcode_after_the_salt(tmp_path, monkeypatch):
+    path = _create2_record(tmp_path, monkeypatch, recorded_salt=None)
+    fixture, entry = vendor_fixtures.fixture_from_record(path)
+    assert fixture["bytecode"]["object"] == "0x6000c0ffee"
+    assert entry["registry"] == "0x" + "ab" * 20
+
+
+def test_create2_salt_must_match_the_record(tmp_path, monkeypatch):
+    path = _create2_record(tmp_path, monkeypatch, recorded_salt="0x" + "00" * 32)
+    with pytest.raises(SystemExit, match="CREATE2 salt"):
+        vendor_fixtures.fixture_from_record(path)

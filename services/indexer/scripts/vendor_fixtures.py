@@ -6,9 +6,10 @@ Two kinds of fixture live under ``services/indexer/tests/fixtures/``:
 - ``<version>/VolumeRegistry.json`` — the registry contract exactly as deployed under a
   release (release-procedure step B1; ``RELEASING.md``). ``release VERSION`` derives it
   from the committed deployment records, with no build: the ABI is the record's, and the
-  creation bytecode is the recorded CREATE transaction's initcode (from the Foundry
-  broadcast the record links to) with its ABI-encoded constructor arguments removed —
-  checked against the record's ``args``. The fixture is therefore the deployed code by
+  creation bytecode is the recorded deployment's initcode (from the Foundry broadcast the
+  record links to: a CREATE transaction's input, or a CREATE2 factory call's input after
+  the 32-byte salt, which must be the record's ``linkedData.create2.salt``) with its
+  ABI-encoded constructor arguments removed — checked against the record's ``args``. The fixture is therefore the deployed code by
   construction. Every network's record of the version is read, and they must agree.
   A ``provenance.json`` beside it names the records, transactions and release tag.
 - ``support/`` — the test-support contracts the harness deploys around the registry
@@ -90,12 +91,21 @@ def fixture_from_record(path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     creates = [
         tx
         for tx in broadcast["transactions"]
-        if tx.get("hash", "").lower() == record["transactionHash"].lower()
-        and tx.get("transactionType") == "CREATE"
+        if (tx.get("hash") or "").lower() == record["transactionHash"].lower()
+        and tx.get("transactionType") in ("CREATE", "CREATE2")
     ]
     if len(creates) != 1:
-        fail(f"{broadcast_path.relative_to(REPO)} has no single CREATE {record['transactionHash']}")
+        fail(
+            f"{broadcast_path.relative_to(REPO)} has no single deployment "
+            f"{record['transactionHash']}"
+        )
     initcode = creates[0]["transaction"]["input"].lower()
+    if creates[0]["transactionType"] == "CREATE2":
+        salt = "0x" + initcode[2:66]
+        recorded = record["linkedData"].get("create2", {}).get("salt", "").lower()
+        if salt != recorded:
+            fail(f"{path.relative_to(REPO)}: CREATE2 salt {salt} is not the record's {recorded!r}")
+        initcode = "0x" + initcode[66:]
     encoded_args = encode_constructor_args(record["abi"], record["args"])
     if not initcode.endswith(encoded_args):
         fail(f"{path.relative_to(REPO)}: initcode does not end with the record's constructor args")
@@ -131,8 +141,9 @@ def cmd_release(version: str) -> int:
         "description": (
             "Pinned VolumeRegistry fixture for this release, derived from the committed "
             "deployment records with no build: abi from the record; creation bytecode is "
-            "the recorded CREATE transaction's initcode with its ABI-encoded constructor "
-            "arguments (checked against the record's args) removed. The test-support "
+            "the recorded deployment's initcode (a CREATE2 factory call's input after its "
+            "salt) with its ABI-encoded constructor arguments (checked against the "
+            "record's args) removed. The test-support "
             "contracts the harness deploys around it are shared, in ../support/."
         ),
         "tag": {"name": version, "commit": tag_commit} if tag_commit else None,

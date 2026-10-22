@@ -262,7 +262,7 @@ Set once at construction; all three are immutable thereafter:
 |---|---|---|
 | `postage` | address | PostageStamp contract |
 | `bzz` | address | BZZ ERC20 |
-| `graceBlocks` | uint64 | Target runway per topup cycle, in blocks. Drives both the initial charge at `createVolume` and the topup target in `trigger`. Chosen value: **17280** (≈ 24 h on Gnosis Chain's 5 s blocks). See §10.1 for the bound this implies. |
+| `graceBlocks` | uint64 | Target runway per topup cycle, in blocks. Drives both the initial charge at `createVolume` and the topup target in `trigger`. Set per deployment: **17280** (≈ 24 h on Gnosis Chain's 5 s blocks) for Gnosis v1, **120960** (7 d) planned for Gnosis v2, **300** (≈ 1 h at 12 s) for Sepolia `v2-rc2`. See §10.1 for the bound each implies. |
 
 **Constructor checks.**
 - `graceBlocks ≥ PostageStamp(postage).minimumValidityBlocks()`. Otherwise `createBatch` would revert with `InsufficientBalance` on every `createVolume` (Postage's own floor is `minimumValidityBlocks × lastPrice` per chunk). Verified at deploy; contract refuses to instantiate if violated.
@@ -311,6 +311,16 @@ f  = ln(1.09106) / 0.09106 ≈ 0.08712 / 0.09106 ≈ 0.9567
 ```
 
 So the registry guarantees that a volume whose last successful top-up was at block `t0` lives **at least `0.9567 × 17280 ≈ 16532` blocks** after `t0` before its batch dies, even in the pessimistic scenario where the oracle raises price at the maximum permitted rate for every round throughout the grace period. In wall-clock terms on Gnosis (5 s blocks): promised ~24 h, worst-case ~22.95 h.
+
+**Other deployed and planned values.** The same formula, with the same `λ` (the oracle's round length and rate ceiling are in blocks):
+
+| Deployment | `graceBlocks` | `λ × graceBlocks` | `f` | Worst-case runway |
+|---|---|---|---|---|
+| Gnosis v1 | 17280 (24 h at 5 s) | 0.0911 | 0.9567 | ≈ 16532 blocks ≈ 22.95 h |
+| Gnosis v2 (planned) | 120960 (7 d at 5 s) | 0.6375 | 0.7736 | ≈ 93576 blocks ≈ 5.42 d |
+| Sepolia `v2-rc2` | 300 (1 h at 12 s) | 0.00158 | 0.9992 | ≈ 299.8 blocks ≈ 59.95 min |
+
+`f` falls as `λ × graceBlocks` grows: the longer the runway, the more of it a sustained maximum-rate price rise can consume. `test/SurvivalFloor.t.sol` runs the worst-case schedule for each of these values and checks the observed death block against `⌊f × graceBlocks⌋`; for 120960 it additionally checks at least 86400 blocks (5 d at 5 s).
 
 **Pessimism.** This is the *floor*, not the expectation. `K_max` only applies when redundancy is reported below target; `PriceOracle` can also *decrease* price (down to a minimum floor), and the neutral `changeRate[4]` leaves price unchanged. Typical realization is at or near 100 %. The 95.67 % figure is the contract-level guarantee we document; normal operation is expected to do much better.
 

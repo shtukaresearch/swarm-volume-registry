@@ -58,6 +58,14 @@ def git(*args: str) -> str:
     return subprocess.check_output(["git", *args], cwd=REPO, text=True).strip()
 
 
+def tag_commit(name: str) -> str | None:
+    """The commit tag ``name`` points at, or None if there is no such tag yet."""
+    try:
+        return git("rev-parse", "-q", "--verify", f"refs/tags/{name}^{{commit}}")
+    except subprocess.CalledProcessError:
+        return None
+
+
 def _encode_static(abi_type: str, value: Any) -> str:
     """One static constructor argument as its 32-byte ABI word (hex, no prefix).
 
@@ -135,7 +143,7 @@ def cmd_release(version: str) -> int:
         deployments.append(entry)
         print(f"read {entry['record']} ({entry['network']}, {entry['registry']})")
 
-    tag_commit = git("rev-parse", "-q", "--verify", f"refs/tags/{version}^{{commit}}")
+    tagged = tag_commit(version)
     provenance = {
         "registry_version": version,
         "description": (
@@ -146,7 +154,7 @@ def cmd_release(version: str) -> int:
             "record's args) removed. The test-support "
             "contracts the harness deploys around it are shared, in ../support/."
         ),
-        "tag": {"name": version, "commit": tag_commit} if tag_commit else None,
+        "tag": {"name": version, "commit": tagged} if tagged else None,
         "deployments": deployments,
     }
 
@@ -155,7 +163,7 @@ def cmd_release(version: str) -> int:
     (dst / f"{REGISTRY}.json").write_text(json.dumps(fixture, indent=1) + "\n")
     (dst / "provenance.json").write_text(json.dumps(provenance, indent=2) + "\n")
     print(f"wrote {dst.relative_to(REPO)}/{{{REGISTRY},provenance}}.json")
-    if tag_commit is None:
+    if tagged is None:
         print(f"note: no git tag {version!r} yet; provenance.tag is null", file=sys.stderr)
     return 0
 

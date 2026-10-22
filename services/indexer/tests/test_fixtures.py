@@ -104,3 +104,8 @@ def test_create2_salt_must_match_the_record(tmp_path, monkeypatch):
     path = _create2_record(tmp_path, monkeypatch, recorded_salt="0x" + "00" * 32)
     with pytest.raises(SystemExit, match="CREATE2 salt"):
         vendor_fixtures.fixture_from_record(path)
+
+
+def test_tag_commit_of_a_missing_tag_is_none():
+    # CI checks out shallowly without tags, so only the missing case is portable.
+    assert vendor_fixtures.tag_commit("v999-rc999") is None

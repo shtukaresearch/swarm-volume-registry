@@ -36,6 +36,13 @@ testing strategy, how each section of `DESIGN.md` maps to test files,
 and the file-level breakdown of the example, invariant, and fork
 suites.
 
+A change to the contract's design comes with a decision record in
+[`docs/adr/`](./docs/adr/README.md) (Context → Decision → Consequences),
+added to the index there, alongside the corresponding edits to
+[`docs/DESIGN.md`](./docs/DESIGN.md) and the testing strategy. Records
+are not edited once accepted; a later decision supersedes an earlier one
+and says so in its status line.
+
 Format check (also enforced in CI):
 
 ```sh

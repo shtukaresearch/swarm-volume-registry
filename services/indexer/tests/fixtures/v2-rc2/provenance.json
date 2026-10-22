@@ -1,0 +1,18 @@
+{
+  "registry_version": "v2-rc2",
+  "description": "Pinned VolumeRegistry fixture for this release, derived from the committed deployment records with no build: abi from the record; creation bytecode is the recorded CREATE transaction's initcode with its ABI-encoded constructor arguments (checked against the record's args) removed. The test-support contracts the harness deploys around it are shared, in ../support/.",
+  "tag": {
+    "name": "v2-rc2",
+    "commit": "63c6fd8638cff17d971945e9bf206f4812ea8b26"
+  },
+  "deployments": [
+    {
+      "network": "sepolia",
+      "chain_id": 11155111,
+      "registry": "0x00f72ee2970df8112fdf04c0225b33c43c5a4177",
+      "transaction": "0x877d4ac050a2b4d0cd98a2ff5fb1fd5b3d7c4448f1940702a5f9ae4adc6737a3",
+      "record": "contracts/deployments/sepolia/VolumeRegistry-v2-rc2.json",
+      "source_commit": "ead5343"
+    }
+  ]
+}

@@ -168,6 +168,8 @@ _V2_RC1_EVENT_ABIS: list[dict[str, Any]] = [
 _VERSIONS = {
     "v1": {"abis": _V1_EVENT_ABIS, "enums": _V1_ENUMS},
     "v2-rc1": {"abis": _V2_RC1_EVENT_ABIS, "enums": _V1_ENUMS},
+    # Same source as v2-rc1; only the constructor's graceBlocks differs.
+    "v2-rc2": {"abis": _V2_RC1_EVENT_ABIS, "enums": _V1_ENUMS},
 }
 
 

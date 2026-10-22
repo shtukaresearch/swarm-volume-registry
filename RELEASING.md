@@ -90,7 +90,11 @@ python3 script/deploy.py sepolia-postage-v0.9.4 \
     --broadcast
 ```
 
-Foundry prompts for the account password. Once the transaction is confirmed, it writes
+Foundry prompts for the account password. On a Linux desktop with `zenity`, add
+`--password-prompt` to enter it in a desktop dialog instead; the launcher passes it to
+Foundry through an in-memory file descriptor, never argv, the environment or disk. This
+lets the command run from a non-interactive shell, such as an agent's. Once the
+transaction is confirmed, it writes
 a timestamped execution record and updates:
 
 ```text

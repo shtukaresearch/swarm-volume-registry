@@ -31,45 +31,48 @@ contract SurvivalFloorTest is RegistryFixture {
         return oracle.priceBase();
     }
 
+    /// @dev Natural log of `y` (1e18 fixed-point, `y >= ONE`) via the
+    ///      atanh series ln(y) = 2·Σ z^(2k+1)/(2k+1), z = (y−1)/(y+1).
+    ///      All terms are positive, so truncation (and integer division)
+    ///      can only round down. For y ≤ 2 (z ≤ 1/3) the series reaches
+    ///      1e-18 resolution within ~20 terms, so it is accurate across
+    ///      every λ·G this suite uses, unlike a low-order Taylor of ln(1+x).
+    function _ln(uint256 y) internal pure returns (uint256) {
+        require(y >= ONE, "ln domain");
+        uint256 z = ((y - ONE) * ONE) / (y + ONE);
+        uint256 z2 = (z * z) / ONE;
+        uint256 term = z; // z^(2k+1)
+        uint256 sum = 0;
+        for (uint256 k = 0; term > 0; ++k) {
+            sum += term / (2 * k + 1);
+            term = (term * z2) / ONE;
+        }
+        return 2 * sum;
+    }
+
     /// @dev Compute floor(f * graceBlocks) where
-    ///      f = ln(1 + λ·G) / (λ·G), with λ·G expressed as a rational
-    ///      ln(K_max)·G / ROUND_LENGTH.
-    ///
-    ///      Uses Taylor: ln(1+x) ≈ x - x²/2 + x³/3 for small x. For our
-    ///      operating range (λ·G ≤ 0.1), the error vs. true ln is < 1e-5,
-    ///      well inside the floor bound tolerance.
+    ///      f = ln(1 + λ·G) / (λ·G), with λ = ln(K_max) / ROUND_LENGTH and
+    ///      K_max = changeRate(0) / priceBase read from the oracle.
     function _computeFloorBlocks(uint64 graceBlocks) internal view returns (uint256) {
         uint256 kNum = _Kmax_num();
         uint256 kDen = _priceBase();
-        // ln(K_max) ≈ (kNum/kDen) - 1 - ((kNum/kDen)-1)² / 2 + …
-        // Work in 1e18 fixed-point. r = (kNum - kDen) / kDen.
         require(kNum > kDen, "K_max not > 1");
-        uint256 r = ((kNum - kDen) * ONE) / kDen; // r in 1e18
-        // ln(K_max) = r - r²/(2·ONE) + r³/(3·ONE²)
-        uint256 r2 = (r * r) / ONE;
-        uint256 r3 = (r2 * r) / ONE;
-        uint256 lnK = r - r2 / 2 + r3 / 3; // 1e18 fixed
+        uint256 lnK = _ln((kNum * ONE) / kDen); // 1e18 fixed
 
         // lambdaG (1e18) = lnK * graceBlocks / ROUND_LENGTH
         uint256 lambdaG = (lnK * uint256(graceBlocks)) / ROUND_LENGTH;
-
-        // Numerator = ln(1 + lambdaG). Taylor as above.
-        uint256 x = lambdaG;
-        uint256 x2 = (x * x) / ONE;
-        uint256 x3 = (x2 * x) / ONE;
-        uint256 num = x - x2 / 2 + x3 / 3;
-
-        // f = num / lambdaG
         if (lambdaG == 0) return graceBlocks; // flat price
-        uint256 fScaled = (num * ONE) / lambdaG; // f * 1e18
+
+        uint256 fScaled = (_ln(ONE + lambdaG) * ONE) / lambdaG; // f * 1e18
         return (uint256(graceBlocks) * fScaled) / ONE; // floor
     }
 
     /// @dev Drive postage.setPrice(p * K_max) every ROUND_LENGTH blocks.
     ///      Returns T = block offset from startBlock at which the batch is
-    ///      first observed dead. Check is done at the END of each round
-    ///      (after the price jump), so observed T is ≤ the true death
-    ///      block — hence a safe lower bound for the ≥ assertion.
+    ///      first observed dead. Check is done at the END of each round,
+    ///      before the price jump, so observed T is the first round
+    ///      boundary at or after death; _refineDeathBlock then locates the
+    ///      exact block within that round.
     ///
     ///      Requires a starting price large enough that
     ///      `p * kNum / kDen > p` (≳ 1248 given kNum/kDen≈1.000802), else
@@ -89,14 +92,16 @@ contract SurvivalFloorTest is RegistryFixture {
 
         while (block.number - startBlock < safetyCap) {
             _roll(ROUND_LENGTH);
-            uint256 newPrice = (uint256(stamp.lastPrice()) * kNum) / kDen;
-            require(newPrice > uint256(stamp.lastPrice()), "starting price too small for K_max");
-            stamp.setPrice(newPrice);
-
+            // Check before the price jump so the round just elapsed was
+            // drained at a single price, which _refineDeathBlock relies on.
             (,,,, uint256 nb,) = stamp.batches(id);
             if (nb <= stamp.currentTotalOutPayment()) {
                 return block.number - startBlock;
             }
+
+            uint256 newPrice = (uint256(stamp.lastPrice()) * kNum) / kDen;
+            require(newPrice > uint256(stamp.lastPrice()), "starting price too small for K_max");
+            stamp.setPrice(newPrice);
         }
         return safetyCap + 1;
     }
@@ -130,10 +135,11 @@ contract SurvivalFloorTest is RegistryFixture {
         stamp.setPrice(p);
     }
 
-    function test_survival_worstCasePrice_gnosisDefault() public {
-        // graceBlocks = 17280 (Gnosis default per DESIGN §10), depth arbitrary.
-        uint64 grace = 17280;
-        VolumeRegistry reg17280 = new VolumeRegistry(address(stamp), address(bzz), grace);
+    /// @dev Deploy a registry with `grace`, create a volume, never trigger,
+    ///      and drive the worst-case price schedule until the batch dies.
+    ///      Asserts T ≥ ⌊f × grace⌋ (I6) and returns T in blocks.
+    function _worstCaseSurvival(uint64 grace) internal returns (uint256 T) {
+        VolumeRegistry reg = new VolumeRegistry(address(stamp), address(bzz), grace);
 
         // Use a realistic price (24000, same order as Swarm's min upscaled
         // price) so K_max arithmetic does not truncate.
@@ -141,23 +147,44 @@ contract SurvivalFloorTest is RegistryFixture {
 
         bzz.mint(PAYER, 1e40);
         vm.prank(PAYER);
-        bzz.approve(address(reg17280), type(uint256).max);
+        bzz.approve(address(reg), type(uint256).max);
         vm.prank(OWNER);
-        reg17280.designateFundingWallet(PAYER);
+        reg.designateFundingWallet(PAYER);
         vm.prank(PAYER);
-        reg17280.confirmAuth(OWNER);
+        reg.confirmAuth(OWNER);
         vm.prank(OWNER);
-        bytes32 id = reg17280.createVolume(CHUNK_SIGNER, DEFAULT_DEPTH, DEFAULT_BUCKET, 0, false);
+        bytes32 id = reg.createVolume(CHUNK_SIGNER, DEFAULT_DEPTH, DEFAULT_BUCKET, 0, false);
 
         uint256 bound = _computeFloorBlocks(grace);
         uint256 observed = _runWorstCasePriceHarness(id, grace, uint256(grace) * 2);
+        assertLe(observed, uint256(grace) * 2, "batch did not die within 2 x graceBlocks");
         // Refine to the true death block within the last round so round-
         // quantization doesn't bias us below the bound.
-        uint256 T = observed <= uint256(grace) * 2
-            ? _refineDeathBlock(id) - (block.number - observed)
-            : observed;
+        T = _refineDeathBlock(id) - (block.number - observed);
 
+        emit log_named_uint("graceBlocks", grace);
+        emit log_named_uint("floor blocks", bound);
+        emit log_named_uint("observed blocks", T);
         assertGe(T, bound, "survived less than the I6 floor");
+    }
+
+    function test_survival_worstCasePrice_gnosisDefault() public {
+        // graceBlocks = 17280 (≈ 24 h at 5 s blocks; the v1 Gnosis value).
+        _worstCaseSurvival(17280);
+    }
+
+    function test_survival_worstCasePrice_gnosis7d() public {
+        // graceBlocks = 120960 (7 d at 5 s blocks). λ·G ≈ 0.64, f ≈ 0.774.
+        // Requirement: worst-case realised runway is at least 5 days
+        // (86400 blocks at 5 s).
+        uint256 T = _worstCaseSurvival(120960);
+        emit log_named_uint("observed seconds at 5 s blocks", T * 5);
+        assertGe(T, 86400, "7 d grace survived less than 5 days");
+    }
+
+    function test_survival_worstCasePrice_sepolia1h() public {
+        // graceBlocks = 300 (1 h at 12 s blocks). λ·G ≈ 0.0016, f ≈ 0.9992.
+        _worstCaseSurvival(300);
     }
 
     function test_survival_worstCasePrice_shortGrace() public {

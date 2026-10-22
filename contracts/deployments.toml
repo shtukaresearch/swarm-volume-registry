@@ -30,3 +30,15 @@ deployment_network = "sepolia"
 verifier = "etherscan"
 verifier_api_key_env = "ETHERSCAN_API_KEY"
 explorer_url = "https://sepolia.etherscan.io/address/{address}#code"
+
+# One-hour runway (300 blocks at 12-second blocks), so a keeper running every
+# ten minutes keeps volumes alive. Same PostageStamp as sepolia-postage-v0.9.4.
+[profiles."sepolia-postage-v0.9.4-1h"]
+chain_id = 11155111
+postage_stamp = "0xcdfdC3752caaA826fE62531E0000C40546eC56A6"
+bzz = "0x543dDb01Ba47acB11de34891cD86B675F04840db"
+grace_blocks = 300
+deployment_network = "sepolia"
+verifier = "etherscan"
+verifier_api_key_env = "ETHERSCAN_API_KEY"
+explorer_url = "https://sepolia.etherscan.io/address/{address}#code"

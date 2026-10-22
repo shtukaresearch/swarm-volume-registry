@@ -41,8 +41,9 @@ Owner is an EOA; payer is a Safe (or any smart-contract wallet capable of `appro
 
 - **When to use:** any volume worth protecting.
 - **Blast radius if the owner key is compromised:** bounded by the Safe's current allowance to the registry. A single `revoke(owner)` call from either side kills topups across every volume under the pair.
+- **Blast radius if the chunk-signer key is compromised:** the volume. The chunk signer is the Postage batch owner and can call `PostageStamp.increaseDepth` directly on Postage to dilute the batch, even with `immutableBatch`. Don't delegate `chunkSigner` to a party you don't trust with the volume.
 
-Separate chunk-signer addresses (owner ≠ signer) are supported but considered advanced usage; see [`docs/DESIGN.md`](./docs/DESIGN.md) §5.
+Separate chunk-signer addresses (owner ≠ signer) are supported but considered advanced usage, and don't contain the risk above; see [`docs/DESIGN.md`](./docs/DESIGN.md) §5.
 
 ## Documentation
 

@@ -40,7 +40,7 @@ Owner, payer, and chunk signer are the same EOA. One transaction costs one signa
 Owner is an EOA; payer is a Safe (or any smart-contract wallet capable of `approve` + an arbitrary call). The owner EOA still signs chunks and manages the volume; the Safe holds BZZ.
 
 - **When to use:** any volume worth protecting.
-- **Blast radius if the owner key is compromised:** bounded by the Safe's current allowance to the registry. A single `revoke(owner)` call from either side kills topups across every volume under the pair.
+- **Blast radius if the owner/chunk-signer key is compromised:** the volume itself (via a call to PostageStamp.increaseDepth), or payer funds bounded by the Safe's current allowance to the registry. A single `revoke(owner)` call from either side kills topups across every volume under the pair. 
 
 Separate chunk-signer addresses (owner ≠ signer) are supported but considered advanced usage; see [`docs/DESIGN.md`](./docs/DESIGN.md) §5.
 

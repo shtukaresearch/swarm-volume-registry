@@ -101,11 +101,11 @@ Owner and payer are the same EOA. Chunk signing is done by the same key. One tra
 
 Owner is an EOA; payer is a Safe (or any smart-contract wallet that can execute ERC20 `approve` and an arbitrary call). Chunk signing is still done by the owner EOA.
 
-- **When to use:** any volume worth protecting. The Safe holds BZZ and the allowance; the owner EOA can only cause spending up to the outstanding allowance.
-- **Blast radius if the owner key is compromised:** bounded by the Safe's current allowance to the registry. Mitigated by (a) keeping the allowance sized to near-term needs rather than `type(uint256).max`, and (b) revoking the account in a single Safe transaction, which kills topups across every volume under the pair.
+- **When to use:** any volume worth protecting. The Safe holds BZZ and the allowance; the owner EOA can only cause spending up to the outstanding allowa\nce.
+- **Blast radius if the owner key is compromised:** First, the volume itself, via the upload signer calling `increaseDepth` directly on the `Postage` contract. If the upload signer key is compromised, there is nothing you can do to prevent this since owner keys cannot be cycled upstream. Second, payer assets bounded by the Safe's current allowance to the registry. Mitigated by (a) keeping the allowance sized to near-term needs rather than `type(uint256).max`, and (b) revoking the account in a single Safe transaction, which kills topups across every volume under the pair.
 - **Blast radius if the Safe is compromised:** outside the registry's protection boundary.
 
-Separate chunk-signer addresses (owner ≠ signer) are supported by the contract but considered advanced usage. See [`DESIGN.md`](./DESIGN.md) §5.
+Separate chunk-signer addresses (owner ≠ signer) are supported by the contract but considered advanced usage, and do not contain this risk: the signer holds every batch-owner power on Postage regardless of what the registry permits. See [`DESIGN.md`](./DESIGN.md) §5.
 
 ## 5. Setup
 

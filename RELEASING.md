@@ -68,15 +68,23 @@ python3 -m unittest discover -s script/tests -v
 forge test -vvv
 ```
 
-Simulate the deployment before broadcasting it:
+Simulate the deployment before broadcasting it, naming the release:
 
 ```sh
-python3 script/deploy.py sepolia-postage-v0.9.4 \
+python3 script/deploy.py sepolia-postage-v0.9.4-1h --version v2-rc3 \
     --rpc-url "$RPC_URL"
 ```
 
-Review the simulation output, including the constructor arguments and predicted
-contract address. Its gas figure comes from forge's local EVM, which runs under the
+The registry is deployed with CREATE2 through the deterministic deployment proxy
+`0x4e59b44847b379578588920ca78fbf26c0b4956c`, salted with the release name as a
+left-aligned `bytes32` (`cast format-bytes32-string v2-rc3`). Its address is therefore
+fixed by the source, the profile and the release name; it does not depend on the deployer
+account or its nonce, and a failed attempt does not move it. Builds are reproducible
+(`foundry.toml` pins every compiler input), so the address can be recomputed from the
+tag. The launcher refuses to run if the factory has no code on the target chain.
+
+Review the simulation output, including the constructor arguments, the salt and the
+predicted contract address. Its gas figure comes from forge's local EVM, which runs under the
 project's `evm_version` (paris) and so does not charge EIP-8037 state gas: on chains that
 have activated Glamsterdam it under-reports a deployment by roughly 5×. The broadcast
 below therefore passes `--skip-simulation`, which makes forge take the gas limit from the
@@ -88,7 +96,7 @@ subdirectory and is not committed.
 Broadcast using the named keystore account:
 
 ```sh
-python3 script/deploy.py sepolia-postage-v0.9.4 \
+python3 script/deploy.py sepolia-postage-v0.9.4-1h --version v2-rc3 \
     --rpc-url "$RPC_URL" \
     --account volume-registry-deployer \
     --broadcast
@@ -115,14 +123,14 @@ network has a decimal `.chainId` file and one JSON file per named deployment. Ge
 record from the successful broadcast and compiled Foundry artifact, naming the release:
 
 ```sh
-python3 script/export_deployment.py sepolia-postage-v0.9.4 --version v2-rc2
+python3 script/export_deployment.py sepolia-postage-v0.9.4-1h --version v2-rc3
 ```
 
 This writes:
 
 ```text
 deployments/sepolia/.chainId
-deployments/sepolia/VolumeRegistry-v2-rc2.json
+deployments/sepolia/VolumeRegistry-v2-rc3.json
 ```
 
 The versioned record is immutable: it contains the address and ABI required for
@@ -146,11 +154,11 @@ hardhat-deploy filename read. It moves only on request. Promote the new deployme
 re-running the export with `--latest`:
 
 ```sh
-python3 script/export_deployment.py sepolia-postage-v0.9.4 --version v2-rc2 --latest
+python3 script/export_deployment.py sepolia-postage-v0.9.4-1h --version v2-rc3 --latest
 ```
 
 To point it back at an earlier deployment, copy that record over it
-(`cp deployments/sepolia/VolumeRegistry-v2-rc1.json deployments/sepolia/VolumeRegistry.json`).
+(`cp deployments/sepolia/VolumeRegistry-v2-rc2.json deployments/sepolia/VolumeRegistry.json`).
 The script tests check every committed pointer is a copy of one versioned record.
 
 ### A5. Verify the source on the block explorer
@@ -172,7 +180,7 @@ Set the Sepolia RPC URL and Etherscan API key without committing either value, t
 ```sh
 export RPC_URL="https://<your-sepolia-rpc>"
 export ETHERSCAN_API_KEY="<your-etherscan-api-key>"
-python3 script/verify_deployment.py sepolia-postage-v0.9.4 --version v2-rc2
+python3 script/verify_deployment.py sepolia-postage-v0.9.4-1h --version v2-rc3
 ```
 
 Confirm that Etherscan's **Contract → Code** tab shows the verified source at:
@@ -224,7 +232,7 @@ Once that commit is on `main`, tag it with the release name and push the tag —
 goes after the record commit, so the tag's tree contains its own deployment record:
 
 ```sh
-git tag v2-rc2 <record-commit> && git push origin v2-rc2
+git tag v2-rc3 <record-commit> && git push origin v2-rc3
 ```
 
 A later deployment of the same release to another network (A1–A6 again) adds its record
@@ -244,14 +252,15 @@ deployed; it is the package's acknowledgement that it can index the release
 No build is needed: the fixture comes from the deployment records committed in Part A.
 
 ```sh
-python3 services/indexer/scripts/vendor_fixtures.py release v2-rc2
+python3 services/indexer/scripts/vendor_fixtures.py release v2-rc3
 ```
 
-This writes `services/indexer/tests/fixtures/v2-rc2/VolumeRegistry.json` with the record's
-ABI and the creation bytecode of the recorded CREATE transaction (its initcode from the
-broadcast, minus the constructor arguments, which are checked against the record's
-`args`), so the fixture is the deployed code by construction. It reads every network's
-`VolumeRegistry-v2-rc2.json` and fails if they disagree. `provenance.json` names the
+This writes `services/indexer/tests/fixtures/v2-rc3/VolumeRegistry.json` with the record's
+ABI and the creation bytecode of the recorded deployment (its initcode from the
+broadcast — a CREATE transaction's input, or a CREATE2 factory call's input after the
+salt recorded in `linkedData.create2` — minus the constructor arguments, which are checked
+against the record's `args`), so the fixture is the deployed code by construction. It reads every network's
+`VolumeRegistry-v2-rc3.json` and fails if they disagree. `provenance.json` names the
 records, transactions and git tag. Commit the fixture directory; `test_fixtures.py`
 re-derives it from the records on every test run.
 
@@ -262,7 +271,7 @@ when the `storage-incentives` submodule pin moves, refresh them after `forge bui
 
 ### B2. Add the decode reference data
 
-In `services/indexer/src/ethswarm_volumes/decode.py`, add the `_VERSIONS["v2-rc2"]` entry:
+In `services/indexer/src/ethswarm_volumes/decode.py`, add the `_VERSIONS["v2-rc3"]` entry:
 
 - events ABI + enum tables for the new surface, **or**
 - a one-line alias of the predecessor's entry if the indexer-visible surface is unchanged

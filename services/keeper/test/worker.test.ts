@@ -135,7 +135,7 @@ describe("scheduled", () => {
     const { outcome } = await scheduled(env());
 
     expect(outcome).toBeUndefined();
-    expect(chain.triggerCalls).toEqual([volumeId(1), volumeId(2)]);
+    expect([...chain.triggerCalls].sort()).toEqual([volumeId(1), volumeId(2)]);
     expect(logged()).toMatchObject({ status: "ok", deployment: "keeper-test", cron: "* * * * *" });
     expect(logs.log).toHaveLength(1);
     expect(telegram.sent).toEqual([]);

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { collectActiveVolumes } from "../src/keeper/actions/collectActiveVolumes.js";
 import { getActiveVolumeCount } from "../src/keeper/actions/getActiveVolumeCount.js";
-import { runKeeperCycle } from "../src/keeper/actions/runKeeperCycle.js";
+import { rotateVolumes, runKeeperCycle } from "../src/keeper/actions/runKeeperCycle.js";
 import { trigger } from "../src/keeper/actions/trigger.js";
 import { REGISTRY, mockChain, volumeId, type MockVolume } from "./mock-chain.js";
 
@@ -9,6 +9,10 @@ const GRACE = 17_280n;
 const PRICE = 44_445n;
 const OUT = 1_000_000n;
 const TARGET = GRACE * PRICE;
+
+/** The mock's block, and so the order a cycle against it triggers in. */
+const BLOCK = 8_000_000n;
+const inCycleOrder = (ns: number[]) => rotateVolumes(ns.map(volumeId), BLOCK);
 
 // The mock serves real PostageStamp state for these fixtures. The keeper never
 // reads it — that is the point of `funded` and `due` looking different here and
@@ -126,6 +130,33 @@ describe("trigger", () => {
   });
 });
 
+describe("rotateVolumes", () => {
+  const ids = [1, 2, 3, 4, 5, 6, 7, 8].map(volumeId);
+
+  test("is a rotation of its input, the same for the same block", () => {
+    const rotated = rotateVolumes(ids, BLOCK);
+    const start = ids.indexOf(rotated[0]!);
+    expect(rotated).toEqual([...ids.slice(start), ...ids.slice(0, start)]);
+    expect(rotateVolumes(ids, BLOCK)).toEqual(rotated);
+  });
+
+  // A cron's step between runs can share a factor with the volume count: with
+  // 10 volumes and 50 blocks a run, rotating by the raw block number would
+  // start every run at the same place.
+  test("does not follow a constant block step", () => {
+    const tenIds = Array.from({ length: 10 }, (_, i) => volumeId(i + 1));
+    const starts = new Set(
+      Array.from({ length: 12 }, (_, run) => rotateVolumes(tenIds, BLOCK + BigInt(run * 50))[0]),
+    );
+    expect(starts.size).toBeGreaterThan(1);
+  });
+
+  test("leaves empty and single-volume lists alone", () => {
+    expect(rotateVolumes([], BLOCK)).toEqual([]);
+    expect(rotateVolumes([volumeId(1)], BLOCK)).toEqual([volumeId(1)]);
+  });
+});
+
 describe("runKeeperCycle", () => {
   test("an empty registry sends nothing", async () => {
     const chain = mockChain({ volumes: [] });
@@ -145,7 +176,7 @@ describe("runKeeperCycle", () => {
 
     expect(result.ok).toBe(true);
     expect(result.volumeCount).toBe(2);
-    expect(chain.triggerCalls).toEqual([volumeId(1), volumeId(2)]);
+    expect(chain.triggerCalls).toEqual(inCycleOrder([1, 2]));
   });
 
   test("every active volume is triggered, due or not", async () => {
@@ -154,7 +185,7 @@ describe("runKeeperCycle", () => {
 
     expect(result.ok).toBe(true);
     expect(result.volumeCount).toBe(3);
-    expect(chain.triggerCalls).toEqual([volumeId(1), volumeId(2), volumeId(3)]);
+    expect(chain.triggerCalls).toEqual(inCycleOrder([1, 2, 3]));
     expect(result.volumes.map((v) => v.status)).toEqual([
       "success",
       "success",
@@ -271,12 +302,13 @@ describe("per-volume outcomes", () => {
     });
     const result = await runKeeperCycle(chain.client, { registry: REGISTRY });
 
-    expect(result.volumes.map((v) => v.outcome)).toEqual([
-      "noop",
-      "toppedUp",
-      "topupSkipped",
-      "retired",
-    ]);
+    const outcomes = Object.fromEntries(result.volumes.map((v) => [v.volumeId, v.outcome]));
+    expect(outcomes).toEqual({
+      [volumeId(1)]: "noop",
+      [volumeId(2)]: "toppedUp",
+      [volumeId(3)]: "topupSkipped",
+      [volumeId(4)]: "retired",
+    });
     expect(result.noop).toEqual([volumeId(1)]);
     expect(result.toppedUp.map((t) => t.volumeId)).toEqual([volumeId(2)]);
     expect(result.topupSkipped.map((t) => t.volumeId)).toEqual([volumeId(3)]);
@@ -293,11 +325,25 @@ describe("bounds and failures", () => {
       maxVolumesPerCycle: 2,
     });
 
-    expect(chain.triggerCalls).toEqual([volumeId(1), volumeId(2)]);
+    expect(chain.triggerCalls).toEqual(inCycleOrder([1, 2, 3, 4, 5]).slice(0, 2));
     expect(result.volumeCount).toBe(5);
     expect(result.warnings.map((w) => w.message).join(" ")).toContain(
       "3 volume(s) deferred",
     );
+  });
+
+  // The incident this guards against: 8 volumes, room for 2 a run, and the same
+  // 2 triggered every run while the other 6 ran down to death.
+  test("what one cycle defers, later cycles reach", async () => {
+    const volumes = Array.from({ length: 8 }, (_, i) => due(i + 1));
+    const reached = new Set<string>();
+    // Ten-minute cron at 12 s blocks: runs about 50 blocks apart.
+    for (let run = 0; run < 12; run++) {
+      const chain = mockChain({ volumes, blockNumber: BLOCK + BigInt(run * 50) });
+      await runKeeperCycle(chain.client, { registry: REGISTRY, maxVolumesPerCycle: 2 });
+      for (const id of chain.triggerCalls) reached.add(id);
+    }
+    expect(reached.size).toBe(8);
   });
 
   test("a reverted transaction fails the cycle without throwing", async () => {
@@ -322,14 +368,15 @@ describe("bounds and failures", () => {
     // hands it over and its trigger reverts at estimation — the race a keeper
     // hits when a volume retires between the pinned block and the send.
     expect(result.ok).toBe(false);
-    expect(result.volumes.map((v) => v.status)).toEqual([
-      "success",
-      "failed",
-      "success",
-    ]);
+    const byId = Object.fromEntries(result.volumes.map((v) => [v.volumeId, v]));
+    expect(byId[volumeId(1)]?.status).toBe("success");
+    expect(byId[volumeId(2)]?.status).toBe("failed");
+    expect(byId[volumeId(3)]?.status).toBe("success");
     expect(result.failed).toEqual([volumeId(2)]);
-    expect(result.volumes[1]?.error).toContain("VolumeNotActive");
-    expect(chain.triggerCalls).toEqual([volumeId(1), volumeId(3)]);
+    expect(byId[volumeId(2)]?.error).toContain("VolumeNotActive");
+    expect(chain.triggerCalls).toEqual(
+      inCycleOrder([1, 2, 3]).filter((id) => id !== volumeId(2)),
+    );
   });
 
   test("a dead RPC produces an error result, not a throw", async () => {

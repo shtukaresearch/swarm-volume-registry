@@ -1,4 +1,5 @@
 import type { Account, Address, Chain, Client, Hex, Transport } from "viem";
+import { hexToBigInt, keccak256, numberToHex } from "viem";
 import {
   getBlockNumber,
   multicall,
@@ -76,6 +77,29 @@ const message = (err: unknown): string =>
   err instanceof Error ? err.message : String(err);
 
 /**
+ * `ids`, rotated to start at a position derived from `blockNumber`.
+ *
+ * A cycle that hits `cycleTimeout` or `maxVolumesPerCycle` defers the tail of
+ * its list. Without rotation that is the same tail every cycle: those volumes
+ * are never triggered and die while the head is topped up every time. Starting
+ * each cycle at a different place moves the deferred set around, with nothing
+ * remembered between cycles.
+ *
+ * The start comes from a hash of the block, not the block itself: runs on a
+ * fixed cron are a near-constant number of blocks apart, and a step that shares
+ * a factor with the volume count would revisit the same few starts forever.
+ *
+ * This spreads a shortfall; it does not remove one. The cycle limits still have
+ * to cover every Active volume well within `graceBlocks`.
+ */
+export function rotateVolumes<T>(ids: readonly T[], blockNumber: bigint): T[] {
+  if (ids.length < 2) return [...ids];
+  const hash = keccak256(numberToHex(blockNumber, { size: 32 }));
+  const start = Number(hexToBigInt(hash) % BigInt(ids.length));
+  return [...ids.slice(start), ...ids.slice(0, start)];
+}
+
+/**
  * One full keeper cycle: read the registry's active volumes and trigger each
  * one.
  *
@@ -101,7 +125,8 @@ const message = (err: unknown): string =>
  * transactions rather than truncating one in flight, and anything left over is
  * warned about and picked up next cycle. A cycle therefore handles roughly
  * `cycleTimeout / confirmation time` volumes — size the schedule for that
- * against `graceBlocks`.
+ * against `graceBlocks`. Each cycle starts somewhere different in the list
+ * ({@link rotateVolumes}), so what one cycle defers, a later one reaches.
  *
  * **Never throws.** Every failure is folded into the returned result, because
  * one volume failing must not stop the rest from being attempted, and a run
@@ -171,7 +196,7 @@ export async function runKeeperCycle<
       return result;
     }
 
-    const attempting = volumeIds.slice(0, maxVolumesPerCycle);
+    const attempting = rotateVolumes(volumeIds, blockNumber).slice(0, maxVolumesPerCycle);
     if (attempting.length < volumeIds.length) {
       result.warnings.push({
         message: `maxVolumesPerCycle (${maxVolumesPerCycle}) reached: ${

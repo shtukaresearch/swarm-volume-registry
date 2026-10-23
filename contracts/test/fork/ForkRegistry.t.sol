@@ -247,7 +247,7 @@ contract ForkRegistryTest is Test {
         vm.roll(block.number + 5);
         registry.trigger(id);
         assertLt(bzz.balanceOf(payer), balAfterImport, "trigger after roll tops up");
-        assertEq(registry.getVolume(id).status, 1);
+        assertEq(uint8(registry.getVolume(id).status), uint8(IVolumeRegistryViews.Status.Active));
     }
 
     function test_fork_registerVolume_liveBatch() public forkOnly {
@@ -265,7 +265,7 @@ contract ForkRegistryTest is Test {
         assertEq(v.batchId, batchId);
         assertEq(v.chunkSigner, bOwner);
         assertEq(v.depth, bDepth);
-        assertEq(v.status, 1);
+        assertEq(uint8(v.status), uint8(IVolumeRegistryViews.Status.Active));
         assertEq(bzz.balanceOf(payer), balBefore, "registerVolume moved BZZ");
     }
 }

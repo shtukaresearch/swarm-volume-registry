@@ -79,7 +79,7 @@ contract VolumeImportTest is RegistryFixture {
         assertEq(registry.getAccount(owner).nonce, s.nonce, "nonce consumed");
         IVolumeRegistryViews.VolumeView memory v = registry.getVolume(s.nextId);
         assertEq(v.owner, address(0), "record persisted");
-        assertEq(v.status, 0, "record persisted");
+        assertEq(uint8(v.status), uint8(IVolumeRegistryViews.Status.None), "record persisted");
         assertEq(registry.getActiveVolumeCount(), s.activeCount, "active-set entry persisted");
         assertEq(bzz.balanceOf(payer), s.payerBal, "payer BZZ moved");
         assertEq(bzz.balanceOf(address(registry)), s.registryBal, "registry BZZ moved");
@@ -116,7 +116,7 @@ contract VolumeImportTest is RegistryFixture {
         assertEq(v.batchId, batchId);
         assertEq(v.chunkSigner, CHUNK_SIGNER);
         assertEq(v.depth, DEFAULT_DEPTH);
-        assertEq(v.status, 1);
+        assertEq(uint8(v.status), uint8(IVolumeRegistryViews.Status.Active));
         assertEq(registry.getAccount(OWNER).nonce, 1);
         assertEq(registry.getActiveVolumeCount(), 1);
     }
@@ -137,7 +137,7 @@ contract VolumeImportTest is RegistryFixture {
         }
 
         assertEq(bzz.balanceOf(PAYER), payerBefore);
-        assertEq(registry.getVolume(id).status, 1);
+        assertEq(uint8(registry.getVolume(id).status), uint8(IVolumeRegistryViews.Status.Active));
         assertEq(registry.getAccount(OWNER).nonce, 1);
     }
 

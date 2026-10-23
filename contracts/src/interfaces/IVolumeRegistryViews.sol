@@ -6,8 +6,8 @@ import {IPostageStampLike} from "./IPostageStampLike.sol";
 
 /// @title IVolumeRegistryViews
 /// @notice The read side of `VolumeRegistry`, shared by every actor: the
-///         public types, every event and error, the reason-code constants,
-///         and the views. The actor interfaces (`IVolumeRegistryOwner`,
+///         public types (including the status and reason enums), every
+///         event and error, and the views. The actor interfaces (`IVolumeRegistryOwner`,
 ///         `IVolumeRegistryPayer`, `IVolumeRegistryKeeper`) carry only write
 ///         functions; an integration for one actor needs that actor's
 ///         interface plus this one.
@@ -20,6 +20,34 @@ interface IVolumeRegistryViews {
     // ---------------------------------------------------------------------
     // Types
     // ---------------------------------------------------------------------
+
+    /// @notice A volume's lifecycle state (DESIGN §6.1). `None` is the
+    ///         zero value of an unknown ID; Retired is terminal (I7).
+    enum Status {
+        None,
+        Active,
+        Retired
+    }
+
+    /// @notice Why a volume retired (`VolumeRetired.reason`, DESIGN §6.1).
+    ///         `None` is never emitted; it keeps every other value equal to
+    ///         its pre-enum code.
+    enum RetireReason {
+        None,
+        OwnerDeleted, // the owner called `deleteVolume`
+        VolumeExpired, // `ttlExpiry` passed
+        BatchDied, // Postage reports the batch missing or expired
+        DepthChanged, // Postage reports a depth other than `depth`
+        BatchOwnerMismatch // Postage reports an owner other than `chunkSigner`; defensive (I2)
+    }
+
+    /// @notice Why a trigger did not pay a deficit (`TopupSkipped.reason`,
+    ///         DESIGN §8). `None` is never emitted.
+    enum SkipReason {
+        None,
+        NoAuth, // the owner's account is not active
+        PaymentFailed // pulling BZZ from the payer failed
+    }
 
     /// @notice An owner's funding account (DESIGN §4, §6.2).
     /// @param payer  The confirmed payer. Retained after `revoke`.
@@ -45,7 +73,7 @@ interface IVolumeRegistryViews {
     /// @param ttlExpiry     Timestamp after which the volume retires;
     ///                      0 = no expiry.
     /// @param depth         Batch depth recorded at creation.
-    /// @param status        0 = no such volume, 1 = Active, 2 = Retired.
+    /// @param status        Lifecycle state; `None` for an unknown ID.
     /// @param accountActive `accounts[owner].active`, resolved at read time.
     struct VolumeView {
         bytes32 volumeId;
@@ -56,7 +84,7 @@ interface IVolumeRegistryViews {
         uint64 createdAt;
         uint64 ttlExpiry;
         uint8 depth;
-        uint8 status;
+        Status status;
         bool accountActive;
     }
 
@@ -89,8 +117,7 @@ interface IVolumeRegistryViews {
     );
 
     /// @notice A volume entered the terminal Retired state.
-    /// @param reason One of the `REASON_*` codes.
-    event VolumeRetired(bytes32 indexed volumeId, uint8 reason);
+    event VolumeRetired(bytes32 indexed volumeId, RetireReason reason);
 
     /// @notice An owner set (or, with `payer == 0`, cleared) its designated payer.
     event PayerDesignated(address indexed owner, address payer);
@@ -107,8 +134,7 @@ interface IVolumeRegistryViews {
     event Toppedup(bytes32 indexed volumeId, uint256 amount, uint256 newNormalisedBalance);
 
     /// @notice A trigger found a deficit but did not pay it.
-    /// @param reason One of the `SKIP_*` codes.
-    event TopupSkipped(bytes32 indexed volumeId, uint8 reason);
+    event TopupSkipped(bytes32 indexed volumeId, SkipReason reason);
 
     // ---------------------------------------------------------------------
     // Errors
@@ -137,26 +163,6 @@ interface IVolumeRegistryViews {
     error ImportTopupFailed();
 
     // ---------------------------------------------------------------------
-    // Constants  (reason codes)
-    // ---------------------------------------------------------------------
-
-    /// @notice `VolumeRetired.reason`: the owner called `deleteVolume`.
-    function REASON_OWNER_DELETED() external view returns (uint8);
-    /// @notice `VolumeRetired.reason`: `ttlExpiry` passed.
-    function REASON_VOLUME_EXPIRED() external view returns (uint8);
-    /// @notice `VolumeRetired.reason`: Postage reports the batch missing or expired.
-    function REASON_BATCH_DIED() external view returns (uint8);
-    /// @notice `VolumeRetired.reason`: Postage reports a depth other than `depth`.
-    function REASON_DEPTH_CHANGED() external view returns (uint8);
-    /// @notice `VolumeRetired.reason`: Postage reports an owner other than
-    ///         `chunkSigner`. Defensive (I2).
-    function REASON_BATCH_OWNER_MISMATCH() external view returns (uint8);
-    /// @notice `TopupSkipped.reason`: the owner's account is not active.
-    function SKIP_NO_AUTH() external view returns (uint8);
-    /// @notice `TopupSkipped.reason`: pulling BZZ from the payer failed.
-    function SKIP_PAYMENT_FAILED() external view returns (uint8);
-
-    // ---------------------------------------------------------------------
     // Wiring  (DESIGN §10, immutable)
     // ---------------------------------------------------------------------
 
@@ -171,7 +177,7 @@ interface IVolumeRegistryViews {
     // Views  (DESIGN §7.4)
     // ---------------------------------------------------------------------
 
-    /// @notice One volume. An unknown ID returns a zeroed view with `status == 0`.
+    /// @notice One volume. An unknown ID returns a zeroed view with `status == Status.None`.
     function getVolume(bytes32 volumeId) external view returns (VolumeView memory);
 
     /// @notice A page of the active set, in index order. The keeper's

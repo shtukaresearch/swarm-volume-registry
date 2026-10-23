@@ -3,6 +3,7 @@ pragma solidity ^0.8.19;
 
 import {RegistryFixture} from "./fixtures/RegistryFixture.sol";
 import {VolumeRegistry} from "../src/VolumeRegistry.sol";
+import {IVolumeRegistryViews} from "../src/interfaces/IVolumeRegistryViews.sol";
 
 /// @notice Revocation atomicity (I9).
 contract RevocationAtomicityTest is RegistryFixture {
@@ -25,14 +26,16 @@ contract RevocationAtomicityTest is RegistryFixture {
         // Expect 5 TopupSkipped(NoAuth) events.
         for (uint256 i = 0; i < 5; ++i) {
             vm.expectEmit(true, true, true, true);
-            emit TopupSkipped(ids[i], registry.SKIP_NO_AUTH());
+            emit TopupSkipped(ids[i], uint8(IVolumeRegistryViews.SkipReason.NoAuth));
         }
         registry.trigger(ids);
 
         assertEq(bzz.balanceOf(PAYER), balBefore, "revoked: no BZZ spent");
         // All still Active.
         for (uint256 i = 0; i < 5; ++i) {
-            assertEq(registry.getVolume(ids[i]).status, 1);
+            assertEq(
+                uint8(registry.getVolume(ids[i]).status), uint8(IVolumeRegistryViews.Status.Active)
+            );
         }
     }
 }

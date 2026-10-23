@@ -47,7 +47,7 @@ contract TriggerSemanticsTest is RegistryFixture {
         assertEq(bzz.balanceOf(PAYER), balBefore - expected, "charge matches formula");
 
         // Volume still active.
-        assertEq(registry.getVolume(id).status, 1);
+        assertEq(uint8(registry.getVolume(id).status), uint8(IVolumeRegistryViews.Status.Active));
     }
 
     function test_trigger_zeroDeficit_noop() public {
@@ -86,10 +86,10 @@ contract TriggerSemanticsTest is RegistryFixture {
 
         uint256 balBefore = bzz.balanceOf(PAYER);
         vm.expectEmit(true, true, true, true);
-        emit TopupSkipped(id, registry.SKIP_NO_AUTH());
+        emit TopupSkipped(id, uint8(IVolumeRegistryViews.SkipReason.NoAuth));
         registry.trigger(id);
         assertEq(bzz.balanceOf(PAYER), balBefore);
-        assertEq(registry.getVolume(id).status, 1);
+        assertEq(uint8(registry.getVolume(id).status), uint8(IVolumeRegistryViews.Status.Active));
     }
 
     function test_trigger_insufficientBalance_skipsNoRetire() public {
@@ -102,9 +102,9 @@ contract TriggerSemanticsTest is RegistryFixture {
         bzz.transfer(STRANGER, bal);
 
         vm.expectEmit(true, true, true, true);
-        emit TopupSkipped(id, registry.SKIP_PAYMENT_FAILED());
+        emit TopupSkipped(id, uint8(IVolumeRegistryViews.SkipReason.PaymentFailed));
         registry.trigger(id);
-        assertEq(registry.getVolume(id).status, 1);
+        assertEq(uint8(registry.getVolume(id).status), uint8(IVolumeRegistryViews.Status.Active));
     }
 
     function test_trigger_revokedAllowance_skipsNoRetire() public {
@@ -116,10 +116,10 @@ contract TriggerSemanticsTest is RegistryFixture {
 
         uint256 balBefore = bzz.balanceOf(PAYER);
         vm.expectEmit(true, true, true, true);
-        emit TopupSkipped(id, registry.SKIP_PAYMENT_FAILED());
+        emit TopupSkipped(id, uint8(IVolumeRegistryViews.SkipReason.PaymentFailed));
         registry.trigger(id);
         assertEq(bzz.balanceOf(PAYER), balBefore);
-        assertEq(registry.getVolume(id).status, 1);
+        assertEq(uint8(registry.getVolume(id).status), uint8(IVolumeRegistryViews.Status.Active));
     }
 
     // -------- retire edges ---------------------------------------------
@@ -139,9 +139,9 @@ contract TriggerSemanticsTest is RegistryFixture {
 
         uint256 balBefore = bzz.balanceOf(PAYER);
         vm.expectEmit(true, true, true, true);
-        emit VolumeRetired(id, registry.REASON_BATCH_DIED());
+        emit VolumeRetired(id, uint8(IVolumeRegistryViews.RetireReason.BatchDied));
         registry.trigger(id);
-        assertEq(registry.getVolume(id).status, 2);
+        assertEq(uint8(registry.getVolume(id).status), uint8(IVolumeRegistryViews.Status.Retired));
         assertEq(registry.getActiveVolumeCount(), 0);
         assertEq(bzz.balanceOf(PAYER), balBefore, "no charge on retire");
     }
@@ -154,9 +154,9 @@ contract TriggerSemanticsTest is RegistryFixture {
         _increaseDepthAsSigner(_batchOf(id), CHUNK_SIGNER, DEFAULT_DEPTH);
 
         vm.expectEmit(true, true, true, true);
-        emit VolumeRetired(id, registry.REASON_DEPTH_CHANGED());
+        emit VolumeRetired(id, uint8(IVolumeRegistryViews.RetireReason.DepthChanged));
         registry.trigger(id);
-        assertEq(registry.getVolume(id).status, 2);
+        assertEq(uint8(registry.getVolume(id).status), uint8(IVolumeRegistryViews.Status.Retired));
     }
 
     function test_trigger_ttlExpired_retires() public {
@@ -167,9 +167,9 @@ contract TriggerSemanticsTest is RegistryFixture {
         vm.warp(ttl + 1);
 
         vm.expectEmit(true, true, true, true);
-        emit VolumeRetired(id, registry.REASON_VOLUME_EXPIRED());
+        emit VolumeRetired(id, uint8(IVolumeRegistryViews.RetireReason.VolumeExpired));
         registry.trigger(id);
-        assertEq(registry.getVolume(id).status, 2);
+        assertEq(uint8(registry.getVolume(id).status), uint8(IVolumeRegistryViews.Status.Retired));
     }
 
     // -------- ordering tests (retire beats NoAuth) ---------------------
@@ -183,7 +183,7 @@ contract TriggerSemanticsTest is RegistryFixture {
         _roll(uint256(GRACE_BLOCKS) + 1);
 
         vm.expectEmit(true, true, true, true);
-        emit VolumeRetired(id, registry.REASON_BATCH_DIED());
+        emit VolumeRetired(id, uint8(IVolumeRegistryViews.RetireReason.BatchDied));
         registry.trigger(id);
     }
 
@@ -197,7 +197,7 @@ contract TriggerSemanticsTest is RegistryFixture {
         registry.revoke(OWNER);
 
         vm.expectEmit(true, true, true, true);
-        emit VolumeRetired(id, registry.REASON_DEPTH_CHANGED());
+        emit VolumeRetired(id, uint8(IVolumeRegistryViews.RetireReason.DepthChanged));
         registry.trigger(id);
     }
 
@@ -211,7 +211,7 @@ contract TriggerSemanticsTest is RegistryFixture {
         vm.warp(ttl + 1);
 
         vm.expectEmit(true, true, true, true);
-        emit VolumeRetired(id, registry.REASON_VOLUME_EXPIRED());
+        emit VolumeRetired(id, uint8(IVolumeRegistryViews.RetireReason.VolumeExpired));
         registry.trigger(id);
     }
 
@@ -251,9 +251,9 @@ contract TriggerSemanticsTest is RegistryFixture {
         // id1 topped up (payer balance decreased).
         assertLt(bzz.balanceOf(PAYER), balBefore);
         // id2 still retired, unchanged.
-        assertEq(registry.getVolume(id2).status, 2);
+        assertEq(uint8(registry.getVolume(id2).status), uint8(IVolumeRegistryViews.Status.Retired));
         // id3 still active (NoAuth never retires).
-        assertEq(registry.getVolume(id3).status, 1);
+        assertEq(uint8(registry.getVolume(id3).status), uint8(IVolumeRegistryViews.Status.Active));
     }
 
     // -------- reap -----------------------------------------------------
@@ -276,9 +276,9 @@ contract TriggerSemanticsTest is RegistryFixture {
 
         vm.warp(ttl + 1);
         vm.expectEmit(true, true, true, true);
-        emit VolumeRetired(id, registry.REASON_VOLUME_EXPIRED());
+        emit VolumeRetired(id, uint8(IVolumeRegistryViews.RetireReason.VolumeExpired));
         registry.reap(id);
-        assertEq(registry.getVolume(id).status, 2);
+        assertEq(uint8(registry.getVolume(id).status), uint8(IVolumeRegistryViews.Status.Retired));
     }
 
     // -------- trigger targets v.batchId --------------------------------
@@ -323,8 +323,8 @@ contract TriggerSemanticsTest is RegistryFixture {
         assertEq(balA - bzz.balanceOf(PAYER), oneDeficit, "first payer pays the deficit");
         assertEq(bzz.balanceOf(PAYER2), balB, "second payer charged for a shared batch");
         assertEq(_remaining(batchId), target);
-        assertEq(registry.getVolume(idA).status, 1);
-        assertEq(registry.getVolume(idB).status, 1);
+        assertEq(uint8(registry.getVolume(idA).status), uint8(IVolumeRegistryViews.Status.Active));
+        assertEq(uint8(registry.getVolume(idB).status), uint8(IVolumeRegistryViews.Status.Active));
     }
 
     function test_sharedBatch_depthChange_retiresEachVolume() public {
@@ -338,13 +338,13 @@ contract TriggerSemanticsTest is RegistryFixture {
         _increaseDepthAsSigner(batchId, CHUNK_SIGNER, DEFAULT_DEPTH);
 
         vm.expectEmit(true, true, true, true);
-        emit VolumeRetired(idA, registry.REASON_DEPTH_CHANGED());
+        emit VolumeRetired(idA, uint8(IVolumeRegistryViews.RetireReason.DepthChanged));
         registry.trigger(idA);
         // idB is untouched until its own trigger.
-        assertEq(registry.getVolume(idB).status, 1);
+        assertEq(uint8(registry.getVolume(idB).status), uint8(IVolumeRegistryViews.Status.Active));
 
         vm.expectEmit(true, true, true, true);
-        emit VolumeRetired(idB, registry.REASON_DEPTH_CHANGED());
+        emit VolumeRetired(idB, uint8(IVolumeRegistryViews.RetireReason.DepthChanged));
         registry.trigger(idB);
         assertEq(registry.getActiveVolumeCount(), 0);
     }
@@ -361,10 +361,10 @@ contract TriggerSemanticsTest is RegistryFixture {
     function test_registered_ownerDeleted_retires() public {
         (bytes32 id,) = _setupRegisteredVolume(0);
         vm.expectEmit(true, true, true, true);
-        emit VolumeRetired(id, registry.REASON_OWNER_DELETED());
+        emit VolumeRetired(id, uint8(IVolumeRegistryViews.RetireReason.OwnerDeleted));
         vm.prank(OWNER);
         registry.deleteVolume(id);
-        assertEq(registry.getVolume(id).status, 2);
+        assertEq(uint8(registry.getVolume(id).status), uint8(IVolumeRegistryViews.Status.Retired));
     }
 
     function test_registered_batchDied_retires() public {
@@ -376,9 +376,9 @@ contract TriggerSemanticsTest is RegistryFixture {
 
         uint256 balBefore = bzz.balanceOf(PAYER);
         vm.expectEmit(true, true, true, true);
-        emit VolumeRetired(id, registry.REASON_BATCH_DIED());
+        emit VolumeRetired(id, uint8(IVolumeRegistryViews.RetireReason.BatchDied));
         registry.trigger(id);
-        assertEq(registry.getVolume(id).status, 2);
+        assertEq(uint8(registry.getVolume(id).status), uint8(IVolumeRegistryViews.Status.Retired));
         assertEq(bzz.balanceOf(PAYER), balBefore);
     }
 
@@ -386,18 +386,18 @@ contract TriggerSemanticsTest is RegistryFixture {
         (bytes32 id, bytes32 b) = _setupRegisteredVolume(0);
         _forceBatchOwner(b, makeAddr("hijacker"));
         vm.expectEmit(true, true, true, true);
-        emit VolumeRetired(id, registry.REASON_BATCH_OWNER_MISMATCH());
+        emit VolumeRetired(id, uint8(IVolumeRegistryViews.RetireReason.BatchOwnerMismatch));
         registry.trigger(id);
-        assertEq(registry.getVolume(id).status, 2);
+        assertEq(uint8(registry.getVolume(id).status), uint8(IVolumeRegistryViews.Status.Retired));
     }
 
     function test_registered_depthChanged_retires() public {
         (bytes32 id, bytes32 b) = _setupRegisteredVolume(0);
         _increaseDepthAsSigner(b, CHUNK_SIGNER, DEFAULT_DEPTH);
         vm.expectEmit(true, true, true, true);
-        emit VolumeRetired(id, registry.REASON_DEPTH_CHANGED());
+        emit VolumeRetired(id, uint8(IVolumeRegistryViews.RetireReason.DepthChanged));
         registry.trigger(id);
-        assertEq(registry.getVolume(id).status, 2);
+        assertEq(uint8(registry.getVolume(id).status), uint8(IVolumeRegistryViews.Status.Retired));
     }
 
     function test_registered_ttlExpired_retires() public {
@@ -405,8 +405,8 @@ contract TriggerSemanticsTest is RegistryFixture {
         (bytes32 id,) = _setupRegisteredVolume(ttl);
         vm.warp(ttl + 1);
         vm.expectEmit(true, true, true, true);
-        emit VolumeRetired(id, registry.REASON_VOLUME_EXPIRED());
+        emit VolumeRetired(id, uint8(IVolumeRegistryViews.RetireReason.VolumeExpired));
         registry.trigger(id);
-        assertEq(registry.getVolume(id).status, 2);
+        assertEq(uint8(registry.getVolume(id).status), uint8(IVolumeRegistryViews.Status.Retired));
     }
 }

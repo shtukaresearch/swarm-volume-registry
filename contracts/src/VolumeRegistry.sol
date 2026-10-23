@@ -24,22 +24,9 @@ import {IVolumeRegistry} from "./interfaces/IVolumeRegistry.sol";
 ///          ToppedUp / NoDeficit outcomes and reverts otherwise (I13).
 contract VolumeRegistry is IVolumeRegistry {
     // ---------------------------------------------------------------------
-    // Constants / enums
+    // Enums  (public Status / RetireReason / SkipReason are declared in
+    // IVolumeRegistryViews)
     // ---------------------------------------------------------------------
-
-    uint8 internal constant STATUS_ACTIVE = 1;
-    uint8 internal constant STATUS_RETIRED = 2;
-
-    // Retire reasons (packed into `VolumeRetired.reason`).
-    uint8 public constant REASON_OWNER_DELETED = 1;
-    uint8 public constant REASON_VOLUME_EXPIRED = 2;
-    uint8 public constant REASON_BATCH_DIED = 3;
-    uint8 public constant REASON_DEPTH_CHANGED = 4;
-    uint8 public constant REASON_BATCH_OWNER_MISMATCH = 5; // defensive branch — DESIGN §6.1
-
-    // TopupSkipped reasons.
-    uint8 public constant SKIP_NO_AUTH = 1;
-    uint8 public constant SKIP_PAYMENT_FAILED = 2;
 
     // Outcome of one run of the §8 trigger steps. `trigger` treats all four
     // as success; `importVolume` keeps only NoDeficit and ToppedUp.
@@ -62,7 +49,7 @@ contract VolumeRegistry is IVolumeRegistry {
         uint64 createdAt; // start of tracking, not batch age
         uint64 ttlExpiry; // 0 = no expiry
         uint8 depth;
-        uint8 status;
+        Status status;
         uint32 activeIndex;
     }
 
@@ -216,8 +203,8 @@ contract VolumeRegistry is IVolumeRegistry {
     function deleteVolume(bytes32 volumeId) external {
         Volume storage v = _volumes[volumeId];
         if (v.owner != msg.sender) revert NotVolumeOwner();
-        if (v.status != STATUS_ACTIVE) revert VolumeNotActive();
-        _retire(volumeId, REASON_OWNER_DELETED);
+        if (v.status != Status.Active) revert VolumeNotActive();
+        _retire(volumeId, RetireReason.OwnerDeleted);
     }
 
     // =====================================================================
@@ -253,9 +240,9 @@ contract VolumeRegistry is IVolumeRegistry {
     ///         this edge too.
     function reap(bytes32 volumeId) external {
         Volume storage v = _volumes[volumeId];
-        if (v.status != STATUS_ACTIVE) return; // idempotent
+        if (v.status != Status.Active) return; // idempotent
         if (v.ttlExpiry != 0 && block.timestamp >= v.ttlExpiry) {
-            _retire(volumeId, REASON_VOLUME_EXPIRED);
+            _retire(volumeId, RetireReason.VolumeExpired);
         }
     }
 
@@ -267,7 +254,7 @@ contract VolumeRegistry is IVolumeRegistry {
         bytes32 batchId = v.batchId;
         // Step 1 — volume must be Active. Revert (not skip) so malformed
         // single-id calls are loud; batched calls swallow this.
-        if (v.status != STATUS_ACTIVE) revert VolumeNotActive();
+        if (v.status != Status.Active) revert VolumeNotActive();
 
         // Step 2 — read Postage batch.
         (
@@ -281,25 +268,25 @@ contract VolumeRegistry is IVolumeRegistry {
         bool batchMissing = (bOwner == address(0));
         bool batchExpired = !batchMissing && (bNormalisedBalance <= outpayment);
         if (batchMissing || batchExpired) {
-            _retire(volumeId, REASON_BATCH_DIED);
+            _retire(volumeId, RetireReason.BatchDied);
             return TriggerOutcome.Retired;
         }
 
         // Step 2b — owner mismatch (defensive; I2).
         if (bOwner != v.chunkSigner) {
-            _retire(volumeId, REASON_BATCH_OWNER_MISMATCH);
+            _retire(volumeId, RetireReason.BatchOwnerMismatch);
             return TriggerOutcome.Retired;
         }
 
         // Step 3 — depth mismatch.
         if (bDepth != v.depth) {
-            _retire(volumeId, REASON_DEPTH_CHANGED);
+            _retire(volumeId, RetireReason.DepthChanged);
             return TriggerOutcome.Retired;
         }
 
         // Step 4 — TTL.
         if (v.ttlExpiry != 0 && block.timestamp >= v.ttlExpiry) {
-            _retire(volumeId, REASON_VOLUME_EXPIRED);
+            _retire(volumeId, RetireReason.VolumeExpired);
             return TriggerOutcome.Retired;
         }
 
@@ -307,7 +294,7 @@ contract VolumeRegistry is IVolumeRegistry {
         // checked; a revoked account only prevents payment, never retires.
         Account storage acct = _accounts[v.owner];
         if (!acct.active) {
-            emit TopupSkipped(volumeId, SKIP_NO_AUTH);
+            emit TopupSkipped(volumeId, SkipReason.NoAuth);
             return TriggerOutcome.Skipped;
         }
 
@@ -327,11 +314,11 @@ contract VolumeRegistry is IVolumeRegistry {
             bool ok
         ) {
             if (!ok) {
-                emit TopupSkipped(volumeId, SKIP_PAYMENT_FAILED);
+                emit TopupSkipped(volumeId, SkipReason.PaymentFailed);
                 return TriggerOutcome.Skipped;
             }
         } catch {
-            emit TopupSkipped(volumeId, SKIP_PAYMENT_FAILED);
+            emit TopupSkipped(volumeId, SkipReason.PaymentFailed);
             return TriggerOutcome.Skipped;
         }
 
@@ -451,7 +438,7 @@ contract VolumeRegistry is IVolumeRegistry {
         }
         // Unreachable short of a hash collision or a nonce reset; kept as a
         // defensive assertion so an existing record is never overwritten.
-        require(_volumes[volumeId].status == 0, "VOLUMEID_COLLISION");
+        require(_volumes[volumeId].status == Status.None, "VOLUMEID_COLLISION");
 
         uint32 idx = uint32(_activeVolumeIds.length);
         _volumes[volumeId] = Volume({
@@ -461,15 +448,15 @@ contract VolumeRegistry is IVolumeRegistry {
             createdAt: uint64(block.timestamp),
             ttlExpiry: ttlExpiry,
             depth: depth,
-            status: STATUS_ACTIVE,
+            status: Status.Active,
             activeIndex: idx
         });
         _activeVolumeIds.push(volumeId);
     }
 
-    function _retire(bytes32 volumeId, uint8 reason) internal {
+    function _retire(bytes32 volumeId, RetireReason reason) internal {
         Volume storage v = _volumes[volumeId];
-        v.status = STATUS_RETIRED;
+        v.status = Status.Retired;
 
         // swap-and-pop active list
         uint32 idx = v.activeIndex;

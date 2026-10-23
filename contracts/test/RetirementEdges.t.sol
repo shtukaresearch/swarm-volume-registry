@@ -101,8 +101,8 @@ contract RetirementEdgesTest is RegistryFixture {
         assertEq(bOwner, hijacker);
 
         vm.expectEmit(true, true, true, true);
-        emit VolumeRetired(id, registry.REASON_BATCH_OWNER_MISMATCH());
+        emit VolumeRetired(id, uint8(IVolumeRegistryViews.RetireReason.BatchOwnerMismatch));
         registry.trigger(id);
-        assertEq(registry.getVolume(id).status, 2);
+        assertEq(uint8(registry.getVolume(id).status), uint8(IVolumeRegistryViews.Status.Retired));
     }
 }

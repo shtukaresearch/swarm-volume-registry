@@ -46,7 +46,7 @@ contract VolumeLifecycleTest is RegistryFixture {
         assertEq(v.chunkSigner, CHUNK_SIGNER);
         assertEq(v.depth, DEFAULT_DEPTH);
         assertEq(v.ttlExpiry, 0);
-        assertEq(v.status, 1); // STATUS_ACTIVE
+        assertEq(uint8(v.status), uint8(IVolumeRegistryViews.Status.Active)); // STATUS_ACTIVE
         assertEq(v.payer, PAYER);
         assertTrue(v.accountActive);
 
@@ -114,11 +114,11 @@ contract VolumeLifecycleTest is RegistryFixture {
         bytes32 id = _createDefaultVolume(OWNER, CHUNK_SIGNER);
 
         vm.expectEmit(true, true, true, true);
-        emit VolumeRetired(id, registry.REASON_OWNER_DELETED());
+        emit VolumeRetired(id, uint8(IVolumeRegistryViews.RetireReason.OwnerDeleted));
         vm.prank(OWNER);
         registry.deleteVolume(id);
 
-        assertEq(registry.getVolume(id).status, 2); // STATUS_RETIRED
+        assertEq(uint8(registry.getVolume(id).status), uint8(IVolumeRegistryViews.Status.Retired)); // STATUS_RETIRED
         assertEq(registry.getActiveVolumeCount(), 0);
     }
 

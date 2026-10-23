@@ -253,7 +253,7 @@ contract PayerHandler is Test {
         if (createdVolumeIds.length == 0) return;
         bytes32 id = createdVolumeIds[uint256(volIdx) % createdVolumeIds.length];
         IVolumeRegistryViews.VolumeView memory v = registry.getVolume(id);
-        if (v.status != 1) return;
+        if (v.status != IVolumeRegistryViews.Status.Active) return;
         vm.prank(v.owner);
         try registry.deleteVolume(id) {} catch {}
     }

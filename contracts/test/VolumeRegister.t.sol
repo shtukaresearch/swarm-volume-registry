@@ -42,7 +42,7 @@ contract VolumeRegisterTest is RegistryFixture {
         assertEq(a.createdAt, b.createdAt);
         assertEq(a.ttlExpiry, b.ttlExpiry);
         assertEq(a.depth, b.depth);
-        assertEq(a.status, b.status);
+        assertEq(uint8(a.status), uint8(b.status));
         assertEq(a.accountActive, b.accountActive);
     }
 
@@ -77,7 +77,7 @@ contract VolumeRegisterTest is RegistryFixture {
         assertEq(v.depth, DEFAULT_DEPTH, "depth read from Postage");
         assertEq(v.createdAt, uint64(vm.getBlockTimestamp()));
         assertEq(v.ttlExpiry, ttl);
-        assertEq(v.status, 1);
+        assertEq(uint8(v.status), uint8(IVolumeRegistryViews.Status.Active));
         assertTrue(v.accountActive);
 
         assertEq(registry.getActiveVolumeCount(), 1);
@@ -144,8 +144,8 @@ contract VolumeRegisterTest is RegistryFixture {
         bytes32 b = _registerDefault(OWNER, batchId);
 
         assertTrue(a != b);
-        assertEq(registry.getVolume(a).status, 1);
-        assertEq(registry.getVolume(b).status, 1);
+        assertEq(uint8(registry.getVolume(a).status), uint8(IVolumeRegistryViews.Status.Active));
+        assertEq(uint8(registry.getVolume(b).status), uint8(IVolumeRegistryViews.Status.Active));
         assertEq(registry.getVolume(a).batchId, batchId);
         assertEq(registry.getVolume(b).batchId, batchId);
         assertEq(registry.getActiveVolumeCount(), 2);
@@ -170,9 +170,13 @@ contract VolumeRegisterTest is RegistryFixture {
 
     function _assertReRegistered(bytes32 oldId, bytes32 newId, bytes32 batchId) internal {
         assertTrue(newId != oldId, "retired ID reused");
-        assertEq(registry.getVolume(oldId).status, 2, "old ID revived");
+        assertEq(
+            uint8(registry.getVolume(oldId).status),
+            uint8(IVolumeRegistryViews.Status.Retired),
+            "old ID revived"
+        );
         IVolumeRegistryViews.VolumeView memory v = registry.getVolume(newId);
-        assertEq(v.status, 1);
+        assertEq(uint8(v.status), uint8(IVolumeRegistryViews.Status.Active));
         assertEq(v.batchId, batchId);
         assertEq(v.createdAt, uint64(vm.getBlockTimestamp()), "fresh snapshot");
     }
@@ -197,7 +201,9 @@ contract VolumeRegisterTest is RegistryFixture {
         bytes32 oldId = registry.registerVolume(batchId, ttl);
         vm.warp(ttl);
         registry.reap(oldId);
-        assertEq(registry.getVolume(oldId).status, 2);
+        assertEq(
+            uint8(registry.getVolume(oldId).status), uint8(IVolumeRegistryViews.Status.Retired)
+        );
 
         bytes32 newId = _registerDefault(OWNER, batchId);
         _assertReRegistered(oldId, newId, batchId);
@@ -210,7 +216,9 @@ contract VolumeRegisterTest is RegistryFixture {
         bytes32 oldId = _registerDefault(OWNER, batchId);
         _increaseDepthAsSigner(batchId, CHUNK_SIGNER, DEFAULT_DEPTH);
         registry.trigger(oldId);
-        assertEq(registry.getVolume(oldId).status, 2);
+        assertEq(
+            uint8(registry.getVolume(oldId).status), uint8(IVolumeRegistryViews.Status.Retired)
+        );
 
         vm.warp(vm.getBlockTimestamp() + 10);
         bytes32 newId = _registerDefault(OWNER, batchId);
@@ -264,7 +272,7 @@ contract VolumeRegisterTest is RegistryFixture {
 
         vm.warp(ttl);
         vm.expectEmit(true, true, true, true);
-        emit VolumeRetired(strangerId, registry.REASON_VOLUME_EXPIRED());
+        emit VolumeRetired(strangerId, uint8(IVolumeRegistryViews.RetireReason.VolumeExpired));
         registry.trigger(strangerId);
 
         _assertViewEq(registry.getVolume(ownerId), before);
@@ -278,7 +286,7 @@ contract VolumeRegisterTest is RegistryFixture {
         stamp.pause();
 
         bytes32 id = _registerDefault(OWNER, batchId);
-        assertEq(registry.getVolume(id).status, 1);
+        assertEq(uint8(registry.getVolume(id).status), uint8(IVolumeRegistryViews.Status.Active));
         assertEq(registry.getVolume(id).batchId, batchId);
     }
 
@@ -290,14 +298,14 @@ contract VolumeRegisterTest is RegistryFixture {
 
         vm.prank(OWNER);
         bytes32 id = registry.registerVolume(batchId, pastTtl);
-        assertEq(registry.getVolume(id).status, 1);
+        assertEq(uint8(registry.getVolume(id).status), uint8(IVolumeRegistryViews.Status.Active));
         assertEq(registry.getVolume(id).ttlExpiry, pastTtl);
 
         uint256 balBefore = bzz.balanceOf(PAYER);
         vm.expectEmit(true, true, true, true);
-        emit VolumeRetired(id, registry.REASON_VOLUME_EXPIRED());
+        emit VolumeRetired(id, uint8(IVolumeRegistryViews.RetireReason.VolumeExpired));
         registry.trigger(id);
-        assertEq(registry.getVolume(id).status, 2);
+        assertEq(uint8(registry.getVolume(id).status), uint8(IVolumeRegistryViews.Status.Retired));
         assertEq(bzz.balanceOf(PAYER), balBefore);
     }
 }

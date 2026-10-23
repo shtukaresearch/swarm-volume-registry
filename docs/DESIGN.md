@@ -58,7 +58,7 @@ struct Volume {
     uint64  createdAt;      // block.timestamp of the creating call (start of tracking, not batch age)
     uint64  ttlExpiry;      // 0 = no expiry
     uint8   depth;          // batch depth, recorded at creation; any divergence on Postage retires the volume
-    uint8   status;         // Active | Retired
+    Status  status;         // None | Active | Retired
     uint32  activeIndex;    // position in activeVolumeIds (for O(1) removal)
 }
 
@@ -74,7 +74,13 @@ mapping(address owner => Account)   accounts;
 
 bytes32[] activeVolumeIds;                      // swap-and-pop; enumerated by keepers
 uint256   nextNonce;                            // monotonic counter passed to Postage.createBatch
+
+enum Status       { None, Active, Retired }
+enum RetireReason { None, OwnerDeleted, VolumeExpired, BatchDied, DepthChanged, BatchOwnerMismatch }
+enum SkipReason   { None, NoAuth, PaymentFailed }
 ```
+
+Status and reason codes are enums ([ADR-0005](./adr/0005-codes-as-enums.md)). Each leading `None` is the zero value: `Status.None` is what an unknown volume ID reads as, and the two reason `None`s are never emitted. They keep every other code at its pre-enum value; on the wire all three are `uint8`.
 
 "Creating call" means any of the three volume-creating entry points of §7.1: `createVolume`, `registerVolume`, `importVolume`.
 
@@ -171,7 +177,7 @@ does not clear its designation.
 
 Signatures only. No implementation.
 
-The surface is declared per actor in `contracts/src/interfaces/`: `IVolumeRegistryOwner` (§7.1), `IVolumeRegistryPayer` (§7.2) and `IVolumeRegistryKeeper` (§7.3) carry only write functions; `IVolumeRegistryViews` carries the public types, every event and error (§9), the reason-code constants, the wiring getters (§10) and the views (§7.4). `IVolumeRegistry` aggregates them and `VolumeRegistry` implements it. An integration for one actor needs that actor's interface plus `IVolumeRegistryViews`, and its client ABI can be generated from those two artifacts. `revoke` appears in both the owner and payer interfaces. `_triggerExt` is external only to give the batched `trigger` a try/catch frame and belongs to no interface.
+The surface is declared per actor in `contracts/src/interfaces/`: `IVolumeRegistryOwner` (§7.1), `IVolumeRegistryPayer` (§7.2) and `IVolumeRegistryKeeper` (§7.3) carry only write functions; `IVolumeRegistryViews` carries the public types, the status and reason enums (§4), every event and error (§9), the wiring getters (§10) and the views (§7.4). `IVolumeRegistry` aggregates them and `VolumeRegistry` implements it. An integration for one actor needs that actor's interface plus `IVolumeRegistryViews`, and its client ABI can be generated from those two artifacts. `revoke` appears in both the owner and payer interfaces. `_triggerExt` is external only to give the batched `trigger` a try/catch frame and belongs to no interface.
 
 ### 7.1 Owner API
 
@@ -240,7 +246,7 @@ struct VolumeView {
     uint64  createdAt;
     uint64  ttlExpiry;
     uint8   depth;
-    uint8   status;
+    Status  status;
     bool    accountActive;
 }
 
@@ -285,14 +291,14 @@ Every run of these steps ends in one of four outcomes: Retired (steps 2–5), Sk
 ```
 event VolumeCreated(bytes32 indexed volumeId, address indexed owner, bytes32 indexed batchId, address chunkSigner, uint8 depth, uint64 ttlExpiry);
 event VolumeImported(bytes32 indexed volumeId, address indexed owner, bytes32 indexed batchId, address chunkSigner, uint8 depth, uint64 ttlExpiry, uint256 normalisedBalance);  // balance as read at registration, before any topup
-event VolumeRetired(bytes32 indexed volumeId, uint8 reason);  // OwnerDeleted | VolumeExpired | BatchDied | DepthChanged | BatchOwnerMismatch
+event VolumeRetired(bytes32 indexed volumeId, RetireReason reason);
 
 event PayerDesignated(address indexed owner, address payer);
 event AccountActivated(address indexed owner, address indexed payer);
 event AccountRevoked(address indexed owner, address indexed payer, address revoker);
 
 event Toppedup(bytes32 indexed volumeId, uint256 amount, uint256 newNormalisedBalance);
-event TopupSkipped(bytes32 indexed volumeId, uint8 reason);  // NoAuth | PaymentFailed
+event TopupSkipped(bytes32 indexed volumeId, SkipReason reason);
 ```
 
 ## 10. Deployment parameters

@@ -3,6 +3,7 @@ pragma solidity ^0.8.19;
 
 import {RegistryFixture} from "./fixtures/RegistryFixture.sol";
 import {VolumeRegistry} from "../src/VolumeRegistry.sol";
+import {IVolumeRegistryViews} from "../src/interfaces/IVolumeRegistryViews.sol";
 
 /// @notice Batch-ID and volume-ID derivation (DESIGN §4, ADR-0002), and the
 ///         per-owner account nonce (I14, ADR-0003).
@@ -93,7 +94,7 @@ contract NonceAndVolumeIdTest is RegistryFixture {
         bzz.approve(address(registry), 0);
 
         vm.prank(OWNER);
-        vm.expectRevert(VolumeRegistry.ImportTopupFailed.selector);
+        vm.expectRevert(IVolumeRegistryViews.ImportTopupFailed.selector);
         registry.importVolume(batchId, 0);
 
         assertEq(_nonce(OWNER), before, "reverted import consumed a nonce");
@@ -103,7 +104,7 @@ contract NonceAndVolumeIdTest is RegistryFixture {
         _activateAccount(OWNER, PAYER, _expectedCreateCharge(DEFAULT_DEPTH) * FUND_MULT);
         uint64 before = _nonce(OWNER);
         vm.prank(OWNER);
-        vm.expectRevert(VolumeRegistry.BatchNotLive.selector);
+        vm.expectRevert(IVolumeRegistryViews.BatchNotLive.selector);
         registry.registerVolume(keccak256("no such batch"), 0);
         assertEq(_nonce(OWNER), before);
     }

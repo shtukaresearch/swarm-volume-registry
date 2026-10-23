@@ -171,6 +171,8 @@ does not clear its designation.
 
 Signatures only. No implementation.
 
+The surface is declared per actor in `contracts/src/interfaces/`: `IVolumeRegistryOwner` (§7.1), `IVolumeRegistryPayer` (§7.2) and `IVolumeRegistryKeeper` (§7.3) carry only write functions; `IVolumeRegistryViews` carries the public types, every event and error (§9), the reason-code constants, the wiring getters (§10) and the views (§7.4). `IVolumeRegistry` aggregates them and `VolumeRegistry` implements it. An integration for one actor needs that actor's interface plus `IVolumeRegistryViews`, and its client ABI can be generated from those two artifacts. `revoke` appears in both the owner and payer interfaces. `_triggerExt` is external only to give the batched `trigger` a try/catch frame and belongs to no interface.
+
 ### 7.1 Owner API
 
 ```

@@ -3,6 +3,7 @@ pragma solidity ^0.8.19;
 
 import {RegistryFixture} from "./fixtures/RegistryFixture.sol";
 import {VolumeRegistry} from "../src/VolumeRegistry.sol";
+import {IVolumeRegistryViews} from "../src/interfaces/IVolumeRegistryViews.sol";
 
 /// @notice Trigger semantics (DESIGN §8).
 ///
@@ -71,7 +72,7 @@ contract TriggerSemanticsTest is RegistryFixture {
         bytes32 id = _setupActiveVolume();
         vm.prank(OWNER);
         registry.deleteVolume(id);
-        vm.expectRevert(VolumeRegistry.VolumeNotActive.selector);
+        vm.expectRevert(IVolumeRegistryViews.VolumeNotActive.selector);
         registry.trigger(id);
     }
 

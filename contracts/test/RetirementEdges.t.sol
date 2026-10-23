@@ -5,6 +5,7 @@ import {StdStorage, stdStorage} from "forge-std/Test.sol";
 
 import {RegistryFixture} from "./fixtures/RegistryFixture.sol";
 import {VolumeRegistry} from "../src/VolumeRegistry.sol";
+import {IVolumeRegistryViews} from "../src/interfaces/IVolumeRegistryViews.sol";
 
 /// @notice Retirement edges (DESIGN §6.1, I2, I7).
 contract RetirementEdgesTest is RegistryFixture {
@@ -23,7 +24,7 @@ contract RetirementEdgesTest is RegistryFixture {
 
     function test_retired_cannotBeTriggered() public {
         bytes32 id = _retiredVolume();
-        vm.expectRevert(VolumeRegistry.VolumeNotActive.selector);
+        vm.expectRevert(IVolumeRegistryViews.VolumeNotActive.selector);
         registry.trigger(id);
     }
 
@@ -35,7 +36,7 @@ contract RetirementEdgesTest is RegistryFixture {
         registry.deleteVolume(a);
 
         // Not in raw active list.
-        VolumeRegistry.VolumeView[] memory vs = registry.getActiveVolumes(0, 10);
+        IVolumeRegistryViews.VolumeView[] memory vs = registry.getActiveVolumes(0, 10);
         for (uint256 i = 0; i < vs.length; ++i) {
             assertTrue(vs[i].volumeId != a, "retired volume leaked into active list");
         }
@@ -46,7 +47,7 @@ contract RetirementEdgesTest is RegistryFixture {
     function test_retired_deleteVolumeReverts() public {
         bytes32 id = _retiredVolume();
         vm.prank(OWNER);
-        vm.expectRevert(VolumeRegistry.VolumeNotActive.selector);
+        vm.expectRevert(IVolumeRegistryViews.VolumeNotActive.selector);
         registry.deleteVolume(id);
     }
 

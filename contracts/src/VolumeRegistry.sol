@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
+import {IERC20Like} from "./interfaces/IERC20Like.sol";
+import {IPostageStampLike} from "./interfaces/IPostageStampLike.sol";
+import {IVolumeRegistry} from "./interfaces/IVolumeRegistry.sol";
+
 /// @title VolumeRegistry
 /// @notice Volume-lifecycle layer over Swarm postage-stamp batches.
 /// @dev See docs/DESIGN.md for the full specification. Highlights:
@@ -18,55 +22,7 @@ pragma solidity ^0.8.19;
 ///        - retire beats auth-skip; payment-failure does not retire;
 ///        - `importVolume` = register + trigger, atomic: it keeps only the
 ///          ToppedUp / NoDeficit outcomes and reverts otherwise (I13).
-interface IERC20Like {
-    function transferFrom(address from, address to, uint256 amount) external returns (bool);
-    function approve(address spender, uint256 amount) external returns (bool);
-    function balanceOf(address account) external view returns (uint256);
-}
-
-interface IPostageStampLike {
-    struct Batch {
-        address owner;
-        uint8 depth;
-        uint8 bucketDepth;
-        bool immutableFlag;
-        uint256 normalisedBalance;
-        uint256 lastUpdatedBlockNumber;
-    }
-
-    function batches(bytes32 id)
-        external
-        view
-        returns (
-            address owner,
-            uint8 depth,
-            uint8 bucketDepth,
-            bool immutableFlag,
-            uint256 normalisedBalance,
-            uint256 lastUpdatedBlockNumber
-        );
-
-    function currentTotalOutPayment() external view returns (uint256);
-
-    function lastPrice() external view returns (uint64);
-
-    function minimumValidityBlocks() external view returns (uint64);
-
-    function minimumInitialBalancePerChunk() external view returns (uint256);
-
-    function createBatch(
-        address owner,
-        uint256 initialBalancePerChunk,
-        uint8 depth,
-        uint8 bucketDepth,
-        bytes32 nonce,
-        bool immutableFlag
-    ) external returns (bytes32);
-
-    function topUp(bytes32 batchId, uint256 topupAmountPerChunk) external;
-}
-
-contract VolumeRegistry {
+contract VolumeRegistry is IVolumeRegistry {
     // ---------------------------------------------------------------------
     // Constants / enums
     // ---------------------------------------------------------------------
@@ -95,7 +51,8 @@ contract VolumeRegistry {
     }
 
     // ---------------------------------------------------------------------
-    // Types
+    // Types  (public `Account` / `VolumeView`, events and errors are
+    // declared in IVolumeRegistryViews)
     // ---------------------------------------------------------------------
 
     struct Volume {
@@ -107,25 +64,6 @@ contract VolumeRegistry {
         uint8 depth;
         uint8 status;
         uint32 activeIndex;
-    }
-
-    struct Account {
-        address payer;
-        bool active;
-        uint64 nonce; // successful creating calls by this owner; never reset (I14)
-    }
-
-    struct VolumeView {
-        bytes32 volumeId;
-        bytes32 batchId;
-        address owner;
-        address payer; // resolved from accounts[owner]
-        address chunkSigner;
-        uint64 createdAt;
-        uint64 ttlExpiry;
-        uint8 depth;
-        uint8 status;
-        bool accountActive;
     }
 
     // ---------------------------------------------------------------------
@@ -146,52 +84,6 @@ contract VolumeRegistry {
 
     bytes32[] internal _activeVolumeIds;
     uint256 public nextNonce; // salts Postage.createBatch; not the volume-ID nonce
-
-    // ---------------------------------------------------------------------
-    // Events  (see DESIGN §9)
-    // ---------------------------------------------------------------------
-
-    event VolumeCreated(
-        bytes32 indexed volumeId,
-        address indexed owner,
-        bytes32 indexed batchId,
-        address chunkSigner,
-        uint8 depth,
-        uint64 ttlExpiry
-    );
-    /// @dev `normalisedBalance` is the batch's balance as read at
-    ///      registration, before any topup.
-    event VolumeImported(
-        bytes32 indexed volumeId,
-        address indexed owner,
-        bytes32 indexed batchId,
-        address chunkSigner,
-        uint8 depth,
-        uint64 ttlExpiry,
-        uint256 normalisedBalance
-    );
-    event VolumeRetired(bytes32 indexed volumeId, uint8 reason);
-    event PayerDesignated(address indexed owner, address payer);
-    event AccountActivated(address indexed owner, address indexed payer);
-    event AccountRevoked(address indexed owner, address indexed payer, address revoker);
-
-    event Toppedup(bytes32 indexed volumeId, uint256 amount, uint256 newNormalisedBalance);
-    event TopupSkipped(bytes32 indexed volumeId, uint8 reason);
-
-    // ---------------------------------------------------------------------
-    // Errors
-    // ---------------------------------------------------------------------
-
-    error ZeroAddress();
-    error GraceBlocksBelowFloor(uint64 grace, uint64 floor_);
-    error AccountNotActive();
-    error NotVolumeOwner();
-    error VolumeNotActive();
-    error NotDesignated();
-    error NotAuthorizedToRevoke();
-    error DesignationClearedOnActivate();
-    error BatchNotLive();
-    error ImportTopupFailed();
 
     // ---------------------------------------------------------------------
     // Constructor  (DESIGN §10)

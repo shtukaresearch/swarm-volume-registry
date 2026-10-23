@@ -6,6 +6,7 @@ import {Test, Vm} from "forge-std/Test.sol";
 import {VolumeRegistry} from "../../src/VolumeRegistry.sol";
 import {PostageStamp} from "storage-incentives/src/PostageStamp.sol";
 import {TestToken} from "storage-incentives/src/TestToken.sol";
+import {IVolumeRegistryViews} from "../../src/interfaces/IVolumeRegistryViews.sol";
 
 /// @notice Handler contract shared by the I3/I8/I9 invariant suites.
 ///
@@ -119,7 +120,7 @@ contract PayerHandler is Test {
 
     function revoke_(uint8 ownerIdx, bool byOwner) external {
         address o = owners[ownerIdx % 3];
-        VolumeRegistry.Account memory a = registry.getAccount(o);
+        IVolumeRegistryViews.Account memory a = registry.getAccount(o);
         if (a.payer == address(0)) return;
         address caller = byOwner ? o : a.payer;
         vm.prank(caller);
@@ -129,7 +130,7 @@ contract PayerHandler is Test {
     function createVolume(uint8 ownerIdx, uint8 signerIdx) external {
         address o = owners[ownerIdx % 3];
         address s = signers[signerIdx % 2];
-        VolumeRegistry.Account memory a = registry.getAccount(o);
+        IVolumeRegistryViews.Account memory a = registry.getAccount(o);
         if (!a.active) return;
 
         uint256 balBefore = bzz.balanceOf(a.payer);
@@ -233,7 +234,7 @@ contract PayerHandler is Test {
             if (logs[i].topics[0] != toppedupSig) continue;
             bytes32 vid = logs[i].topics[1];
             (uint256 amount,) = abi.decode(logs[i].data, (uint256, uint256));
-            VolumeRegistry.VolumeView memory v = registry.getVolume(vid);
+            IVolumeRegistryViews.VolumeView memory v = registry.getVolume(vid);
             allowedByPayer[v.payer] += amount;
         }
 
@@ -251,7 +252,7 @@ contract PayerHandler is Test {
     function deleteVolume(uint8 volIdx) external {
         if (createdVolumeIds.length == 0) return;
         bytes32 id = createdVolumeIds[uint256(volIdx) % createdVolumeIds.length];
-        VolumeRegistry.VolumeView memory v = registry.getVolume(id);
+        IVolumeRegistryViews.VolumeView memory v = registry.getVolume(id);
         if (v.status != 1) return;
         vm.prank(v.owner);
         try registry.deleteVolume(id) {} catch {}
@@ -315,7 +316,7 @@ contract PayerHandler is Test {
     }
 
     function _triggerAndBook(bytes32 id) internal {
-        VolumeRegistry.VolumeView memory v = registry.getVolume(id);
+        IVolumeRegistryViews.VolumeView memory v = registry.getVolume(id);
         address payer = v.payer;
         uint256 before = payer == address(0) ? 0 : bzz.balanceOf(payer);
 

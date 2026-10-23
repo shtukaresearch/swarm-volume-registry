@@ -18,6 +18,12 @@
     "traces": { "enabled": true, "head_sampling_rate": 1 }
   },
 
+  // Subrequests per invocation: every RPC call and Telegram message is one, and a
+  // run polls for each receipt. Set explicitly because a version keeps the limit
+  // it was uploaded under — versions uploaded on Workers Free stay at 50. The
+  // Workers Paid default and our setting are both 10,000. Inherited by both envs.
+  "limits": { "subrequests": 10000 },
+
   // `secrets` is not inherited, so this top-level copy only guards the root: a
   // bare `wrangler deploy` with no `--env` fails on missing secrets instead of
   // quietly creating a third, cron-less `keeper` Worker.
@@ -40,9 +46,9 @@
   // and also ≤ the 15 min Cron Trigger wall-clock limit.
   "env": {
     // Sepolia — registry v2-rc2, graceBlocks = 300 (~1 h at 12 s blocks). Every
-    // ten minutes leaves ~50 min of slack for missed runs. The cycle limits are
-    // unchanged from the one-minute schedule: roughly two volumes per run at
-    // 12 s blocks. Warnings go to Telegram so skipped top-ups, retirements and
+    // ten minutes leaves ~50 min of slack for missed runs. A run starts new
+    // transactions for up to 8 min (CYCLE_TIMEOUT_MS), roughly 40 volumes at
+    // 12 s blocks, capped at 30. Warnings go to Telegram so skipped top-ups, retirements and
     // RPC failovers cannot make a run look healthy.
     "sepolia": {
       "vars": {
@@ -51,8 +57,8 @@
         "REGISTRY_ADDRESS": "0x00f72ee2970df8112fdf04c0225b33c43c5a4177",
         "NOTIFY_WARNINGS": "true",
         "MIN_BALANCE_WEI": "50000000000000000",
-        "MAX_VOLUMES_PER_CYCLE": "10",
-        "CYCLE_TIMEOUT_MS": "20000",
+        "MAX_VOLUMES_PER_CYCLE": "30",
+        "CYCLE_TIMEOUT_MS": "480000",
         "RECEIPT_TIMEOUT_MS": "30000",
         "CONFIRMATIONS": "1"
       },

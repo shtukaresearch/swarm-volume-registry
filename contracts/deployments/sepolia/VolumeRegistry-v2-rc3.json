@@ -1,0 +1,798 @@
+{
+  "address": "0xab326d6dbdcd1e90e06af22f4e72fa480078745e",
+  "abi": [
+    {
+      "type": "constructor",
+      "inputs": [
+        {
+          "name": "_postage",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "_bzz",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "_graceBlocks",
+          "type": "uint64",
+          "internalType": "uint64"
+        }
+      ],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "_triggerExt",
+      "inputs": [
+        {
+          "name": "volumeId",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "bzz",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "address",
+          "internalType": "contract IERC20Like"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "confirmAuth",
+      "inputs": [
+        {
+          "name": "owner",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "createVolume",
+      "inputs": [
+        {
+          "name": "chunkSigner",
+          "type": "address",
+          "internalType": "address"
+        },
+        {
+          "name": "depth",
+          "type": "uint8",
+          "internalType": "uint8"
+        },
+        {
+          "name": "bucketDepth",
+          "type": "uint8",
+          "internalType": "uint8"
+        },
+        {
+          "name": "ttlExpiry",
+          "type": "uint64",
+          "internalType": "uint64"
+        },
+        {
+          "name": "immutableBatch",
+          "type": "bool",
+          "internalType": "bool"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "volumeId",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        }
+      ],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "deleteVolume",
+      "inputs": [
+        {
+          "name": "volumeId",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "designateFundingWallet",
+      "inputs": [
+        {
+          "name": "payer",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "designated",
+      "inputs": [
+        {
+          "name": "",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "getAccount",
+      "inputs": [
+        {
+          "name": "owner",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "tuple",
+          "internalType": "struct IVolumeRegistryViews.Account",
+          "components": [
+            {
+              "name": "payer",
+              "type": "address",
+              "internalType": "address"
+            },
+            {
+              "name": "active",
+              "type": "bool",
+              "internalType": "bool"
+            },
+            {
+              "name": "nonce",
+              "type": "uint64",
+              "internalType": "uint64"
+            }
+          ]
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "getActiveVolumeCount",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "getActiveVolumes",
+      "inputs": [
+        {
+          "name": "offset",
+          "type": "uint256",
+          "internalType": "uint256"
+        },
+        {
+          "name": "limit",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "out",
+          "type": "tuple[]",
+          "internalType": "struct IVolumeRegistryViews.VolumeView[]",
+          "components": [
+            {
+              "name": "volumeId",
+              "type": "bytes32",
+              "internalType": "bytes32"
+            },
+            {
+              "name": "batchId",
+              "type": "bytes32",
+              "internalType": "bytes32"
+            },
+            {
+              "name": "owner",
+              "type": "address",
+              "internalType": "address"
+            },
+            {
+              "name": "payer",
+              "type": "address",
+              "internalType": "address"
+            },
+            {
+              "name": "chunkSigner",
+              "type": "address",
+              "internalType": "address"
+            },
+            {
+              "name": "createdAt",
+              "type": "uint64",
+              "internalType": "uint64"
+            },
+            {
+              "name": "ttlExpiry",
+              "type": "uint64",
+              "internalType": "uint64"
+            },
+            {
+              "name": "depth",
+              "type": "uint8",
+              "internalType": "uint8"
+            },
+            {
+              "name": "status",
+              "type": "uint8",
+              "internalType": "enum IVolumeRegistryViews.Status"
+            },
+            {
+              "name": "accountActive",
+              "type": "bool",
+              "internalType": "bool"
+            }
+          ]
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "getVolume",
+      "inputs": [
+        {
+          "name": "volumeId",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "tuple",
+          "internalType": "struct IVolumeRegistryViews.VolumeView",
+          "components": [
+            {
+              "name": "volumeId",
+              "type": "bytes32",
+              "internalType": "bytes32"
+            },
+            {
+              "name": "batchId",
+              "type": "bytes32",
+              "internalType": "bytes32"
+            },
+            {
+              "name": "owner",
+              "type": "address",
+              "internalType": "address"
+            },
+            {
+              "name": "payer",
+              "type": "address",
+              "internalType": "address"
+            },
+            {
+              "name": "chunkSigner",
+              "type": "address",
+              "internalType": "address"
+            },
+            {
+              "name": "createdAt",
+              "type": "uint64",
+              "internalType": "uint64"
+            },
+            {
+              "name": "ttlExpiry",
+              "type": "uint64",
+              "internalType": "uint64"
+            },
+            {
+              "name": "depth",
+              "type": "uint8",
+              "internalType": "uint8"
+            },
+            {
+              "name": "status",
+              "type": "uint8",
+              "internalType": "enum IVolumeRegistryViews.Status"
+            },
+            {
+              "name": "accountActive",
+              "type": "bool",
+              "internalType": "bool"
+            }
+          ]
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "graceBlocks",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint64",
+          "internalType": "uint64"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "importVolume",
+      "inputs": [
+        {
+          "name": "batchId",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        },
+        {
+          "name": "ttlExpiry",
+          "type": "uint64",
+          "internalType": "uint64"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "volumeId",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        }
+      ],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "nextNonce",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "uint256",
+          "internalType": "uint256"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "postage",
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "",
+          "type": "address",
+          "internalType": "contract IPostageStampLike"
+        }
+      ],
+      "stateMutability": "view"
+    },
+    {
+      "type": "function",
+      "name": "reap",
+      "inputs": [
+        {
+          "name": "volumeId",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "registerVolume",
+      "inputs": [
+        {
+          "name": "batchId",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        },
+        {
+          "name": "ttlExpiry",
+          "type": "uint64",
+          "internalType": "uint64"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "volumeId",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        }
+      ],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "revoke",
+      "inputs": [
+        {
+          "name": "owner",
+          "type": "address",
+          "internalType": "address"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "trigger",
+      "inputs": [
+        {
+          "name": "volumeId",
+          "type": "bytes32",
+          "internalType": "bytes32"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "function",
+      "name": "trigger",
+      "inputs": [
+        {
+          "name": "volumeIds",
+          "type": "bytes32[]",
+          "internalType": "bytes32[]"
+        }
+      ],
+      "outputs": [],
+      "stateMutability": "nonpayable"
+    },
+    {
+      "type": "event",
+      "name": "AccountActivated",
+      "inputs": [
+        {
+          "name": "owner",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "payer",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "AccountRevoked",
+      "inputs": [
+        {
+          "name": "owner",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "payer",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "revoker",
+          "type": "address",
+          "indexed": false,
+          "internalType": "address"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "PayerDesignated",
+      "inputs": [
+        {
+          "name": "owner",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "payer",
+          "type": "address",
+          "indexed": false,
+          "internalType": "address"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "Toppedup",
+      "inputs": [
+        {
+          "name": "volumeId",
+          "type": "bytes32",
+          "indexed": true,
+          "internalType": "bytes32"
+        },
+        {
+          "name": "amount",
+          "type": "uint256",
+          "indexed": false,
+          "internalType": "uint256"
+        },
+        {
+          "name": "newNormalisedBalance",
+          "type": "uint256",
+          "indexed": false,
+          "internalType": "uint256"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "TopupSkipped",
+      "inputs": [
+        {
+          "name": "volumeId",
+          "type": "bytes32",
+          "indexed": true,
+          "internalType": "bytes32"
+        },
+        {
+          "name": "reason",
+          "type": "uint8",
+          "indexed": false,
+          "internalType": "enum IVolumeRegistryViews.SkipReason"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "VolumeCreated",
+      "inputs": [
+        {
+          "name": "volumeId",
+          "type": "bytes32",
+          "indexed": true,
+          "internalType": "bytes32"
+        },
+        {
+          "name": "owner",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "batchId",
+          "type": "bytes32",
+          "indexed": true,
+          "internalType": "bytes32"
+        },
+        {
+          "name": "chunkSigner",
+          "type": "address",
+          "indexed": false,
+          "internalType": "address"
+        },
+        {
+          "name": "depth",
+          "type": "uint8",
+          "indexed": false,
+          "internalType": "uint8"
+        },
+        {
+          "name": "ttlExpiry",
+          "type": "uint64",
+          "indexed": false,
+          "internalType": "uint64"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "VolumeImported",
+      "inputs": [
+        {
+          "name": "volumeId",
+          "type": "bytes32",
+          "indexed": true,
+          "internalType": "bytes32"
+        },
+        {
+          "name": "owner",
+          "type": "address",
+          "indexed": true,
+          "internalType": "address"
+        },
+        {
+          "name": "batchId",
+          "type": "bytes32",
+          "indexed": true,
+          "internalType": "bytes32"
+        },
+        {
+          "name": "chunkSigner",
+          "type": "address",
+          "indexed": false,
+          "internalType": "address"
+        },
+        {
+          "name": "depth",
+          "type": "uint8",
+          "indexed": false,
+          "internalType": "uint8"
+        },
+        {
+          "name": "ttlExpiry",
+          "type": "uint64",
+          "indexed": false,
+          "internalType": "uint64"
+        },
+        {
+          "name": "normalisedBalance",
+          "type": "uint256",
+          "indexed": false,
+          "internalType": "uint256"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "event",
+      "name": "VolumeRetired",
+      "inputs": [
+        {
+          "name": "volumeId",
+          "type": "bytes32",
+          "indexed": true,
+          "internalType": "bytes32"
+        },
+        {
+          "name": "reason",
+          "type": "uint8",
+          "indexed": false,
+          "internalType": "enum IVolumeRegistryViews.RetireReason"
+        }
+      ],
+      "anonymous": false
+    },
+    {
+      "type": "error",
+      "name": "AccountNotActive",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "BatchNotLive",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "DesignationClearedOnActivate",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "GraceBlocksBelowFloor",
+      "inputs": [
+        {
+          "name": "grace",
+          "type": "uint64",
+          "internalType": "uint64"
+        },
+        {
+          "name": "floor_",
+          "type": "uint64",
+          "internalType": "uint64"
+        }
+      ]
+    },
+    {
+      "type": "error",
+      "name": "ImportTopupFailed",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "NotAuthorizedToRevoke",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "NotDesignated",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "NotVolumeOwner",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "VolumeNotActive",
+      "inputs": []
+    },
+    {
+      "type": "error",
+      "name": "ZeroAddress",
+      "inputs": []
+    }
+  ],
+  "transactionHash": "0x69549f93be98c7491ed1fcd3971001111ec4e1486fb3ece06c2d765c69845692",
+  "receipt": {
+    "type": "0x2",
+    "status": 1,
+    "cumulativeGasUsed": "120911808",
+    "logs": [],
+    "logsBloom": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+    "transactionHash": "0x69549f93be98c7491ed1fcd3971001111ec4e1486fb3ece06c2d765c69845692",
+    "transactionIndex": 87,
+    "blockHash": "0x37dbbde9e739609d97b860cfbecc228efe5482d99715eb4d27b16af09ac96652",
+    "blockNumber": 11974439,
+    "gasUsed": "13421147",
+    "effectiveGasPrice": "26",
+    "from": "0x48e26a76b0d823ebbd82243e8e9c4fa452f5d8d7",
+    "to": "0x4e59b44847b379578588920ca78fbf26c0b4956c",
+    "contractAddress": null,
+    "byzantium": true
+  },
+  "args": [
+    "0xcdfdC3752caaA826fE62531E0000C40546eC56A6",
+    "0x543dDb01Ba47acB11de34891cD86B675F04840db",
+    300
+  ],
+  "linkedData": {
+    "version": "v2-rc3",
+    "chainId": 11155111,
+    "profile": "sepolia-postage-v0.9.4-1h",
+    "broadcast": "broadcast/DeployVolumeRegistry.s.sol/11155111/run-latest.json",
+    "timestamp": 1792731565753,
+    "commit": "8442c5a",
+    "create2": {
+      "factory": "0x4e59b44847b379578588920ca78fbf26c0b4956c",
+      "salt": "0x76322d7263330000000000000000000000000000000000000000000000000000"
+    }
+  }
+}

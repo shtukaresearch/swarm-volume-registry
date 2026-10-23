@@ -30,7 +30,7 @@ contract TriggerSemanticsTest is RegistryFixture {
 
         uint256 price = uint256(stamp.lastPrice());
         uint256 target = price * GRACE_BLOCKS;
-        (,,,, uint256 nb,) = stamp.batches(id);
+        (,,,, uint256 nb,) = stamp.batches(_batchOf(id));
         uint256 outpay = stamp.currentTotalOutPayment();
         uint256 remaining = nb - outpay;
         uint256 deficit = target - remaining;
@@ -133,7 +133,7 @@ contract TriggerSemanticsTest is RegistryFixture {
         _roll(uint256(GRACE_BLOCKS) + 1);
 
         // Sanity: batch.normalisedBalance <= outpay now.
-        (,,,, uint256 nb,) = stamp.batches(id);
+        (,,,, uint256 nb,) = stamp.batches(_batchOf(id));
         assertLe(nb, stamp.currentTotalOutPayment());
 
         uint256 balBefore = bzz.balanceOf(PAYER);
@@ -148,20 +148,9 @@ contract TriggerSemanticsTest is RegistryFixture {
     function test_trigger_depthChanged_retires() public {
         bytes32 id = _setupActiveVolume();
 
-        // Depth-increase halves per-chunk remaining balance; Postage's floor
-        // is `minimumValidityBlocks * lastPrice`. Fund CHUNK_SIGNER and
-        // topUp the batch so post-halving remaining still clears the floor.
-        uint256 topupPerChunk = uint256(stamp.lastPrice()) * GRACE_BLOCKS * 4;
-        uint256 topupTotal = topupPerChunk << DEFAULT_DEPTH;
-        bzz.mint(CHUNK_SIGNER, topupTotal);
-        vm.prank(CHUNK_SIGNER);
-        bzz.approve(address(stamp), type(uint256).max);
-        vm.prank(CHUNK_SIGNER);
-        stamp.topUp(id, topupPerChunk);
-
-        // chunkSigner (batch owner on Postage) calls increaseDepth directly.
-        vm.prank(CHUNK_SIGNER);
-        stamp.increaseDepth(id, DEFAULT_DEPTH + 1);
+        // chunkSigner (batch owner on Postage) calls increaseDepth directly,
+        // after a topup so the halved per-chunk balance clears Postage's floor.
+        _increaseDepthAsSigner(_batchOf(id), CHUNK_SIGNER, DEFAULT_DEPTH);
 
         vm.expectEmit(true, true, true, true);
         emit VolumeRetired(id, registry.REASON_DEPTH_CHANGED());
@@ -200,15 +189,7 @@ contract TriggerSemanticsTest is RegistryFixture {
     function test_trigger_ordering_depthChangedBeatsNoAuth() public {
         bytes32 id = _setupActiveVolume();
 
-        uint256 topupPerChunk = uint256(stamp.lastPrice()) * GRACE_BLOCKS * 4;
-        uint256 topupTotal = topupPerChunk << DEFAULT_DEPTH;
-        bzz.mint(CHUNK_SIGNER, topupTotal);
-        vm.prank(CHUNK_SIGNER);
-        bzz.approve(address(stamp), type(uint256).max);
-        vm.prank(CHUNK_SIGNER);
-        stamp.topUp(id, topupPerChunk);
-        vm.prank(CHUNK_SIGNER);
-        stamp.increaseDepth(id, DEFAULT_DEPTH + 1);
+        _increaseDepthAsSigner(_batchOf(id), CHUNK_SIGNER, DEFAULT_DEPTH);
 
         // Revoke account.
         vm.prank(OWNER);
@@ -296,6 +277,135 @@ contract TriggerSemanticsTest is RegistryFixture {
         vm.expectEmit(true, true, true, true);
         emit VolumeRetired(id, registry.REASON_VOLUME_EXPIRED());
         registry.reap(id);
+        assertEq(registry.getVolume(id).status, 2);
+    }
+
+    // -------- trigger targets v.batchId --------------------------------
+
+    function test_trigger_topsUpVolumeBatchId() public {
+        _activateAccount(OWNER, PAYER, _expectedCreateCharge(DEFAULT_DEPTH) * FUND_MULT);
+        bytes32 batchId = _createThinExternalBatch(CHUNK_SIGNER);
+        bytes32 id = _registerDefault(OWNER, batchId);
+        assertTrue(id != batchId);
+
+        uint256 target = uint256(stamp.lastPrice()) * GRACE_BLOCKS;
+        uint256 deficit = target - _remaining(batchId);
+        (,,,, uint256 nbBefore,) = stamp.batches(batchId);
+
+        vm.expectEmit(true, true, true, true);
+        emit Toppedup(id, deficit << DEFAULT_DEPTH, nbBefore + deficit);
+        registry.trigger(id);
+
+        (,,,, uint256 nbAfter,) = stamp.batches(batchId);
+        assertEq(nbAfter, nbBefore + deficit, "topup landed on the volume's batch");
+        assertEq(_remaining(batchId), target);
+    }
+
+    // -------- shared batches (I5 batch level, §5) ----------------------
+
+    function test_sharedBatch_sameBlock_onlyFirstPayerCharged() public {
+        uint256 fund = _expectedCreateCharge(DEFAULT_DEPTH) * FUND_MULT;
+        _activateAccount(OWNER, PAYER, fund);
+        _activateAccount(OWNER_B, PAYER2, fund);
+        bytes32 batchId = _createThinExternalBatch(CHUNK_SIGNER);
+        bytes32 idA = _registerDefault(OWNER, batchId);
+        bytes32 idB = _registerDefault(OWNER_B, batchId);
+
+        uint256 target = uint256(stamp.lastPrice()) * GRACE_BLOCKS;
+        uint256 oneDeficit = (target - _remaining(batchId)) << DEFAULT_DEPTH;
+        uint256 balA = bzz.balanceOf(PAYER);
+        uint256 balB = bzz.balanceOf(PAYER2);
+
+        registry.trigger(idA);
+        registry.trigger(idB); // same block, batch already at target
+
+        assertEq(balA - bzz.balanceOf(PAYER), oneDeficit, "first payer pays the deficit");
+        assertEq(bzz.balanceOf(PAYER2), balB, "second payer charged for a shared batch");
+        assertEq(_remaining(batchId), target);
+        assertEq(registry.getVolume(idA).status, 1);
+        assertEq(registry.getVolume(idB).status, 1);
+    }
+
+    function test_sharedBatch_depthChange_retiresEachVolume() public {
+        uint256 fund = _expectedCreateCharge(DEFAULT_DEPTH) * FUND_MULT;
+        _activateAccount(OWNER, PAYER, fund);
+        _activateAccount(OWNER_B, PAYER2, fund);
+        bytes32 batchId = _createThinExternalBatch(CHUNK_SIGNER);
+        bytes32 idA = _registerDefault(OWNER, batchId);
+        bytes32 idB = _registerDefault(OWNER_B, batchId);
+
+        _increaseDepthAsSigner(batchId, CHUNK_SIGNER, DEFAULT_DEPTH);
+
+        vm.expectEmit(true, true, true, true);
+        emit VolumeRetired(idA, registry.REASON_DEPTH_CHANGED());
+        registry.trigger(idA);
+        // idB is untouched until its own trigger.
+        assertEq(registry.getVolume(idB).status, 1);
+
+        vm.expectEmit(true, true, true, true);
+        emit VolumeRetired(idB, registry.REASON_DEPTH_CHANGED());
+        registry.trigger(idB);
+        assertEq(registry.getActiveVolumeCount(), 0);
+    }
+
+    // -------- retire edges on a registered volume (I2) -----------------
+
+    function _setupRegisteredVolume(uint64 ttlExpiry) internal returns (bytes32 id, bytes32 b) {
+        _activateAccount(OWNER, PAYER, _expectedCreateCharge(DEFAULT_DEPTH) * FUND_MULT);
+        b = _createThinExternalBatch(CHUNK_SIGNER);
+        vm.prank(OWNER);
+        id = registry.registerVolume(b, ttlExpiry);
+    }
+
+    function test_registered_ownerDeleted_retires() public {
+        (bytes32 id,) = _setupRegisteredVolume(0);
+        vm.expectEmit(true, true, true, true);
+        emit VolumeRetired(id, registry.REASON_OWNER_DELETED());
+        vm.prank(OWNER);
+        registry.deleteVolume(id);
+        assertEq(registry.getVolume(id).status, 2);
+    }
+
+    function test_registered_batchDied_retires() public {
+        (bytes32 id, bytes32 b) = _setupRegisteredVolume(0);
+        // Thin batch holds minimumValidityBlocks (12) blocks of runway.
+        _roll(uint256(stamp.minimumValidityBlocks()) + 1);
+        (,,,, uint256 nb,) = stamp.batches(b);
+        assertLe(nb, stamp.currentTotalOutPayment());
+
+        uint256 balBefore = bzz.balanceOf(PAYER);
+        vm.expectEmit(true, true, true, true);
+        emit VolumeRetired(id, registry.REASON_BATCH_DIED());
+        registry.trigger(id);
+        assertEq(registry.getVolume(id).status, 2);
+        assertEq(bzz.balanceOf(PAYER), balBefore);
+    }
+
+    function test_registered_batchOwnerMismatch_retires() public {
+        (bytes32 id, bytes32 b) = _setupRegisteredVolume(0);
+        _forceBatchOwner(b, makeAddr("hijacker"));
+        vm.expectEmit(true, true, true, true);
+        emit VolumeRetired(id, registry.REASON_BATCH_OWNER_MISMATCH());
+        registry.trigger(id);
+        assertEq(registry.getVolume(id).status, 2);
+    }
+
+    function test_registered_depthChanged_retires() public {
+        (bytes32 id, bytes32 b) = _setupRegisteredVolume(0);
+        _increaseDepthAsSigner(b, CHUNK_SIGNER, DEFAULT_DEPTH);
+        vm.expectEmit(true, true, true, true);
+        emit VolumeRetired(id, registry.REASON_DEPTH_CHANGED());
+        registry.trigger(id);
+        assertEq(registry.getVolume(id).status, 2);
+    }
+
+    function test_registered_ttlExpired_retires() public {
+        uint64 ttl = uint64(block.timestamp + 100);
+        (bytes32 id,) = _setupRegisteredVolume(ttl);
+        vm.warp(ttl + 1);
+        vm.expectEmit(true, true, true, true);
+        emit VolumeRetired(id, registry.REASON_VOLUME_EXPIRED());
+        registry.trigger(id);
         assertEq(registry.getVolume(id).status, 2);
     }
 }

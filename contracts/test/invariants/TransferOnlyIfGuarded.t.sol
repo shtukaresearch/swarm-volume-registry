@@ -37,8 +37,10 @@ contract TransferOnlyIfGuardedInvariant is PayerHandlerFixture {
         }
     }
 
-    /// @dev Every active volume's account at end-of-run must still agree
-    ///      with what `getVolume` reports, enforcing DESIGN §7.4's contract.
+    /// @dev Every volume's account at end-of-run must still agree with what
+    ///      `getVolume` reports, enforcing DESIGN §7.4's contract, and its
+    ///      `batchId` must be the one recorded when the volume was made
+    ///      (created, registered or imported).
     function invariant_volumeViewMatchesAccount() public view {
         uint256 n = handler.createdVolumeCount();
         for (uint256 i = 0; i < n; ++i) {
@@ -47,6 +49,7 @@ contract TransferOnlyIfGuardedInvariant is PayerHandlerFixture {
             VolumeRegistry.Account memory a = registry.getAccount(v.owner);
             assertEq(v.payer, a.payer);
             assertEq(v.accountActive, a.active);
+            assertEq(v.batchId, handler.batchIdOf(id), "batchId drifted from creation");
         }
     }
 }

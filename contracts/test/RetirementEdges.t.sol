@@ -81,29 +81,22 @@ contract RetirementEdgesTest is RegistryFixture {
     }
 
     /// @notice I2 defensive branch: force PostageStamp.batches(id).owner !=
-    ///         volume.chunkSigner via stdStore; trigger retires with
+    ///         volume.chunkSigner via vm.store; trigger retires with
     ///         reason=BatchOwnerMismatch (DESIGN §6.1 — fifth reason).
     function test_i2_defensiveBatchOwnerMismatch() public {
         _activateAccount(OWNER, PAYER, _expectedCreateCharge(DEFAULT_DEPTH) * FUND_MULT);
         bytes32 id = _createDefaultVolume(OWNER, CHUNK_SIGNER);
 
-        // Force batches(id).owner != volume.chunkSigner via direct vm.store.
-        // stdStore can't resolve slots for struct-returning mappings. Slot
-        // confirmed via `forge inspect PostageStamp storage-layout`:
-        //   batches → slot 2 (AccessControl._roles=0, then _paused+bzzToken
-        //   +minimumBucketDepth packed in slot 1, immutables are inline).
-        //   Batch struct slot 0 packs [owner(20), depth(1), bucketDepth(1),
-        //   immutableFlag(1)].
+        // Force batches(batchId).owner != volume.chunkSigner via direct
+        // vm.store. The slot is keyed by the volume's batchId, not its
+        // volumeId (DESIGN §4: the two differ).
+        bytes32 batchId = _batchOf(id);
+        assertTrue(batchId != id);
         address hijacker = makeAddr("hijacker");
-        bytes32 batchesSlot = keccak256(abi.encode(id, uint256(2)));
-        bytes32 packed = vm.load(address(stamp), batchesSlot);
-        // Clear the low 160 bits (owner) and write hijacker.
-        uint256 cleared = uint256(packed) & ~uint256(type(uint160).max);
-        uint256 newPacked = cleared | uint256(uint160(hijacker));
-        vm.store(address(stamp), batchesSlot, bytes32(newPacked));
+        _forceBatchOwner(batchId, hijacker);
 
         // Sanity: the hijacked owner survived.
-        (address bOwner,,,,,) = stamp.batches(id);
+        (address bOwner,,,,,) = stamp.batches(batchId);
         assertEq(bOwner, hijacker);
 
         vm.expectEmit(true, true, true, true);

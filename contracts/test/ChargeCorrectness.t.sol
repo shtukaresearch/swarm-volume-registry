@@ -7,8 +7,9 @@ import {VolumeRegistry} from "../src/VolumeRegistry.sol";
 /// @notice Charge correctness (I8).
 ///
 /// Two lenses:
-///   (a) exact-formula assertions on the two code paths that spend payer
-///       BZZ (createVolume, trigger),
+///   (a) exact-formula assertions on the code paths that spend payer BZZ
+///       (createVolume, trigger, importVolume) and on registerVolume, which
+///       spends none,
 ///   (b) invariant: no other code path touches payer BZZ.
 ///
 /// The invariant lens lives in test/invariants/NoOtherPathSpendsPayer.t.sol.
@@ -37,7 +38,7 @@ contract ChargeCorrectnessTest is RegistryFixture {
         // Recompute formula: deficit = max(0, target - remaining);
         // amount = deficit * (1<<depth).
         uint256 target = uint256(stamp.lastPrice()) * GRACE_BLOCKS;
-        (,,,, uint256 nb,) = stamp.batches(id);
+        (,,,, uint256 nb,) = stamp.batches(_batchOf(id));
         uint256 outpay = stamp.currentTotalOutPayment();
         uint256 remaining = nb - outpay;
         uint256 deficit = target > remaining ? target - remaining : 0;
@@ -46,5 +47,33 @@ contract ChargeCorrectnessTest is RegistryFixture {
         uint256 before = bzz.balanceOf(PAYER);
         registry.trigger(id);
         assertEq(before - bzz.balanceOf(PAYER), expected, "trigger charge formula");
+    }
+
+    function test_importVolume_chargeEqualsTriggerFormula() public {
+        _activateAccount(OWNER, PAYER, _expectedCreateCharge(DEFAULT_DEPTH) * FUND_MULT);
+        bytes32 batchId = _createThinExternalBatch(CHUNK_SIGNER);
+
+        // Same formula as trigger: max(0, target − remaining) × (1<<depth).
+        uint256 target = uint256(stamp.lastPrice()) * GRACE_BLOCKS;
+        uint256 remaining = _remaining(batchId);
+        assertLt(remaining, target, "fixture batch must start below target");
+        uint256 expected = (target - remaining) * (uint256(1) << DEFAULT_DEPTH);
+
+        uint256 before = bzz.balanceOf(PAYER);
+        _importDefault(OWNER, batchId);
+        assertEq(before - bzz.balanceOf(PAYER), expected, "importVolume charge formula");
+    }
+
+    function test_registerVolume_movesZero() public {
+        _activateAccount(OWNER, PAYER, _expectedCreateCharge(DEFAULT_DEPTH) * FUND_MULT);
+        bytes32 batchId = _createThinExternalBatch(CHUNK_SIGNER);
+
+        uint256 payerBefore = bzz.balanceOf(PAYER);
+        uint256 registryBefore = bzz.balanceOf(address(registry));
+        uint256 stampBefore = bzz.balanceOf(address(stamp));
+        _registerDefault(OWNER, batchId);
+        assertEq(bzz.balanceOf(PAYER), payerBefore, "registerVolume charged the payer");
+        assertEq(bzz.balanceOf(address(registry)), registryBefore);
+        assertEq(bzz.balanceOf(address(stamp)), stampBefore);
     }
 }

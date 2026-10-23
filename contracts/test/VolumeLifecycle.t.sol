@@ -12,6 +12,7 @@ contract VolumeLifecycleTest is RegistryFixture {
     event VolumeCreated(
         bytes32 indexed volumeId,
         address indexed owner,
+        bytes32 indexed batchId,
         address chunkSigner,
         uint8 depth,
         uint64 ttlExpiry
@@ -26,10 +27,11 @@ contract VolumeLifecycleTest is RegistryFixture {
 
         uint256 payerBalBefore = bzz.balanceOf(PAYER);
         uint256 nonce = registry.nextNonce();
-        bytes32 expectedId = keccak256(abi.encode(address(registry), bytes32(nonce)));
+        bytes32 expectedBatchId = keccak256(abi.encode(address(registry), bytes32(nonce)));
+        bytes32 expectedId = _expectedVolumeId(OWNER, registry.getAccount(OWNER).nonce);
 
         vm.expectEmit(true, true, true, true);
-        emit VolumeCreated(expectedId, OWNER, CHUNK_SIGNER, DEFAULT_DEPTH, 0);
+        emit VolumeCreated(expectedId, OWNER, expectedBatchId, CHUNK_SIGNER, DEFAULT_DEPTH, 0);
         vm.prank(OWNER);
         bytes32 id = registry.createVolume(CHUNK_SIGNER, DEFAULT_DEPTH, DEFAULT_BUCKET, 0, false);
 
@@ -37,6 +39,8 @@ contract VolumeLifecycleTest is RegistryFixture {
 
         // Volume record.
         VolumeRegistry.VolumeView memory v = registry.getVolume(id);
+        assertEq(v.volumeId, id);
+        assertEq(v.batchId, expectedBatchId);
         assertEq(v.owner, OWNER);
         assertEq(v.chunkSigner, CHUNK_SIGNER);
         assertEq(v.depth, DEFAULT_DEPTH);
@@ -52,12 +56,13 @@ contract VolumeLifecycleTest is RegistryFixture {
         assertEq(bzz.balanceOf(PAYER), payerBalBefore - charge, "payer charge exact");
 
         // Postage batch exists with correct owner/depth.
-        (address bOwner, uint8 bDepth,,,,) = stamp.batches(id);
+        (address bOwner, uint8 bDepth,,,,) = stamp.batches(expectedBatchId);
         assertEq(bOwner, CHUNK_SIGNER);
         assertEq(bDepth, DEFAULT_DEPTH);
 
-        // Nonce advanced.
+        // Both nonces advanced.
         assertEq(registry.nextNonce(), nonce + 1);
+        assertEq(registry.getAccount(OWNER).nonce, 1);
     }
 
     function test_createVolume_inactiveAccount_reverts() public {

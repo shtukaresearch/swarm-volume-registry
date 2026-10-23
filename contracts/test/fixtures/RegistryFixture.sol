@@ -42,6 +42,10 @@ abstract contract RegistryFixture is Test {
     address internal CHUNK_SIGNER = makeAddr("chunk_signer");
     address internal STRANGER = makeAddr("stranger");
 
+    // Per-fixture salt for `_createExternalBatch`, so repeated calls by the
+    // same signer derive distinct batch IDs.
+    uint256 private _externalBatchNonce;
+
     function setUp() public virtual {
         // 1. TestToken (BZZ). Decimals=16. This test contract is minter + admin.
         bzz = new TestToken("BZZ", "BZZ", 0);
@@ -107,6 +111,92 @@ abstract contract RegistryFixture is Test {
     {
         vm.prank(owner);
         return registry.createVolume(chunkSigner, DEFAULT_DEPTH, DEFAULT_BUCKET, ttlExpiry, false);
+    }
+
+    /// @notice Creates a Postage batch with no registry involvement: mints
+    ///         `balancePerChunk << depth` BZZ to `signer`, which approves
+    ///         PostageStamp and calls `createBatch` itself. The batch owner is
+    ///         `signer`; the batch ID is `keccak256(abi.encode(signer, nonce))`
+    ///         for a fixture-local nonce.
+    function _createExternalBatch(address signer, uint8 depth, uint256 balancePerChunk)
+        internal
+        returns (bytes32 batchId)
+    {
+        uint256 total = balancePerChunk << depth;
+        bzz.mint(signer, total);
+        vm.prank(signer);
+        bzz.approve(address(stamp), total);
+        bytes32 nonce = bytes32(++_externalBatchNonce);
+        vm.prank(signer);
+        batchId = stamp.createBatch(signer, balancePerChunk, depth, DEFAULT_BUCKET, nonce, false);
+    }
+
+    /// @notice Thin external batch: funded with exactly Postage's
+    ///         `minimumInitialBalancePerChunk` (`minimumValidityBlocks ×
+    ///         lastPrice` = 12 blocks), below the registry's 15-block target.
+    function _createThinExternalBatch(address signer) internal returns (bytes32) {
+        return _createExternalBatch(signer, DEFAULT_DEPTH, stamp.minimumInitialBalancePerChunk());
+    }
+
+    /// @notice `registerVolume(batchId, 0)` as `owner`.
+    function _registerDefault(address owner, bytes32 batchId) internal returns (bytes32) {
+        vm.prank(owner);
+        return registry.registerVolume(batchId, 0);
+    }
+
+    /// @notice `importVolume(batchId, 0)` as `owner`.
+    function _importDefault(address owner, bytes32 batchId) internal returns (bytes32) {
+        vm.prank(owner);
+        return registry.importVolume(batchId, 0);
+    }
+
+    /// @notice The volume ID an owner's creating call with account nonce
+    ///         `nonce` produces (DESIGN §4).
+    function _expectedVolumeId(address owner, uint64 nonce) internal pure returns (bytes32) {
+        return keccak256(abi.encode(owner, nonce));
+    }
+
+    /// @notice The Postage batch underlying `volumeId`.
+    function _batchOf(bytes32 volumeId) internal view returns (bytes32) {
+        return registry.getVolume(volumeId).batchId;
+    }
+
+    /// @notice Per-chunk balance left on `batchId` (`normalisedBalance −
+    ///         currentTotalOutPayment`). Reverts if the batch is dead.
+    function _remaining(bytes32 batchId) internal view returns (uint256) {
+        (,,,, uint256 nb,) = stamp.batches(batchId);
+        return nb - stamp.currentTotalOutPayment();
+    }
+
+    /// @notice Overwrites `batches(batchId).owner` on PostageStamp via
+    ///         `vm.store`, for the I2 defensive owner-mismatch witness.
+    ///         stdStore can't resolve slots for struct-returning mappings.
+    ///         Slot confirmed via `forge inspect PostageStamp storage-layout`:
+    ///         `batches` → slot 2 (AccessControl._roles=0, then _paused +
+    ///         bzzToken + minimumBucketDepth packed in slot 1; immutables are
+    ///         inline). Batch struct slot 0 packs [owner(20), depth(1),
+    ///         bucketDepth(1), immutableFlag(1)].
+    function _forceBatchOwner(bytes32 batchId, address newOwner) internal {
+        bytes32 slot = keccak256(abi.encode(batchId, uint256(2)));
+        bytes32 packed = vm.load(address(stamp), slot);
+        // Clear the low 160 bits (owner) and write newOwner.
+        uint256 cleared = uint256(packed) & ~uint256(type(uint160).max);
+        vm.store(address(stamp), slot, bytes32(cleared | uint256(uint160(newOwner))));
+    }
+
+    /// @notice Tops `batchId` up by `4 × graceBlocks` blocks of runway from
+    ///         `signer`'s own funds and then has `signer` (the batch owner)
+    ///         raise its depth by one. The topup keeps the halved per-chunk
+    ///         balance above Postage's floor.
+    function _increaseDepthAsSigner(bytes32 batchId, address signer, uint8 fromDepth) internal {
+        uint256 topupPerChunk = uint256(stamp.lastPrice()) * GRACE_BLOCKS * 4;
+        bzz.mint(signer, topupPerChunk << fromDepth);
+        vm.prank(signer);
+        bzz.approve(address(stamp), type(uint256).max);
+        vm.prank(signer);
+        stamp.topUp(batchId, topupPerChunk);
+        vm.prank(signer);
+        stamp.increaseDepth(batchId, fromDepth + 1);
     }
 
     /// @notice Advance the chain by `n` blocks. Does not move wall-clock time.

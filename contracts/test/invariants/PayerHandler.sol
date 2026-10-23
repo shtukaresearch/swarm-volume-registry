@@ -19,6 +19,12 @@ import {TestToken} from "storage-incentives/src/TestToken.sol";
 ///
 /// The two sums must stay equal at all times (I8). A similar bookkeeping
 /// lens serves I9 (revoked owner → zero spend).
+///
+/// For I14 and volume-ID uniqueness the handler also keeps a per-owner ghost
+/// nonce (count of that owner's successful creating calls) and the set of
+/// issued volume IDs. `registerVolume` / `importVolume` draw from a pool of
+/// batches that mixes external batches (created by the handler's signers
+/// directly on Postage) with batches the registry minted.
 contract PayerHandler is Test {
     VolumeRegistry public immutable registry;
     PostageStamp public immutable stamp;
@@ -41,6 +47,16 @@ contract PayerHandler is Test {
 
     // Ghost: per-block snapshot of balances, seeded on handler construction.
     mapping(address => uint256) public snapshotBalance;
+
+    // Ghost state for I14 / ID uniqueness.
+    mapping(address => uint64) public ghostNonce; // successful creating calls per owner
+    mapping(bytes32 => bytes32) public batchIdOf; // batchId recorded at creation
+    bool public duplicateIdIssued;
+
+    // Batches eligible for registerVolume / importVolume.
+    bytes32[] public batchPool;
+    uint256 internal constant MAX_EXTERNAL_BATCHES = 8;
+    uint256 public externalBatchCount;
 
     constructor(
         VolumeRegistry _registry,
@@ -73,6 +89,14 @@ contract PayerHandler is Test {
             vm.prank(payers[i]);
             bzz.approve(address(registry), type(uint256).max);
             snapshotBalance[payers[i]] = bzz.balanceOf(payers[i]);
+        }
+
+        // Seed the batch pool with one long-lived external batch per signer
+        // (≈ 1000 × graceBlocks of runway, so imports of it hit NoDeficit
+        // for the whole run). Thin ones are added by `mintExternalBatch`.
+        uint256 thick = uint256(_stamp.lastPrice()) * _graceBlocks * 1000;
+        for (uint256 i = 0; i < 2; ++i) {
+            _mintExternalBatch(signers[i], thick);
         }
     }
 
@@ -109,10 +133,12 @@ contract PayerHandler is Test {
         if (!a.active) return;
 
         uint256 balBefore = bzz.balanceOf(a.payer);
+        bytes32 expectedBatchId =
+            keccak256(abi.encode(address(registry), bytes32(registry.nextNonce())));
         vm.prank(o);
         try registry.createVolume(s, depth, bucketDepth, 0, false) returns (bytes32 id) {
-            createdVolumeIds.push(id);
-            volumeExists[id] = true;
+            _recordCreation(o, id, expectedBatchId);
+            batchPool.push(expectedBatchId);
 
             uint256 charge = balBefore - bzz.balanceOf(a.payer);
             spentByPayer[a.payer] += charge;
@@ -121,6 +147,54 @@ contract PayerHandler is Test {
             uint256 expected = uint256(stamp.lastPrice()) * graceBlocks * (uint256(1) << depth);
             allowedByPayer[a.payer] += expected;
         } catch {}
+    }
+
+    /// @notice Adds a thin external batch (Postage's minimum balance, below
+    ///         the registry's target) to the pool, up to a fixed cap.
+    function mintExternalBatch(uint8 signerIdx) external {
+        if (externalBatchCount >= MAX_EXTERNAL_BATCHES) return;
+        _mintExternalBatch(signers[signerIdx % 2], stamp.minimumInitialBalancePerChunk());
+    }
+
+    function registerVolume(uint8 ownerIdx, uint8 batchIdx) external {
+        address o = owners[ownerIdx % 3];
+        bytes32 b = batchPool[uint256(batchIdx) % batchPool.length];
+        uint256[3] memory balsBefore = _payerBalances();
+
+        vm.prank(o);
+        try registry.registerVolume(b, 0) returns (bytes32 id) {
+            _recordCreation(o, id, b);
+        } catch {}
+
+        // registerVolume is charged nothing; any observed outflow is
+        // unaccounted and breaks the I8 equality.
+        _bookObservedOutflow(balsBefore);
+    }
+
+    function importVolume(uint8 ownerIdx, uint8 batchIdx) external {
+        address o = owners[ownerIdx % 3];
+        bytes32 b = batchPool[uint256(batchIdx) % batchPool.length];
+        address payer = registry.getAccount(o).payer;
+        uint256[3] memory balsBefore = _payerBalances();
+
+        vm.recordLogs();
+        vm.prank(o);
+        try registry.importVolume(b, 0) returns (bytes32 id) {
+            _recordCreation(o, id, b);
+            // Charges inside importVolume surface as Toppedup events.
+            Vm.Log[] memory logs = vm.getRecordedLogs();
+            bytes32 toppedupSig = keccak256("Toppedup(bytes32,uint256,uint256)");
+            for (uint256 i = 0; i < logs.length; ++i) {
+                if (logs[i].emitter != address(registry)) continue;
+                if (logs[i].topics.length == 0 || logs[i].topics[0] != toppedupSig) continue;
+                (uint256 amount,) = abi.decode(logs[i].data, (uint256, uint256));
+                allowedByPayer[payer] += amount;
+            }
+        } catch {
+            vm.getRecordedLogs(); // drain
+        }
+
+        _bookObservedOutflow(balsBefore);
     }
 
     function triggerOne(uint8 volIdx) external {
@@ -205,6 +279,40 @@ contract PayerHandler is Test {
     }
 
     // ----- helpers -----------------------------------------------------
+
+    function _mintExternalBatch(address signer, uint256 perChunk) internal {
+        uint256 total = perChunk << depth;
+        bzz.mint(signer, total);
+        vm.prank(signer);
+        bzz.approve(address(stamp), total);
+        bytes32 nonce = bytes32(++externalBatchCount);
+        vm.prank(signer);
+        bytes32 b = stamp.createBatch(signer, perChunk, depth, bucketDepth, nonce, false);
+        batchPool.push(b);
+    }
+
+    /// @dev Books one successful creating call by `owner`: bumps the ghost
+    ///      nonce, records the batch, and flags any reissued volume ID.
+    function _recordCreation(address owner, bytes32 id, bytes32 batchId) internal {
+        if (volumeExists[id]) duplicateIdIssued = true;
+        volumeExists[id] = true;
+        createdVolumeIds.push(id);
+        batchIdOf[id] = batchId;
+        ++ghostNonce[owner];
+    }
+
+    function _payerBalances() internal view returns (uint256[3] memory bals) {
+        for (uint256 i = 0; i < 3; ++i) {
+            bals[i] = bzz.balanceOf(payers[i]);
+        }
+    }
+
+    function _bookObservedOutflow(uint256[3] memory balsBefore) internal {
+        for (uint256 i = 0; i < 3; ++i) {
+            uint256 after_ = bzz.balanceOf(payers[i]);
+            if (after_ < balsBefore[i]) spentByPayer[payers[i]] += balsBefore[i] - after_;
+        }
+    }
 
     function _triggerAndBook(bytes32 id) internal {
         VolumeRegistry.VolumeView memory v = registry.getVolume(id);

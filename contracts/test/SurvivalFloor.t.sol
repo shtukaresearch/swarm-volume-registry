@@ -153,7 +153,8 @@ contract SurvivalFloorTest is RegistryFixture {
         vm.prank(PAYER);
         reg.confirmAuth(OWNER);
         vm.prank(OWNER);
-        bytes32 id = reg.createVolume(CHUNK_SIGNER, DEFAULT_DEPTH, DEFAULT_BUCKET, 0, false);
+        bytes32 volumeId = reg.createVolume(CHUNK_SIGNER, DEFAULT_DEPTH, DEFAULT_BUCKET, 0, false);
+        bytes32 id = reg.getVolume(volumeId).batchId;
 
         uint256 bound = _computeFloorBlocks(grace);
         uint256 observed = _runWorstCasePriceHarness(id, grace, uint256(grace) * 2);
@@ -201,7 +202,8 @@ contract SurvivalFloorTest is RegistryFixture {
         vm.prank(PAYER);
         reg12.confirmAuth(OWNER);
         vm.prank(OWNER);
-        bytes32 id = reg12.createVolume(CHUNK_SIGNER, DEFAULT_DEPTH, DEFAULT_BUCKET, 0, false);
+        bytes32 volumeId = reg12.createVolume(CHUNK_SIGNER, DEFAULT_DEPTH, DEFAULT_BUCKET, 0, false);
+        bytes32 id = reg12.getVolume(volumeId).batchId;
 
         uint256 bound = _computeFloorBlocks(grace);
         // f very close to 1 because λ·G is tiny; with G=12 and ROUND=152,
@@ -224,7 +226,7 @@ contract SurvivalFloorTest is RegistryFixture {
         // Hold price constant. T should equal graceBlocks exactly (floor met
         // with equality up to 1-block rounding).
         _activateAccount(OWNER, PAYER, _expectedCreateCharge(DEFAULT_DEPTH) * 4);
-        bytes32 id = _createDefaultVolume(OWNER, CHUNK_SIGNER);
+        bytes32 id = _batchOf(_createDefaultVolume(OWNER, CHUNK_SIGNER));
 
         uint64 startBlock = uint64(block.number);
         // Roll one block at a time checking batch liveness.
@@ -245,7 +247,7 @@ contract SurvivalFloorTest is RegistryFixture {
 
     function test_survival_fallingPrice_exceedsGrace() public {
         _activateAccount(OWNER, PAYER, _expectedCreateCharge(DEFAULT_DEPTH) * 4);
-        bytes32 id = _createDefaultVolume(OWNER, CHUNK_SIGNER);
+        bytes32 id = _batchOf(_createDefaultVolume(OWNER, CHUNK_SIGNER));
 
         uint64 startBlock = uint64(block.number);
         // Halve price after the first round — accelerates survival.

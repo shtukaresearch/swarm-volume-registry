@@ -20,6 +20,9 @@ import {VolumeRegistry} from "../../src/VolumeRegistry.sol";
 ///                                       0xcA11bde05977b3631167028862bE2a173976CA11.
 ///   - `FORK_GRACE_BLOCKS` (optional)  — registry constructor arg;
 ///                                       defaults to PostageStamp.minimumValidityBlocks().
+///   - `FORK_IMPORT_BATCH_ID` (optional) — a real, pre-existing batch for
+///                                       test_fork_registerVolume_liveBatch;
+///                                       that test is skipped when unset.
 ///
 /// All tests no-op if `FORK_POSTAGE_STAMP` is unset or its address has no
 /// code on the active chain (i.e. plain `forge test` against a hermetic
@@ -31,7 +34,10 @@ import {VolumeRegistry} from "../../src/VolumeRegistry.sol";
 ///   - test_trigger_zeroDeficit_noop
 ///   - test_trigger_idempotence_sameBlock
 ///   - test_activeSet_pagination (moderate N)
-///   - Parity assertion at setUp
+///   - test_fork_importVolume_happy
+///   - test_fork_registerVolume_liveBatch
+///   - Parity assertions at setUp, including the `batches()` tuple layout
+///     (DESIGN §14) checked against a batch created on the fork
 interface IERC20 {
     function balanceOf(address) external view returns (uint256);
     function transfer(address, uint256) external returns (bool);
@@ -45,6 +51,8 @@ interface IPostageStamp {
     function priceOracle() external view returns (address);
     function batches(bytes32) external view returns (address, uint8, uint8, bool, uint256, uint256);
     function currentTotalOutPayment() external view returns (uint256);
+    function minimumInitialBalancePerChunk() external view returns (uint256);
+    function createBatch(address, uint256, uint8, uint8, bytes32, bool) external returns (bytes32);
 }
 
 contract ForkRegistryTest is Test {
@@ -108,6 +116,8 @@ contract ForkRegistryTest is Test {
         address oracle = stamp.priceOracle();
         assertTrue(oracle != address(0), "PriceOracle not discoverable");
 
+        _assertBatchesLayoutParity();
+
         registry = new VolumeRegistry(postageAddr, bzzAddr, graceBlocks);
 
         // Fund + activate.
@@ -120,6 +130,45 @@ contract ForkRegistryTest is Test {
         registry.confirmAuth(owner);
     }
 
+    /// @dev Creates a batch owned by `chunkSigner` directly on the live
+    ///      Postage, funded with `perChunk` per chunk.
+    function _createExternalBatch(uint256 perChunk, bytes32 salt) internal returns (bytes32) {
+        uint256 total = perChunk << DEFAULT_DEPTH;
+        deal(bzzAddr, chunkSigner, total);
+        vm.prank(chunkSigner);
+        bzz.approve(postageAddr, total);
+        vm.prank(chunkSigner);
+        return stamp.createBatch(chunkSigner, perChunk, DEFAULT_DEPTH, DEFAULT_BUCKET, salt, false);
+    }
+
+    /// @dev DESIGN §14: registration records `owner` and `depth` from the
+    ///      `batches()` tuple, so its layout is part of the dependency
+    ///      surface. Create a batch with known fields on the live Postage and
+    ///      check the raw return data decodes to exactly those fields as
+    ///      `IPostageStampLike` lays them out.
+    function _assertBatchesLayoutParity() internal {
+        bytes32 batchId =
+            _createExternalBatch(stamp.minimumInitialBalancePerChunk(), keccak256("fork-parity"));
+        (bool ok, bytes memory ret) =
+            postageAddr.staticcall(abi.encodeWithSignature("batches(bytes32)", batchId));
+        assertTrue(ok, "batches() call failed");
+        assertEq(ret.length, 6 * 32, "batches() tuple width");
+        (
+            address bOwner,
+            uint8 bDepth,
+            uint8 bBucketDepth,
+            bool bImmutable,
+            uint256 bNormalisedBalance,
+            uint256 bLastUpdated
+        ) = abi.decode(ret, (address, uint8, uint8, bool, uint256, uint256));
+        assertEq(bOwner, chunkSigner, "batches().owner position");
+        assertEq(bDepth, DEFAULT_DEPTH, "batches().depth position");
+        assertEq(bBucketDepth, DEFAULT_BUCKET, "batches().bucketDepth position");
+        assertFalse(bImmutable, "batches().immutableFlag position");
+        assertGt(bNormalisedBalance, stamp.currentTotalOutPayment(), "batches().normalisedBalance");
+        assertEq(bLastUpdated, block.number, "batches().lastUpdatedBlockNumber position");
+    }
+
     function _charge() internal view returns (uint256) {
         return uint256(stamp.lastPrice()) * graceBlocks * (uint256(1) << DEFAULT_DEPTH);
     }
@@ -129,7 +178,7 @@ contract ForkRegistryTest is Test {
         vm.prank(owner);
         bytes32 id = registry.createVolume(chunkSigner, DEFAULT_DEPTH, DEFAULT_BUCKET, 0, false);
         assertEq(balBefore - bzz.balanceOf(payer), _charge());
-        (address bOwner, uint8 bDepth,,,,) = stamp.batches(id);
+        (address bOwner, uint8 bDepth,,,,) = stamp.batches(registry.getVolume(id).batchId);
         assertEq(bOwner, chunkSigner);
         assertEq(bDepth, DEFAULT_DEPTH);
     }
@@ -173,5 +222,49 @@ contract ForkRegistryTest is Test {
         assertEq(page.length, 20);
         VolumeRegistry.VolumeView[] memory rest = registry.getActiveVolumes(20, 20);
         assertEq(rest.length, 10);
+    }
+
+    function test_fork_importVolume_happy() public forkOnly {
+        bytes32 batchId =
+            _createExternalBatch(stamp.minimumInitialBalancePerChunk(), keccak256("fork-import"));
+
+        uint256 balBefore = bzz.balanceOf(payer);
+        vm.prank(owner);
+        bytes32 id = registry.importVolume(batchId, 0);
+        VolumeRegistry.VolumeView memory v = registry.getVolume(id);
+        assertEq(v.batchId, batchId);
+        assertEq(v.owner, owner);
+        assertEq(v.chunkSigner, chunkSigner);
+        assertEq(v.depth, DEFAULT_DEPTH);
+
+        (,,,, uint256 nb,) = stamp.batches(batchId);
+        uint256 target = uint256(stamp.lastPrice()) * graceBlocks;
+        assertGe(nb - stamp.currentTotalOutPayment(), target, "batch at target after import");
+        uint256 balAfterImport = bzz.balanceOf(payer);
+        assertLe(balAfterImport, balBefore);
+
+        vm.roll(block.number + 5);
+        registry.trigger(id);
+        assertLt(bzz.balanceOf(payer), balAfterImport, "trigger after roll tops up");
+        assertEq(registry.getVolume(id).status, 1);
+    }
+
+    function test_fork_registerVolume_liveBatch() public forkOnly {
+        bytes32 batchId = vm.envOr("FORK_IMPORT_BATCH_ID", bytes32(0));
+        if (batchId == bytes32(0)) {
+            emit log("fork test skipped - FORK_IMPORT_BATCH_ID unset");
+            return;
+        }
+        (address bOwner, uint8 bDepth,,,,) = stamp.batches(batchId);
+
+        uint256 balBefore = bzz.balanceOf(payer);
+        vm.prank(owner);
+        bytes32 id = registry.registerVolume(batchId, 0);
+        VolumeRegistry.VolumeView memory v = registry.getVolume(id);
+        assertEq(v.batchId, batchId);
+        assertEq(v.chunkSigner, bOwner);
+        assertEq(v.depth, bDepth);
+        assertEq(v.status, 1);
+        assertEq(bzz.balanceOf(payer), balBefore, "registerVolume moved BZZ");
     }
 }

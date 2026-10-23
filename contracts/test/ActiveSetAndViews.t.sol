@@ -85,4 +85,42 @@ contract ActiveSetAndViewsTest is RegistryFixture {
         assertEq(v.payer, PAYER, "payer identity retained after revoke");
         assertFalse(v.accountActive);
     }
+
+    function test_volumeView_batchId_created() public {
+        _activateAccount(OWNER, PAYER, _expectedCreateCharge(DEFAULT_DEPTH) * 2);
+        uint256 batchNonce = registry.nextNonce();
+        bytes32 id = _createDefaultVolume(OWNER, CHUNK_SIGNER);
+        bytes32 batchId = keccak256(abi.encode(address(registry), bytes32(batchNonce)));
+
+        assertEq(registry.getVolume(id).batchId, batchId);
+        VolumeRegistry.VolumeView[] memory vs = registry.getActiveVolumes(0, 1);
+        assertEq(vs[0].volumeId, id);
+        assertEq(vs[0].batchId, batchId);
+    }
+
+    function test_volumeView_batchId_registered() public {
+        _activateAccount(OWNER, PAYER, _expectedCreateCharge(DEFAULT_DEPTH) * 2);
+        bytes32 batchId = _createThinExternalBatch(CHUNK_SIGNER);
+        bytes32 id = _registerDefault(OWNER, batchId);
+
+        VolumeRegistry.VolumeView memory v = registry.getVolume(id);
+        assertEq(v.volumeId, id);
+        assertEq(v.batchId, batchId);
+        VolumeRegistry.VolumeView[] memory vs = registry.getActiveVolumes(0, 1);
+        assertEq(vs[0].volumeId, id);
+        assertEq(vs[0].batchId, batchId);
+    }
+
+    function test_getAccount_returnsNonce() public {
+        assertEq(registry.getAccount(OWNER).nonce, 0);
+        _activateAccount(OWNER, PAYER, _expectedCreateCharge(DEFAULT_DEPTH) * 4);
+        _createDefaultVolume(OWNER, CHUNK_SIGNER);
+        _createDefaultVolume(OWNER, CHUNK_SIGNER);
+        _registerDefault(OWNER, _createThinExternalBatch(CHUNK_SIGNER));
+
+        VolumeRegistry.Account memory a = registry.getAccount(OWNER);
+        assertEq(a.payer, PAYER);
+        assertTrue(a.active);
+        assertEq(a.nonce, 3);
+    }
 }

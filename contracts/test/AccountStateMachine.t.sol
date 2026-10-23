@@ -4,7 +4,8 @@ pragma solidity ^0.8.19;
 import {RegistryFixture} from "./fixtures/RegistryFixture.sol";
 import {VolumeRegistry} from "../src/VolumeRegistry.sol";
 
-/// @notice Account state machine (DESIGN §6.2, I4).
+/// @notice Account state machine (DESIGN §6.2, I4), and nonce preservation
+///         across account transitions (I14, ADR-0003).
 contract AccountStateMachineTest is RegistryFixture {
     event PayerDesignated(address indexed owner, address payer);
     event AccountActivated(address indexed owner, address indexed payer);
@@ -112,5 +113,56 @@ contract AccountStateMachineTest is RegistryFixture {
         vm.prank(PAYER);
         registry.confirmAuth(OWNER);
         assertTrue(registry.getAccount(OWNER).active);
+    }
+
+    // --- nonce preservation (I14, ADR-0003) ----------------------------
+
+    /// @dev Opens an account for OWNER with PAYER and makes two creating
+    ///      calls, so the nonce under test is non-zero.
+    function _accountWithVolumes() internal returns (uint64 nonce) {
+        _activateAccount(OWNER, PAYER, _expectedCreateCharge(DEFAULT_DEPTH) * 10);
+        _createDefaultVolume(OWNER, CHUNK_SIGNER);
+        _registerDefault(OWNER, _createThinExternalBatch(CHUNK_SIGNER));
+        nonce = registry.getAccount(OWNER).nonce;
+        assertEq(nonce, 2);
+    }
+
+    function _assertNextIdUsesNonce(uint64 nonce) internal {
+        assertEq(registry.getAccount(OWNER).nonce, nonce, "account transition changed nonce");
+        bytes32 id = _createDefaultVolume(OWNER, CHUNK_SIGNER);
+        assertEq(id, _expectedVolumeId(OWNER, nonce), "next ID not derived from preserved nonce");
+        assertEq(registry.getAccount(OWNER).nonce, nonce + 1);
+    }
+
+    function test_nonce_preservedOnReconfirmSamePayer() public {
+        uint64 nonce = _accountWithVolumes();
+        vm.prank(PAYER);
+        registry.confirmAuth(OWNER);
+        _assertNextIdUsesNonce(nonce);
+    }
+
+    function test_nonce_preservedOnRedesignateAndConfirmNewPayer() public {
+        uint64 nonce = _accountWithVolumes();
+        vm.prank(OWNER);
+        registry.designateFundingWallet(PAYER2);
+        assertEq(registry.getAccount(OWNER).nonce, nonce, "designate changed nonce");
+        vm.prank(PAYER2);
+        registry.confirmAuth(OWNER);
+        assertEq(registry.getAccount(OWNER).payer, PAYER2);
+
+        bzz.mint(PAYER2, _expectedCreateCharge(DEFAULT_DEPTH));
+        vm.prank(PAYER2);
+        bzz.approve(address(registry), type(uint256).max);
+        _assertNextIdUsesNonce(nonce);
+    }
+
+    function test_nonce_preservedOnRevokeAndReconfirm() public {
+        uint64 nonce = _accountWithVolumes();
+        vm.prank(OWNER);
+        registry.revoke(OWNER);
+        assertEq(registry.getAccount(OWNER).nonce, nonce, "revoke changed nonce");
+        vm.prank(PAYER);
+        registry.confirmAuth(OWNER);
+        _assertNextIdUsesNonce(nonce);
     }
 }

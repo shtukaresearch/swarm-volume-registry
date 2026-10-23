@@ -3,6 +3,7 @@ pragma solidity ^0.8.19;
 
 import {RegistryFixture} from "./fixtures/RegistryFixture.sol";
 import {VolumeRegistry} from "../src/VolumeRegistry.sol";
+import {IVolumeRegistryViews} from "../src/interfaces/IVolumeRegistryViews.sol";
 
 /// @notice Account state machine (DESIGN §6.2, I4), and nonce preservation
 ///         across account transitions (I14, ADR-0003).
@@ -29,7 +30,7 @@ contract AccountStateMachineTest is RegistryFixture {
 
     function test_confirmAuth_withoutDesignation_reverts() public {
         vm.prank(PAYER);
-        vm.expectRevert(VolumeRegistry.NotDesignated.selector);
+        vm.expectRevert(IVolumeRegistryViews.NotDesignated.selector);
         registry.confirmAuth(OWNER);
     }
 
@@ -37,7 +38,7 @@ contract AccountStateMachineTest is RegistryFixture {
         vm.prank(OWNER);
         registry.designateFundingWallet(PAYER);
         vm.prank(PAYER2);
-        vm.expectRevert(VolumeRegistry.NotDesignated.selector);
+        vm.expectRevert(IVolumeRegistryViews.NotDesignated.selector);
         registry.confirmAuth(OWNER);
     }
 
@@ -48,7 +49,7 @@ contract AccountStateMachineTest is RegistryFixture {
         emit AccountActivated(OWNER, PAYER);
         vm.prank(PAYER);
         registry.confirmAuth(OWNER);
-        VolumeRegistry.Account memory a = registry.getAccount(OWNER);
+        IVolumeRegistryViews.Account memory a = registry.getAccount(OWNER);
         assertEq(a.payer, PAYER);
         assertTrue(a.active);
     }
@@ -66,7 +67,7 @@ contract AccountStateMachineTest is RegistryFixture {
         vm.prank(PAYER2);
         registry.confirmAuth(OWNER);
 
-        VolumeRegistry.Account memory a = registry.getAccount(OWNER);
+        IVolumeRegistryViews.Account memory a = registry.getAccount(OWNER);
         assertEq(a.payer, PAYER2);
         assertTrue(a.active);
     }
@@ -92,7 +93,7 @@ contract AccountStateMachineTest is RegistryFixture {
     function test_revoke_byThirdParty_reverts() public {
         _activateAccount(OWNER, PAYER, 0);
         vm.prank(STRANGER);
-        vm.expectRevert(VolumeRegistry.NotAuthorizedToRevoke.selector);
+        vm.expectRevert(IVolumeRegistryViews.NotAuthorizedToRevoke.selector);
         registry.revoke(OWNER);
     }
 
@@ -100,7 +101,7 @@ contract AccountStateMachineTest is RegistryFixture {
         _activateAccount(OWNER, PAYER, 0);
         vm.prank(OWNER);
         registry.revoke(OWNER);
-        VolumeRegistry.Account memory a = registry.getAccount(OWNER);
+        IVolumeRegistryViews.Account memory a = registry.getAccount(OWNER);
         assertEq(a.payer, PAYER, "payer identity lost on revoke");
         assertFalse(a.active);
 

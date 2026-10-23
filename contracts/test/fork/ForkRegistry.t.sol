@@ -4,6 +4,7 @@ pragma solidity ^0.8.19;
 import {Test} from "forge-std/Test.sol";
 
 import {VolumeRegistry} from "../../src/VolumeRegistry.sol";
+import {IVolumeRegistryViews} from "../../src/interfaces/IVolumeRegistryViews.sol";
 
 /// @notice Fork-mode subset against a live chain.
 ///
@@ -218,9 +219,9 @@ contract ForkRegistryTest is Test {
             registry.createVolume(chunkSigner, DEFAULT_DEPTH, DEFAULT_BUCKET, 0, false);
         }
         assertEq(registry.getActiveVolumeCount(), n);
-        VolumeRegistry.VolumeView[] memory page = registry.getActiveVolumes(0, 20);
+        IVolumeRegistryViews.VolumeView[] memory page = registry.getActiveVolumes(0, 20);
         assertEq(page.length, 20);
-        VolumeRegistry.VolumeView[] memory rest = registry.getActiveVolumes(20, 20);
+        IVolumeRegistryViews.VolumeView[] memory rest = registry.getActiveVolumes(20, 20);
         assertEq(rest.length, 10);
     }
 
@@ -231,7 +232,7 @@ contract ForkRegistryTest is Test {
         uint256 balBefore = bzz.balanceOf(payer);
         vm.prank(owner);
         bytes32 id = registry.importVolume(batchId, 0);
-        VolumeRegistry.VolumeView memory v = registry.getVolume(id);
+        IVolumeRegistryViews.VolumeView memory v = registry.getVolume(id);
         assertEq(v.batchId, batchId);
         assertEq(v.owner, owner);
         assertEq(v.chunkSigner, chunkSigner);
@@ -246,7 +247,7 @@ contract ForkRegistryTest is Test {
         vm.roll(block.number + 5);
         registry.trigger(id);
         assertLt(bzz.balanceOf(payer), balAfterImport, "trigger after roll tops up");
-        assertEq(registry.getVolume(id).status, 1);
+        assertEq(uint8(registry.getVolume(id).status), uint8(IVolumeRegistryViews.Status.Active));
     }
 
     function test_fork_registerVolume_liveBatch() public forkOnly {
@@ -260,11 +261,11 @@ contract ForkRegistryTest is Test {
         uint256 balBefore = bzz.balanceOf(payer);
         vm.prank(owner);
         bytes32 id = registry.registerVolume(batchId, 0);
-        VolumeRegistry.VolumeView memory v = registry.getVolume(id);
+        IVolumeRegistryViews.VolumeView memory v = registry.getVolume(id);
         assertEq(v.batchId, batchId);
         assertEq(v.chunkSigner, bOwner);
         assertEq(v.depth, bDepth);
-        assertEq(v.status, 1);
+        assertEq(uint8(v.status), uint8(IVolumeRegistryViews.Status.Active));
         assertEq(bzz.balanceOf(payer), balBefore, "registerVolume moved BZZ");
     }
 }

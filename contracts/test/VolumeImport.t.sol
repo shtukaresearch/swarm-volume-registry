@@ -5,6 +5,7 @@ import {Vm} from "forge-std/Test.sol";
 
 import {RegistryFixture} from "./fixtures/RegistryFixture.sol";
 import {VolumeRegistry} from "../src/VolumeRegistry.sol";
+import {IVolumeRegistryViews} from "../src/interfaces/IVolumeRegistryViews.sol";
 
 /// @notice `importVolume` (DESIGN §7.1, §8 outcomes; I6, I8, I10, I13;
 ///         ADR-0004).
@@ -76,9 +77,9 @@ contract VolumeImportTest is RegistryFixture {
         registry.importVolume(batchId, ttlExpiry);
 
         assertEq(registry.getAccount(owner).nonce, s.nonce, "nonce consumed");
-        VolumeRegistry.VolumeView memory v = registry.getVolume(s.nextId);
+        IVolumeRegistryViews.VolumeView memory v = registry.getVolume(s.nextId);
         assertEq(v.owner, address(0), "record persisted");
-        assertEq(v.status, 0, "record persisted");
+        assertEq(uint8(v.status), uint8(IVolumeRegistryViews.Status.None), "record persisted");
         assertEq(registry.getActiveVolumeCount(), s.activeCount, "active-set entry persisted");
         assertEq(bzz.balanceOf(payer), s.payerBal, "payer BZZ moved");
         assertEq(bzz.balanceOf(address(registry)), s.registryBal, "registry BZZ moved");
@@ -110,12 +111,12 @@ contract VolumeImportTest is RegistryFixture {
         assertEq(payerBefore - bzz.balanceOf(PAYER), amount, "exact formula charge");
         assertEq(_remaining(batchId), _target(), "batch at target after import");
 
-        VolumeRegistry.VolumeView memory v = registry.getVolume(id);
+        IVolumeRegistryViews.VolumeView memory v = registry.getVolume(id);
         assertEq(v.owner, OWNER, "owner is the caller (I10)");
         assertEq(v.batchId, batchId);
         assertEq(v.chunkSigner, CHUNK_SIGNER);
         assertEq(v.depth, DEFAULT_DEPTH);
-        assertEq(v.status, 1);
+        assertEq(uint8(v.status), uint8(IVolumeRegistryViews.Status.Active));
         assertEq(registry.getAccount(OWNER).nonce, 1);
         assertEq(registry.getActiveVolumeCount(), 1);
     }
@@ -136,7 +137,7 @@ contract VolumeImportTest is RegistryFixture {
         }
 
         assertEq(bzz.balanceOf(PAYER), payerBefore);
-        assertEq(registry.getVolume(id).status, 1);
+        assertEq(uint8(registry.getVolume(id).status), uint8(IVolumeRegistryViews.Status.Active));
         assertEq(registry.getAccount(OWNER).nonce, 1);
     }
 
@@ -154,7 +155,7 @@ contract VolumeImportTest is RegistryFixture {
             PAYER,
             batchId,
             0,
-            abi.encodeWithSelector(VolumeRegistry.ImportTopupFailed.selector)
+            abi.encodeWithSelector(IVolumeRegistryViews.ImportTopupFailed.selector)
         );
     }
 
@@ -169,7 +170,7 @@ contract VolumeImportTest is RegistryFixture {
             PAYER,
             batchId,
             0,
-            abi.encodeWithSelector(VolumeRegistry.ImportTopupFailed.selector)
+            abi.encodeWithSelector(IVolumeRegistryViews.ImportTopupFailed.selector)
         );
     }
 
@@ -193,7 +194,7 @@ contract VolumeImportTest is RegistryFixture {
             PAYER,
             batchId,
             uint64(vm.getBlockTimestamp() - 1),
-            abi.encodeWithSelector(VolumeRegistry.ImportTopupFailed.selector)
+            abi.encodeWithSelector(IVolumeRegistryViews.ImportTopupFailed.selector)
         );
     }
 
@@ -207,7 +208,7 @@ contract VolumeImportTest is RegistryFixture {
             PAYER,
             batchId,
             uint64(block.timestamp),
-            abi.encodeWithSelector(VolumeRegistry.ImportTopupFailed.selector)
+            abi.encodeWithSelector(IVolumeRegistryViews.ImportTopupFailed.selector)
         );
     }
 
@@ -220,7 +221,7 @@ contract VolumeImportTest is RegistryFixture {
             PAYER,
             batchId,
             0,
-            abi.encodeWithSelector(VolumeRegistry.AccountNotActive.selector)
+            abi.encodeWithSelector(IVolumeRegistryViews.AccountNotActive.selector)
         );
     }
 
@@ -231,7 +232,7 @@ contract VolumeImportTest is RegistryFixture {
             PAYER,
             keccak256("missing"),
             0,
-            abi.encodeWithSelector(VolumeRegistry.BatchNotLive.selector)
+            abi.encodeWithSelector(IVolumeRegistryViews.BatchNotLive.selector)
         );
     }
 
@@ -240,7 +241,11 @@ contract VolumeImportTest is RegistryFixture {
         bytes32 batchId = _createThinExternalBatch(CHUNK_SIGNER);
         _roll(uint256(stamp.minimumValidityBlocks()));
         _assertImportRevertsCleanly(
-            OWNER, PAYER, batchId, 0, abi.encodeWithSelector(VolumeRegistry.BatchNotLive.selector)
+            OWNER,
+            PAYER,
+            batchId,
+            0,
+            abi.encodeWithSelector(IVolumeRegistryViews.BatchNotLive.selector)
         );
     }
 }

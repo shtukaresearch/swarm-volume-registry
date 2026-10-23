@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.19;
 
+import {IERC20Like} from "./interfaces/IERC20Like.sol";
+import {IPostageStampLike} from "./interfaces/IPostageStampLike.sol";
+import {IVolumeRegistry} from "./interfaces/IVolumeRegistry.sol";
+
 /// @title VolumeRegistry
 /// @notice Volume-lifecycle layer over Swarm postage-stamp batches.
 /// @dev See docs/DESIGN.md for the full specification. Highlights:
@@ -18,72 +22,11 @@ pragma solidity ^0.8.19;
 ///        - retire beats auth-skip; payment-failure does not retire;
 ///        - `importVolume` = register + trigger, atomic: it keeps only the
 ///          ToppedUp / NoDeficit outcomes and reverts otherwise (I13).
-interface IERC20Like {
-    function transferFrom(address from, address to, uint256 amount) external returns (bool);
-    function approve(address spender, uint256 amount) external returns (bool);
-    function balanceOf(address account) external view returns (uint256);
-}
-
-interface IPostageStampLike {
-    struct Batch {
-        address owner;
-        uint8 depth;
-        uint8 bucketDepth;
-        bool immutableFlag;
-        uint256 normalisedBalance;
-        uint256 lastUpdatedBlockNumber;
-    }
-
-    function batches(bytes32 id)
-        external
-        view
-        returns (
-            address owner,
-            uint8 depth,
-            uint8 bucketDepth,
-            bool immutableFlag,
-            uint256 normalisedBalance,
-            uint256 lastUpdatedBlockNumber
-        );
-
-    function currentTotalOutPayment() external view returns (uint256);
-
-    function lastPrice() external view returns (uint64);
-
-    function minimumValidityBlocks() external view returns (uint64);
-
-    function minimumInitialBalancePerChunk() external view returns (uint256);
-
-    function createBatch(
-        address owner,
-        uint256 initialBalancePerChunk,
-        uint8 depth,
-        uint8 bucketDepth,
-        bytes32 nonce,
-        bool immutableFlag
-    ) external returns (bytes32);
-
-    function topUp(bytes32 batchId, uint256 topupAmountPerChunk) external;
-}
-
-contract VolumeRegistry {
+contract VolumeRegistry is IVolumeRegistry {
     // ---------------------------------------------------------------------
-    // Constants / enums
+    // Enums  (public Status / RetireReason / SkipReason are declared in
+    // IVolumeRegistryViews)
     // ---------------------------------------------------------------------
-
-    uint8 internal constant STATUS_ACTIVE = 1;
-    uint8 internal constant STATUS_RETIRED = 2;
-
-    // Retire reasons (packed into `VolumeRetired.reason`).
-    uint8 public constant REASON_OWNER_DELETED = 1;
-    uint8 public constant REASON_VOLUME_EXPIRED = 2;
-    uint8 public constant REASON_BATCH_DIED = 3;
-    uint8 public constant REASON_DEPTH_CHANGED = 4;
-    uint8 public constant REASON_BATCH_OWNER_MISMATCH = 5; // defensive branch — DESIGN §6.1
-
-    // TopupSkipped reasons.
-    uint8 public constant SKIP_NO_AUTH = 1;
-    uint8 public constant SKIP_PAYMENT_FAILED = 2;
 
     // Outcome of one run of the §8 trigger steps. `trigger` treats all four
     // as success; `importVolume` keeps only NoDeficit and ToppedUp.
@@ -95,7 +38,8 @@ contract VolumeRegistry {
     }
 
     // ---------------------------------------------------------------------
-    // Types
+    // Types  (public `Account` / `VolumeView`, events and errors are
+    // declared in IVolumeRegistryViews)
     // ---------------------------------------------------------------------
 
     struct Volume {
@@ -105,27 +49,8 @@ contract VolumeRegistry {
         uint64 createdAt; // start of tracking, not batch age
         uint64 ttlExpiry; // 0 = no expiry
         uint8 depth;
-        uint8 status;
+        Status status;
         uint32 activeIndex;
-    }
-
-    struct Account {
-        address payer;
-        bool active;
-        uint64 nonce; // successful creating calls by this owner; never reset (I14)
-    }
-
-    struct VolumeView {
-        bytes32 volumeId;
-        bytes32 batchId;
-        address owner;
-        address payer; // resolved from accounts[owner]
-        address chunkSigner;
-        uint64 createdAt;
-        uint64 ttlExpiry;
-        uint8 depth;
-        uint8 status;
-        bool accountActive;
     }
 
     // ---------------------------------------------------------------------
@@ -146,52 +71,6 @@ contract VolumeRegistry {
 
     bytes32[] internal _activeVolumeIds;
     uint256 public nextNonce; // salts Postage.createBatch; not the volume-ID nonce
-
-    // ---------------------------------------------------------------------
-    // Events  (see DESIGN §9)
-    // ---------------------------------------------------------------------
-
-    event VolumeCreated(
-        bytes32 indexed volumeId,
-        address indexed owner,
-        bytes32 indexed batchId,
-        address chunkSigner,
-        uint8 depth,
-        uint64 ttlExpiry
-    );
-    /// @dev `normalisedBalance` is the batch's balance as read at
-    ///      registration, before any topup.
-    event VolumeImported(
-        bytes32 indexed volumeId,
-        address indexed owner,
-        bytes32 indexed batchId,
-        address chunkSigner,
-        uint8 depth,
-        uint64 ttlExpiry,
-        uint256 normalisedBalance
-    );
-    event VolumeRetired(bytes32 indexed volumeId, uint8 reason);
-    event PayerDesignated(address indexed owner, address payer);
-    event AccountActivated(address indexed owner, address indexed payer);
-    event AccountRevoked(address indexed owner, address indexed payer, address revoker);
-
-    event Toppedup(bytes32 indexed volumeId, uint256 amount, uint256 newNormalisedBalance);
-    event TopupSkipped(bytes32 indexed volumeId, uint8 reason);
-
-    // ---------------------------------------------------------------------
-    // Errors
-    // ---------------------------------------------------------------------
-
-    error ZeroAddress();
-    error GraceBlocksBelowFloor(uint64 grace, uint64 floor_);
-    error AccountNotActive();
-    error NotVolumeOwner();
-    error VolumeNotActive();
-    error NotDesignated();
-    error NotAuthorizedToRevoke();
-    error DesignationClearedOnActivate();
-    error BatchNotLive();
-    error ImportTopupFailed();
 
     // ---------------------------------------------------------------------
     // Constructor  (DESIGN §10)
@@ -324,8 +203,8 @@ contract VolumeRegistry {
     function deleteVolume(bytes32 volumeId) external {
         Volume storage v = _volumes[volumeId];
         if (v.owner != msg.sender) revert NotVolumeOwner();
-        if (v.status != STATUS_ACTIVE) revert VolumeNotActive();
-        _retire(volumeId, REASON_OWNER_DELETED);
+        if (v.status != Status.Active) revert VolumeNotActive();
+        _retire(volumeId, RetireReason.OwnerDeleted);
     }
 
     // =====================================================================
@@ -361,9 +240,9 @@ contract VolumeRegistry {
     ///         this edge too.
     function reap(bytes32 volumeId) external {
         Volume storage v = _volumes[volumeId];
-        if (v.status != STATUS_ACTIVE) return; // idempotent
+        if (v.status != Status.Active) return; // idempotent
         if (v.ttlExpiry != 0 && block.timestamp >= v.ttlExpiry) {
-            _retire(volumeId, REASON_VOLUME_EXPIRED);
+            _retire(volumeId, RetireReason.VolumeExpired);
         }
     }
 
@@ -375,7 +254,7 @@ contract VolumeRegistry {
         bytes32 batchId = v.batchId;
         // Step 1 — volume must be Active. Revert (not skip) so malformed
         // single-id calls are loud; batched calls swallow this.
-        if (v.status != STATUS_ACTIVE) revert VolumeNotActive();
+        if (v.status != Status.Active) revert VolumeNotActive();
 
         // Step 2 — read Postage batch.
         (
@@ -389,25 +268,25 @@ contract VolumeRegistry {
         bool batchMissing = (bOwner == address(0));
         bool batchExpired = !batchMissing && (bNormalisedBalance <= outpayment);
         if (batchMissing || batchExpired) {
-            _retire(volumeId, REASON_BATCH_DIED);
+            _retire(volumeId, RetireReason.BatchDied);
             return TriggerOutcome.Retired;
         }
 
         // Step 2b — owner mismatch (defensive; I2).
         if (bOwner != v.chunkSigner) {
-            _retire(volumeId, REASON_BATCH_OWNER_MISMATCH);
+            _retire(volumeId, RetireReason.BatchOwnerMismatch);
             return TriggerOutcome.Retired;
         }
 
         // Step 3 — depth mismatch.
         if (bDepth != v.depth) {
-            _retire(volumeId, REASON_DEPTH_CHANGED);
+            _retire(volumeId, RetireReason.DepthChanged);
             return TriggerOutcome.Retired;
         }
 
         // Step 4 — TTL.
         if (v.ttlExpiry != 0 && block.timestamp >= v.ttlExpiry) {
-            _retire(volumeId, REASON_VOLUME_EXPIRED);
+            _retire(volumeId, RetireReason.VolumeExpired);
             return TriggerOutcome.Retired;
         }
 
@@ -415,7 +294,7 @@ contract VolumeRegistry {
         // checked; a revoked account only prevents payment, never retires.
         Account storage acct = _accounts[v.owner];
         if (!acct.active) {
-            emit TopupSkipped(volumeId, SKIP_NO_AUTH);
+            emit TopupSkipped(volumeId, SkipReason.NoAuth);
             return TriggerOutcome.Skipped;
         }
 
@@ -435,11 +314,11 @@ contract VolumeRegistry {
             bool ok
         ) {
             if (!ok) {
-                emit TopupSkipped(volumeId, SKIP_PAYMENT_FAILED);
+                emit TopupSkipped(volumeId, SkipReason.PaymentFailed);
                 return TriggerOutcome.Skipped;
             }
         } catch {
-            emit TopupSkipped(volumeId, SKIP_PAYMENT_FAILED);
+            emit TopupSkipped(volumeId, SkipReason.PaymentFailed);
             return TriggerOutcome.Skipped;
         }
 
@@ -559,7 +438,7 @@ contract VolumeRegistry {
         }
         // Unreachable short of a hash collision or a nonce reset; kept as a
         // defensive assertion so an existing record is never overwritten.
-        require(_volumes[volumeId].status == 0, "VOLUMEID_COLLISION");
+        require(_volumes[volumeId].status == Status.None, "VOLUMEID_COLLISION");
 
         uint32 idx = uint32(_activeVolumeIds.length);
         _volumes[volumeId] = Volume({
@@ -569,15 +448,15 @@ contract VolumeRegistry {
             createdAt: uint64(block.timestamp),
             ttlExpiry: ttlExpiry,
             depth: depth,
-            status: STATUS_ACTIVE,
+            status: Status.Active,
             activeIndex: idx
         });
         _activeVolumeIds.push(volumeId);
     }
 
-    function _retire(bytes32 volumeId, uint8 reason) internal {
+    function _retire(bytes32 volumeId, RetireReason reason) internal {
         Volume storage v = _volumes[volumeId];
-        v.status = STATUS_RETIRED;
+        v.status = Status.Retired;
 
         // swap-and-pop active list
         uint32 idx = v.activeIndex;

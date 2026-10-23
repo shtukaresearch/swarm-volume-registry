@@ -4,6 +4,7 @@ pragma solidity ^0.8.19;
 import {PayerHandler} from "./PayerHandler.sol";
 import {PayerHandlerFixture} from "./PayerHandlerFixture.sol";
 import {VolumeRegistry} from "../../src/VolumeRegistry.sol";
+import {IVolumeRegistryViews} from "../../src/interfaces/IVolumeRegistryViews.sol";
 
 /// @notice I3 invariant.
 ///
@@ -45,8 +46,8 @@ contract TransferOnlyIfGuardedInvariant is PayerHandlerFixture {
         uint256 n = handler.createdVolumeCount();
         for (uint256 i = 0; i < n; ++i) {
             bytes32 id = handler.createdVolumeIds(i);
-            VolumeRegistry.VolumeView memory v = registry.getVolume(id);
-            VolumeRegistry.Account memory a = registry.getAccount(v.owner);
+            IVolumeRegistryViews.VolumeView memory v = registry.getVolume(id);
+            IVolumeRegistryViews.Account memory a = registry.getAccount(v.owner);
             assertEq(v.payer, a.payer);
             assertEq(v.accountActive, a.active);
             assertEq(v.batchId, handler.batchIdOf(id), "batchId drifted from creation");

@@ -3,6 +3,7 @@ pragma solidity ^0.8.19;
 
 import {RegistryFixture} from "./fixtures/RegistryFixture.sol";
 import {VolumeRegistry} from "../src/VolumeRegistry.sol";
+import {IVolumeRegistryViews} from "../src/interfaces/IVolumeRegistryViews.sol";
 
 /// @notice Volume lifecycle (DESIGN §7.1, I1, I10).
 contract VolumeLifecycleTest is RegistryFixture {
@@ -38,14 +39,14 @@ contract VolumeLifecycleTest is RegistryFixture {
         assertEq(id, expectedId, "volumeId formula mismatch");
 
         // Volume record.
-        VolumeRegistry.VolumeView memory v = registry.getVolume(id);
+        IVolumeRegistryViews.VolumeView memory v = registry.getVolume(id);
         assertEq(v.volumeId, id);
         assertEq(v.batchId, expectedBatchId);
         assertEq(v.owner, OWNER);
         assertEq(v.chunkSigner, CHUNK_SIGNER);
         assertEq(v.depth, DEFAULT_DEPTH);
         assertEq(v.ttlExpiry, 0);
-        assertEq(v.status, 1); // STATUS_ACTIVE
+        assertEq(uint8(v.status), uint8(IVolumeRegistryViews.Status.Active)); // STATUS_ACTIVE
         assertEq(v.payer, PAYER);
         assertTrue(v.accountActive);
 
@@ -67,7 +68,7 @@ contract VolumeLifecycleTest is RegistryFixture {
 
     function test_createVolume_inactiveAccount_reverts() public {
         vm.prank(OWNER);
-        vm.expectRevert(VolumeRegistry.AccountNotActive.selector);
+        vm.expectRevert(IVolumeRegistryViews.AccountNotActive.selector);
         registry.createVolume(CHUNK_SIGNER, DEFAULT_DEPTH, DEFAULT_BUCKET, 0, false);
     }
 
@@ -100,7 +101,7 @@ contract VolumeLifecycleTest is RegistryFixture {
         // Floor is 12 (set in fixture); 11 must revert.
         vm.expectRevert(
             abi.encodeWithSelector(
-                VolumeRegistry.GraceBlocksBelowFloor.selector, uint64(11), uint64(12)
+                IVolumeRegistryViews.GraceBlocksBelowFloor.selector, uint64(11), uint64(12)
             )
         );
         new VolumeRegistry(address(stamp), address(bzz), 11);
@@ -113,11 +114,11 @@ contract VolumeLifecycleTest is RegistryFixture {
         bytes32 id = _createDefaultVolume(OWNER, CHUNK_SIGNER);
 
         vm.expectEmit(true, true, true, true);
-        emit VolumeRetired(id, registry.REASON_OWNER_DELETED());
+        emit VolumeRetired(id, uint8(IVolumeRegistryViews.RetireReason.OwnerDeleted));
         vm.prank(OWNER);
         registry.deleteVolume(id);
 
-        assertEq(registry.getVolume(id).status, 2); // STATUS_RETIRED
+        assertEq(uint8(registry.getVolume(id).status), uint8(IVolumeRegistryViews.Status.Retired)); // STATUS_RETIRED
         assertEq(registry.getActiveVolumeCount(), 0);
     }
 
@@ -126,7 +127,7 @@ contract VolumeLifecycleTest is RegistryFixture {
         bytes32 id = _createDefaultVolume(OWNER, CHUNK_SIGNER);
 
         vm.prank(STRANGER);
-        vm.expectRevert(VolumeRegistry.NotVolumeOwner.selector);
+        vm.expectRevert(IVolumeRegistryViews.NotVolumeOwner.selector);
         registry.deleteVolume(id);
     }
 
@@ -137,7 +138,7 @@ contract VolumeLifecycleTest is RegistryFixture {
         registry.deleteVolume(id);
 
         vm.prank(OWNER);
-        vm.expectRevert(VolumeRegistry.VolumeNotActive.selector);
+        vm.expectRevert(IVolumeRegistryViews.VolumeNotActive.selector);
         registry.deleteVolume(id);
     }
 

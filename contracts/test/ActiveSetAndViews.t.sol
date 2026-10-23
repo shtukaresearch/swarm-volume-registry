@@ -3,12 +3,13 @@ pragma solidity ^0.8.19;
 
 import {RegistryFixture} from "./fixtures/RegistryFixture.sol";
 import {VolumeRegistry} from "../src/VolumeRegistry.sol";
+import {IVolumeRegistryViews} from "../src/interfaces/IVolumeRegistryViews.sol";
 
 /// @notice Active set and views (DESIGN §7.4, swap-and-pop).
 contract ActiveSetAndViewsTest is RegistryFixture {
     function test_activeSet_emptyInitially() public {
         assertEq(registry.getActiveVolumeCount(), 0);
-        VolumeRegistry.VolumeView[] memory vs = registry.getActiveVolumes(0, 10);
+        IVolumeRegistryViews.VolumeView[] memory vs = registry.getActiveVolumes(0, 10);
         assertEq(vs.length, 0);
     }
 
@@ -18,7 +19,7 @@ contract ActiveSetAndViewsTest is RegistryFixture {
         bytes32 v2 = _createDefaultVolume(OWNER, CHUNK_SIGNER);
         bytes32 v3 = _createDefaultVolume(OWNER, CHUNK_SIGNER);
 
-        VolumeRegistry.VolumeView[] memory vs = registry.getActiveVolumes(0, 3);
+        IVolumeRegistryViews.VolumeView[] memory vs = registry.getActiveVolumes(0, 3);
         assertEq(vs.length, 3);
         assertEq(vs[0].volumeId, v1);
         assertEq(vs[1].volumeId, v2);
@@ -35,7 +36,7 @@ contract ActiveSetAndViewsTest is RegistryFixture {
         registry.deleteVolume(v2);
 
         // Active list should be [v1, v3]. Swap-and-pop moved v3 into v2's slot.
-        VolumeRegistry.VolumeView[] memory vs = registry.getActiveVolumes(0, 10);
+        IVolumeRegistryViews.VolumeView[] memory vs = registry.getActiveVolumes(0, 10);
         assertEq(vs.length, 2);
         assertEq(vs[0].volumeId, v1);
         assertEq(vs[1].volumeId, v3);
@@ -49,20 +50,20 @@ contract ActiveSetAndViewsTest is RegistryFixture {
             ids[i] = _createDefaultVolume(OWNER, CHUNK_SIGNER);
         }
 
-        VolumeRegistry.VolumeView[] memory page1 = registry.getActiveVolumes(0, 100);
+        IVolumeRegistryViews.VolumeView[] memory page1 = registry.getActiveVolumes(0, 100);
         assertEq(page1.length, 100);
         for (uint256 i = 0; i < 100; ++i) {
             assertEq(page1[i].volumeId, ids[i]);
         }
 
-        VolumeRegistry.VolumeView[] memory page2 = registry.getActiveVolumes(100, 100);
+        IVolumeRegistryViews.VolumeView[] memory page2 = registry.getActiveVolumes(100, 100);
         assertEq(page2.length, 50);
         for (uint256 i = 0; i < 50; ++i) {
             assertEq(page2[i].volumeId, ids[100 + i]);
         }
 
         // Offset beyond end returns empty.
-        VolumeRegistry.VolumeView[] memory overflow = registry.getActiveVolumes(150, 10);
+        IVolumeRegistryViews.VolumeView[] memory overflow = registry.getActiveVolumes(150, 10);
         assertEq(overflow.length, 0);
     }
 
@@ -70,7 +71,7 @@ contract ActiveSetAndViewsTest is RegistryFixture {
         _activateAccount(OWNER, PAYER, _expectedCreateCharge(DEFAULT_DEPTH) * 2);
         bytes32 id = _createDefaultVolume(OWNER, CHUNK_SIGNER);
 
-        VolumeRegistry.VolumeView memory v = registry.getVolume(id);
+        IVolumeRegistryViews.VolumeView memory v = registry.getVolume(id);
         assertEq(v.payer, PAYER);
         assertTrue(v.accountActive);
     }
@@ -81,7 +82,7 @@ contract ActiveSetAndViewsTest is RegistryFixture {
         vm.prank(OWNER);
         registry.revoke(OWNER);
 
-        VolumeRegistry.VolumeView memory v = registry.getVolume(id);
+        IVolumeRegistryViews.VolumeView memory v = registry.getVolume(id);
         assertEq(v.payer, PAYER, "payer identity retained after revoke");
         assertFalse(v.accountActive);
     }
@@ -93,7 +94,7 @@ contract ActiveSetAndViewsTest is RegistryFixture {
         bytes32 batchId = keccak256(abi.encode(address(registry), bytes32(batchNonce)));
 
         assertEq(registry.getVolume(id).batchId, batchId);
-        VolumeRegistry.VolumeView[] memory vs = registry.getActiveVolumes(0, 1);
+        IVolumeRegistryViews.VolumeView[] memory vs = registry.getActiveVolumes(0, 1);
         assertEq(vs[0].volumeId, id);
         assertEq(vs[0].batchId, batchId);
     }
@@ -103,10 +104,10 @@ contract ActiveSetAndViewsTest is RegistryFixture {
         bytes32 batchId = _createThinExternalBatch(CHUNK_SIGNER);
         bytes32 id = _registerDefault(OWNER, batchId);
 
-        VolumeRegistry.VolumeView memory v = registry.getVolume(id);
+        IVolumeRegistryViews.VolumeView memory v = registry.getVolume(id);
         assertEq(v.volumeId, id);
         assertEq(v.batchId, batchId);
-        VolumeRegistry.VolumeView[] memory vs = registry.getActiveVolumes(0, 1);
+        IVolumeRegistryViews.VolumeView[] memory vs = registry.getActiveVolumes(0, 1);
         assertEq(vs[0].volumeId, id);
         assertEq(vs[0].batchId, batchId);
     }
@@ -118,7 +119,7 @@ contract ActiveSetAndViewsTest is RegistryFixture {
         _createDefaultVolume(OWNER, CHUNK_SIGNER);
         _registerDefault(OWNER, _createThinExternalBatch(CHUNK_SIGNER));
 
-        VolumeRegistry.Account memory a = registry.getAccount(OWNER);
+        IVolumeRegistryViews.Account memory a = registry.getAccount(OWNER);
         assertEq(a.payer, PAYER);
         assertTrue(a.active);
         assertEq(a.nonce, 3);

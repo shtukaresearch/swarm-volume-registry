@@ -3,6 +3,7 @@ pragma solidity ^0.8.19;
 
 import {RegistryFixture} from "./fixtures/RegistryFixture.sol";
 import {VolumeRegistry} from "../src/VolumeRegistry.sol";
+import {IVolumeRegistryViews} from "../src/interfaces/IVolumeRegistryViews.sol";
 
 /// @notice Payer-bounded exposure (I3). Example witnesses;
 ///         the fuzz invariant lives in invariants/TransferOnlyIfGuarded.t.sol.
@@ -30,7 +31,7 @@ contract PayerBoundedExposureTest is RegistryFixture {
         registry.deleteVolume(id);
 
         uint256 before = bzz.balanceOf(PAYER);
-        vm.expectRevert(VolumeRegistry.VolumeNotActive.selector);
+        vm.expectRevert(IVolumeRegistryViews.VolumeNotActive.selector);
         registry.trigger(id);
         assertEq(bzz.balanceOf(PAYER), before);
     }

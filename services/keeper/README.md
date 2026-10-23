@@ -55,7 +55,7 @@ Variables, in `wrangler.jsonc` per env: `DEPLOYMENT_NAME`, `CHAIN_ID`, `REGISTRY
 
 **A run must fit inside its cron interval**, so two runs never share the wallet at once: 5 s of RPC probing, plus `CYCLE_TIMEOUT_MS` (no new transaction starts after it), plus `RECEIPT_TIMEOUT_MS` for the last one, plus 5 s of slack. `test/config.test.ts` holds each env to that, and to the 15-minute Cron Trigger limit. On Sepolia that is about 35 volumes per run at 12 s blocks, capped at 30. Volumes are sent one at a time, so a run reaches roughly `CYCLE_TIMEOUT_MS / block time` of them. The rest are deferred, with a warning, and each run starts at a different point in the list so the same volumes are not deferred every time. If the active set outgrows that, raise the budget.
 
-Every RPC request counts against the platform's per-invocation subrequest cap: 50 on Workers Free, 10,000 on Workers Paid. A run spends about 20 on fixed work (probing each endpoint twice, enumeration, nonce and fees once per cycle, the balance check, the alert), then about 4 per volume: its gas estimate, its send, and receipt polls once per block. On Workers Free that is roughly 7 volumes per run, whatever `CYCLE_TIMEOUT_MS` allows.
+Every RPC request counts against the platform's per-invocation subrequest cap: 50 on Workers Free, 10,000 on Workers Paid. A run spends about 20 on fixed work (probing each endpoint twice, enumeration, nonce and fees once per cycle, the balance check, the alert), then several per volume: its gas estimate, its send, and the receipt wait. On Workers Free, runs reached about 3 volumes, whatever `CYCLE_TIMEOUT_MS` allowed.
 
 ## Setting up a deployment
 

@@ -47,9 +47,11 @@
   "env": {
     // Sepolia — registry v2-rc2, graceBlocks = 300 (~1 h at 12 s blocks). Every
     // ten minutes leaves ~50 min of slack for missed runs. A run starts new
-    // transactions for up to 8 min (CYCLE_TIMEOUT_MS), roughly 40 volumes at
-    // 12 s blocks, capped at 30. Warnings go to Telegram so skipped top-ups, retirements and
-    // RPC failovers cannot make a run look healthy.
+    // transactions for up to 7 min (CYCLE_TIMEOUT_MS), roughly 35 volumes at
+    // 12 s blocks, capped at 30. Each receipt gets up to 2 min: about 1 in 15
+    // Sepolia transactions takes 3–5 blocks to land, longer than the old 30 s.
+    // Warnings go to Telegram so skipped top-ups, retirements and RPC failovers
+    // cannot make a run look healthy.
     "sepolia": {
       "vars": {
         "DEPLOYMENT_NAME": "keeper-sepolia",
@@ -58,8 +60,8 @@
         "NOTIFY_WARNINGS": "true",
         "MIN_BALANCE_WEI": "50000000000000000",
         "MAX_VOLUMES_PER_CYCLE": "30",
-        "CYCLE_TIMEOUT_MS": "480000",
-        "RECEIPT_TIMEOUT_MS": "30000",
+        "CYCLE_TIMEOUT_MS": "420000",
+        "RECEIPT_TIMEOUT_MS": "120000",
         "CONFIRMATIONS": "1"
       },
       "secrets": {

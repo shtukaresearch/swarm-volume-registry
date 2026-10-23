@@ -241,6 +241,42 @@ under the existing name; it is not re-tagged.
 Also update the human-facing address tables: [`README.md`](README.md#deployments) and
 [`docs/usage.md`](docs/usage.md) §2.
 
+### A7. Publish the GitHub release
+
+Every new tag gets a GitHub release whose notes are written for integrators: keeper
+operators, indexer operators and anyone calling the registry. Draft them from the
+contract diff against the previous release tag
+(`git diff <previous-tag> <tag> -- contracts/src`), the ADRs added since that tag and
+`docs/DESIGN.md`, in these sections:
+
+- **Summary.** One paragraph: the network, what the release adds, whether it breaks
+  clients of the previous release, and the issues it closes.
+- **Deployment.** A table of network and chain ID, the `VolumeRegistry` address with its
+  CREATE2 salt, the PostageStamp and BZZ addresses, `graceBlocks`, the source tag, the
+  deployment transaction and the explorer verification link, all taken from the exported
+  record. State what happens to the previous deployment and whether volumes carry over.
+- **New.** New entry points and behaviour, with links to the ADRs that motivate them.
+- **Breaking changes.** Every ABI difference from the previous release: changed or removed
+  functions, struct layouts, event signatures (and so topic hashes), and new errors.
+  Derive the list from an ABI diff of the two deployment records, not from memory.
+- **Unchanged.** The behaviour and surface an integrator can rely on staying the same.
+- **For integrators.** What each kind of client must change.
+- **Known limitations.** Defects and open design questions known at release time,
+  including any already scheduled for rework.
+
+Write the notes to a file outside the repository, then create the release on the existing
+tag. A release candidate is marked as a prerelease; a mainnet `vN` is not:
+
+```sh
+gh release create v2-rc3 --verify-tag --prerelease --title v2-rc3 \
+    --notes-file <notes-file>
+```
+
+When a later deployment of the same release to another network (A1–A6) adds a record
+under an existing name, edit that release's notes to add the network to the Deployment
+section (`gh release edit v2-rc3 --notes-file <notes-file>`) rather than creating a new
+release.
+
 ## Part B — Add the release to `ethswarm-volumes`
 
 Run commands in this part from the repository root. Nothing in Part B changes what is

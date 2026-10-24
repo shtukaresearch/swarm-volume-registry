@@ -1,15 +1,14 @@
 # keeper
 
-The Swarm `VolumeRegistry` keeper: one Cloudflare Worker, deployed once per chain. Each scheduled run enumerates the registry's active volumes, sends `trigger(bytes32)` for each — one transaction per volume, per [`docs/KEEPERS.md`](../../docs/KEEPERS.md) — and reports what the contract did.
+The Swarm `VolumeRegistry` keeper: one Cloudflare Worker per registry deployment. Each scheduled run enumerates the registry's active volumes, sends `trigger(bytes32)` for each — one transaction per volume, per [`docs/KEEPERS.md`](../../docs/KEEPERS.md) — and reports what the contract did.
 
-Cloudflare Cron Triggers are the only scheduler. GitHub Actions tests and deploys the Worker; it never runs a cycle.
+Cloudflare Cron Triggers are the only scheduler. GitHub Actions only tests the Worker; deploys are by hand with `wrangler`.
 
-| Deployment | Worker | Chain | Registry | Schedule |
+| Env | Worker | Chain | Registry | Schedule |
 |---|---|---|---|---|
-| `sepolia` | `keeper-sepolia` | Sepolia (11155111) | v2-rc2 `0x00f72ee2…3c5a4177` | every 10 minutes |
-| `gnosis` | `keeper-gnosis` | Gnosis (100) | v1 `0x9639ae4c…ddd02aad` | hourly |
+| `sepolia-v2-rc3` | `keeper-cloudflare-sepolia-v2-rc3` | Sepolia (11155111) | v2-rc3 `0xab326d6d…0078745e` | every 10 minutes |
 
-Both are envs in [`wrangler.jsonc`](./wrangler.jsonc), with independent wallets and RPC credentials. They may share one Telegram group; every alert names its deployment, chain and registry.
+Each env in [`wrangler.jsonc`](./wrangler.jsonc) is one registry deployment, keyed by its deployment label, with its own wallet and RPC credentials. This tree supports only the deployments it has envs for. A new registry deployment replaces its predecessor's env ([`RELEASING.md`](../../RELEASING.md) Part C); the predecessor's Worker keeps running what it was last deployed with until it is deleted, and `wrangler.jsonc` lists those Workers and the commits they were deployed from. Keepers may share one Telegram group; every alert names its deployment, chain and registry.
 
 ## Layout
 
@@ -32,7 +31,7 @@ Every run writes one JSON object to Workers Logs (`kind: "keeper/run"`) at the l
 
 `failures` and `warnings` each list `{ message, volumeId?, hash? }`; `volumes` has the per-volume detail, including the healthy `noop`s. In the Workers Logs query builder, filter on `status` or `deployment`.
 
-Failures and warnings go to Telegram in both deployments. `NOTIFY_WARNINGS` remains configurable, but defaults to `true` so skipped top-ups, retirements and RPC failovers are visible.
+Failures and warnings go to Telegram. `NOTIFY_WARNINGS` remains configurable, but defaults to `true` so skipped top-ups, retirements and RPC failovers are visible.
 
 A failed run is not retried by the platform (`noRetry()`): the next tick is the retry, and an overlapping one would race the same wallet's nonce. `trigger` is idempotent, so nothing is lost by waiting.
 
@@ -44,16 +43,16 @@ Secrets, per deployment — never shared between them:
 
 | | |
 |---|---|
-| `PRIVATE_KEY` | The keeper wallet. Generate a fresh one (`cast wallet new`). It only pays gas: fund it with Sepolia ETH or xDAI and nothing else. |
+| `PRIVATE_KEY` | The keeper wallet, one per deployment, created and funded by `scripts/new_wallet.py`. It only pays gas: fund it with Sepolia ETH or xDAI and nothing else. |
 | `RPC_URL` | Comma-separated, from independent providers. Probed every run — chain id included — and tried in order. |
 | `TELEGRAM_BOT_TOKEN` | From @BotFather. |
-| `TELEGRAM_CHAT_ID` | Numeric user or private-group chat ID. Both deployments may post to the same group, but store it independently. |
+| `TELEGRAM_CHAT_ID` | Numeric user or private-group chat ID. Deployments may post to the same group, but store it independently. |
 
 Declared in `secrets.required`, so `wrangler deploy` refuses to ship a deployment with any of them unset. The Worker validates their shape too: a key or URL set to the wrong thing fails the run and alerts, rather than passing for an idle keeper.
 
-Variables, in `wrangler.jsonc` per env: `DEPLOYMENT_NAME`, `CHAIN_ID`, `REGISTRY_ADDRESS`, `NOTIFY_WARNINGS`, `MIN_BALANCE_WEI` (0 disables the warning), and the cycle limits `MAX_VOLUMES_PER_CYCLE`, `CYCLE_TIMEOUT_MS`, `RECEIPT_TIMEOUT_MS`, `CONFIRMATIONS`. Not set by either deployment, but accepted: `DRY_RUN`, `VOLUME_IDS` (maintain only these), `PAGE_SIZE`.
+Variables, in `wrangler.jsonc` per env: `DEPLOYMENT_NAME`, `CHAIN_ID`, `REGISTRY_ADDRESS`, `NOTIFY_WARNINGS`, `MIN_BALANCE_WEI` (0 disables the warning), and the cycle limits `MAX_VOLUMES_PER_CYCLE`, `CYCLE_TIMEOUT_MS`, `RECEIPT_TIMEOUT_MS`, `CONFIRMATIONS`. Not set by any deployment, but accepted: `DRY_RUN`, `VOLUME_IDS` (maintain only these), `PAGE_SIZE`.
 
-**A run must fit inside its cron interval**, so two runs never share the wallet at once: 5 s of RPC probing, plus `CYCLE_TIMEOUT_MS` (no new transaction starts after it), plus `RECEIPT_TIMEOUT_MS` for the last one, plus 5 s of slack. `test/config.test.ts` holds each env to that, and to the 15-minute Cron Trigger limit. On Sepolia that leaves about two volumes per run at 12 s blocks — if it ever maintains more, that budget is what to revisit.
+**A run must fit inside its cron interval**, so two runs never share the wallet at once: 5 s of RPC probing, plus `CYCLE_TIMEOUT_MS` (no new transaction starts after it), plus `RECEIPT_TIMEOUT_MS` for the last one, plus 5 s of slack. `test/config.test.ts` holds each env to that, and to the 15-minute Cron Trigger limit. On Sepolia that is up to 8 minutes of new transactions, roughly 40 volumes at 12 s blocks, capped at 30 by `MAX_VOLUMES_PER_CYCLE`.
 
 ## Setting up a deployment
 
@@ -61,24 +60,7 @@ Needs Workers Paid: a run signs and sends transactions, which the Free plan's 10
 
 ### Initial worker deployment
 
-A new Worker cannot take `wrangler secret put` before it exists, and `secrets.required` blocks deploying without them — so the first deploy carries secrets inline:
-
-```bash
-cd services/keeper && bun install
-printf 'PRIVATE_KEY=0x…\nRPC_URL=https://…,https://…\nTELEGRAM_BOT_TOKEN=…\nTELEGRAM_CHAT_ID=-100…\n' > .secrets.sepolia
-bunx wrangler deploy --env sepolia --secrets-file .secrets.sepolia
-rm .secrets.sepolia
-```
-
-Then fund the wallet:
-
-```bash
-curl https://keeper-sepolia.<subdomain>.workers.dev/health
-```
-
-`GET /health` returns the wallet address to fund (and `503` with every validation problem if the configuration is invalid, without making RPC calls). Fund it with Sepolia ETH or xDAI — it pays gas only, never holds BZZ.
-
-Finally, configure CI for all later deploys (so you never deploy from a laptop again): in repository settings create Environments `sepolia` and `gnosis` (give `gnosis` required reviewers), add repository/Environment secret `CLOUDFLARE_API_TOKEN` (from the *Edit Cloudflare Workers* token template) and variable `CLOUDFLARE_ACCOUNT_ID`. From then on every `push` to `main` auto-deploys `keeper-sepolia`; `keeper-gnosis` deploys only by manual `workflow_dispatch` of `keeper-deploy`.
+A new deployment's Worker is set up by [`RELEASING.md`](../../RELEASING.md) Part C: `scripts/new_wallet.py` creates and funds its wallet, and the first `wrangler deploy` carries the secrets in a file, because a Worker cannot take `wrangler secret put` before it exists. `GET /health` then returns the wallet address the Worker signs with (and `503` with every validation problem if the configuration is invalid, without making RPC calls).
 
 ### Worker code update
 
@@ -89,18 +71,25 @@ Finally, configure CI for all later deploys (so you never deploy from a laptop a
    bun install
    bun test               # includes whole scheduled runs against mock-chain
    bun run typecheck
-   bun run check:deploy   # wrangler deploy --dry-run for both envs
+   bun run check:deploy   # wrangler deploy --dry-run
    ```
 
    If you changed `wrangler.jsonc`, run `bun run types` and commit the regenerated `worker-configuration.d.ts` (CI fails if stale).
 
-3. Push to a branch — `keeper-ci.yml` runs install/typecheck/test/dry-run for both `sepolia` and `gnosis` envs (and `keeper-deploy.yml` never runs a keeper cycle — it only deploys; Cloudflare Cron Triggers are the only scheduler).
-4. Push/merge to `main` auto-deploys `keeper-sepolia` via `keeper-deploy.yml`. Deploy `keeper-gnosis` by manual `workflow_dispatch` (choose `gnosis` under *Run workflow*), after Environment required reviewers approve. Or deploy by hand:
+3. Push to a branch — `keeper-ci.yml` runs the same checks. It never runs a keeper cycle or deploys.
+4. Merge to `main`, then deploy by hand from it:
 
    ```bash
-   bunx wrangler deploy --env sepolia
-   bunx wrangler deploy --env gnosis   # after manual approval
+   bunx wrangler deploy --env sepolia-v2-rc3
    ```
+
+### Retiring a Worker
+
+A Worker whose env has left `wrangler.jsonc` is never redeployed from this tree: it would run code written for another deployment. It keeps running until it is deleted, out of band:
+
+```bash
+bunx wrangler delete --name keeper-sepolia
+```
 
 ### Secret rotation
 
@@ -110,29 +99,29 @@ Rotate one value without redeploying code:
 
 ```bash
 # single value
-bunx wrangler secret put PRIVATE_KEY --env sepolia
-bunx wrangler secret put RPC_URL --env sepolia          # comma-separated, independent providers
-bunx wrangler secret put TELEGRAM_BOT_TOKEN --env gnosis
-bunx wrangler secret put TELEGRAM_CHAT_ID --env gnosis
+bunx wrangler secret put PRIVATE_KEY --env sepolia-v2-rc3
+bunx wrangler secret put RPC_URL --env sepolia-v2-rc3          # comma-separated, independent providers
+bunx wrangler secret put TELEGRAM_BOT_TOKEN --env sepolia-v2-rc3
+bunx wrangler secret put TELEGRAM_CHAT_ID --env sepolia-v2-rc3
 
 # or atomically via file (avoids typing a key into shell history)
-printf 'PRIVATE_KEY=0x…\nRPC_URL=https://…,https://…\nTELEGRAM_BOT_TOKEN=…\nTELEGRAM_CHAT_ID=-100…\n' > .secrets.sepolia
-bunx wrangler deploy --env sepolia --secrets-file .secrets.sepolia
-rm .secrets.sepolia
+printf 'PRIVATE_KEY=0x…\nRPC_URL=https://…,https://…\nTELEGRAM_BOT_TOKEN=…\nTELEGRAM_CHAT_ID=-100…\n' > .secrets.sepolia-v2-rc3
+bunx wrangler deploy --env sepolia-v2-rc3 --secrets-file .secrets.sepolia-v2-rc3
+rm .secrets.sepolia-v2-rc3
 ```
 
 Validate immediately:
 
 ```bash
-curl https://keeper-sepolia.<subdomain>.workers.dev/health   # 200 + wallet if ok, 503 with every problem if not
-bunx wrangler tail --env sepolia   # then force a cycle: curl "localhost:8787/cdn-cgi/local/scheduled?format=json" in dev, or wait one cron tick
+curl https://keeper-cloudflare-sepolia-v2-rc3.<subdomain>.workers.dev/health   # 200 + wallet if ok, 503 with every problem if not
+bunx wrangler tail --env sepolia-v2-rc3   # then force a cycle: curl "localhost:8787/cdn-cgi/local/scheduled?format=json" in dev, or wait one cron tick
 ```
 
 Notes:
 
 * `wrangler deploy` refuses if any `secrets.required` entry is missing; the Worker itself re-validates shape (e.g. `PRIVATE_KEY` is `0x`-hex, `RPC_URL` parses) and **fails the run and alerts** rather than reporting `ok` with no work — a bad rotation is never silent.
 * `HEALTH` is unauthenticated and reveals only the wallet address, not secret values.
-* Keep `PRIVATE_KEY` per deployment (Sepolia vs Gnosis keys never shared). `TELEGRAM_CHAT_ID` is also a per-deployment secret, even when both deployments post to the same group.
+* Keep `PRIVATE_KEY` per deployment; keys are never shared. `TELEGRAM_CHAT_ID` is also a per-deployment secret, even when deployments post to the same group.
 * After rotation, the next cron tick uses the new value; no Workers restart needed. Old secrets are overwritten in place — delete the local `.secrets.*` file after.
 
 ## Working on it
@@ -141,7 +130,7 @@ Notes:
 bun install
 bun test               # includes whole scheduled runs against a mock chain
 bun run typecheck
-bun run check:deploy   # bundles both envs, as CI does
+bun run check:deploy   # bundles the env, as CI does
 ```
 
 After changing `wrangler.jsonc`, run `bun run types` and commit `worker-configuration.d.ts`; CI fails if it is stale.
@@ -149,7 +138,7 @@ After changing `wrangler.jsonc`, run `bun run types` and commit `worker-configur
 To run it locally against a real chain, put the four secrets in `.dev.vars` (see `.dev.vars.example`), then:
 
 ```bash
-bun run dev --var DRY_RUN:true          # wrangler dev --env sepolia
+bun run dev --var DRY_RUN:true          # wrangler dev --env sepolia-v2-rc3-v2-rc3
 curl "localhost:8787/cdn-cgi/local/scheduled?format=json"
 ```
 

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { unstable_readConfig } from "wrangler";
 import { PROBE_TIMEOUT_MS } from "../src/client.js";
@@ -9,6 +10,7 @@ import {
   readTelegramConfig,
   type KeeperEnv,
 } from "../src/config.js";
+import { registryAbi } from "../src/keeper/abi.js";
 
 /** anvil account #1 — a well-known throwaway key, test fixtures only. */
 const KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
@@ -165,8 +167,56 @@ describe("reading around a broken config", () => {
 // ---------------------------------------------------------------------------
 
 const WRANGLER = join(import.meta.dir, "..", "wrangler.jsonc");
-const DEPLOYMENTS = ["sepolia", "gnosis"] as const;
+const RECORDS = join(import.meta.dir, "..", "..", "..", "contracts", "deployments");
 const SECRETS = ["PRIVATE_KEY", "RPC_URL", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"].sort();
+
+// Every env in the file, read raw (Bun parses JSONC): a deployment added there
+// is covered here without anyone remembering to list it.
+const RAW = (await import(WRANGLER)).default as { env?: Record<string, unknown> };
+const DEPLOYMENTS = Object.keys(RAW.env ?? {});
+
+/**
+ * An env is keyed by its registry deployment's label, `<network>-<release>`,
+ * exactly as contracts/deployments/ names it (RELEASING.md, "Release names").
+ */
+const LABEL = /^(?<network>[a-z][a-z0-9]*)-(?<release>v[1-9][0-9]*(?:-rc[1-9][0-9]*)?)$/;
+
+interface DeploymentRecord {
+  address: string;
+  abi: readonly AbiItem[];
+}
+
+interface AbiParam {
+  type: string;
+  name?: string;
+  indexed?: boolean;
+  components?: readonly AbiParam[];
+}
+
+interface AbiItem {
+  type: string;
+  name?: string;
+  inputs?: readonly AbiParam[];
+  outputs?: readonly AbiParam[];
+}
+
+/**
+ * Types, names, indexing and tuple layout — everything viem encodes and decodes
+ * by. A top-level return value's own name is left out: viem hands a single
+ * output back bare, so only the names inside its tuple reach the keeper.
+ */
+const param = (p: AbiParam): string =>
+  (p.components
+    ? `(${p.components.map(param).join(",")})${p.type.slice("tuple".length)}`
+    : p.type) +
+  (p.indexed ? " indexed" : "") +
+  (p.name ? ` ${p.name}` : "");
+
+const signature = (item: AbiItem): string =>
+  `${item.type} ${item.name}(${(item.inputs ?? []).map(param).join(",")})` +
+  (item.outputs
+    ? ` returns (${item.outputs.map((o) => param({ ...o, name: "" })).join(",")})`
+    : "");
 
 /** Cron Triggers stop a run at 15 minutes regardless of schedule. */
 const CRON_WALL_CLOCK_MS = 15 * 60_000;
@@ -192,9 +242,54 @@ describe("committed deployments (wrangler.jsonc)", () => {
     const vars = deployment.vars as Record<string, string>;
 
     describe(name, () => {
-      test(`deploys as keeper-${name}, and says so in DEPLOYMENT_NAME`, () => {
-        expect(deployment.name).toBe(`keeper-${name}`);
+      // The name is what Telegram shows, next to keepers on other infra.
+      test(`deploys as keeper-cloudflare-${name}, and says so in DEPLOYMENT_NAME`, () => {
+        expect(deployment.name).toBe(`keeper-cloudflare-${name}`);
         expect(vars.DEPLOYMENT_NAME).toBe(deployment.name);
+      });
+
+      // The keeper decodes with one hard-coded ABI. Pointed at a deployment
+      // with a different VolumeView layout it would not fail: it would read
+      // misaligned rows as confident garbage. So each env must name a
+      // committed deployment, and the ABI must be that deployment's.
+      describe("matches its deployment record", () => {
+        const label = LABEL.exec(name);
+        const network = label?.groups?.network ?? "";
+        const release = label?.groups?.release ?? "";
+        const dir = join(RECORDS, network);
+
+        test("is keyed by a deployment label", () => {
+          expect(label).not.toBeNull();
+        });
+
+        test("on the record's chain", () => {
+          expect(readFileSync(join(dir, ".chainId"), "utf8").trim()).toBe(vars.CHAIN_ID ?? "");
+        });
+
+        const record = JSON.parse(
+          readFileSync(join(dir, `VolumeRegistry-${release}.json`), "utf8"),
+        ) as DeploymentRecord;
+
+        test("at the record's address", () => {
+          expect(vars.REGISTRY_ADDRESS!.toLowerCase()).toBe(record.address.toLowerCase());
+        });
+
+        test("with the record's ABI for everything the keeper uses", () => {
+          const deployed = new Set(record.abi.map(signature));
+          const missing = (registryAbi as readonly AbiItem[])
+            .map(signature)
+            .filter((sig) => !deployed.has(sig));
+          expect(missing).toEqual([]);
+        });
+
+        test("with the record's whole error set", () => {
+          const names = (abi: readonly AbiItem[]) =>
+            abi
+              .filter((item) => item.type === "error")
+              .map((item) => item.name)
+              .sort();
+          expect(names(registryAbi)).toEqual(names(record.abi));
+        });
       });
 
       test("passes the Worker's own validation", () => {
@@ -235,12 +330,19 @@ describe("committed deployments (wrangler.jsonc)", () => {
     });
   }
 
-  test("the deployments are distinct workers on distinct chains", () => {
-    const [a, b] = DEPLOYMENTS.map((env) => unstable_readConfig({ config: WRANGLER, env }));
-    expect(a!.name).not.toBe(b!.name);
-    expect((a!.vars as Record<string, string>).CHAIN_ID).not.toBe(
-      (b!.vars as Record<string, string>).CHAIN_ID,
-    );
+  test("there is a deployment", () => {
+    expect(DEPLOYMENTS.length).toBeGreaterThan(0);
+  });
+
+  test("no two deployments share a Worker or a registry", () => {
+    const configs = DEPLOYMENTS.map((env) => unstable_readConfig({ config: WRANGLER, env }));
+    const workers = configs.map((c) => c.name);
+    const registries = configs.map((c) => {
+      const vars = c.vars as Record<string, string>;
+      return `${vars.CHAIN_ID}:${vars.REGISTRY_ADDRESS!.toLowerCase()}`;
+    });
+    expect(new Set(workers).size).toBe(workers.length);
+    expect(new Set(registries).size).toBe(registries.length);
   });
 
   // The root is not a deployment. With no cron it could never run, and the

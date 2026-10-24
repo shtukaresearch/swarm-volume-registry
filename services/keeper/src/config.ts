@@ -25,7 +25,7 @@ export interface CycleLimits {
 }
 
 export interface Config {
-  /** Which Worker this is — `keeper-sepolia`, `keeper-gnosis`. Leads every report. */
+  /** Which Worker this is — `keeper-cloudflare-sepolia-v2-rc3`. Leads every report. */
   deployment: string;
   chain: Chain;
   registry: Address;

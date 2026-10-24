@@ -27,6 +27,7 @@ import {
   parseTransaction,
   toHex,
   zeroAddress,
+  zeroHash,
   type Address,
   type Hex,
 } from "viem";
@@ -94,6 +95,8 @@ const SKIP = { noAuth: 1, paymentFailed: 2 } as const;
 
 export interface MockVolume {
   volumeId: Hex;
+  /** Default: the volume id. The keeper never reads it. */
+  batchId?: Hex;
   owner?: Address;
   chunkSigner?: Address;
   ttlExpiry?: bigint;
@@ -142,6 +145,7 @@ export class MethodNotFound extends Error {
 
 const volumeTuple = (v: MockVolume) => ({
   volumeId: v.volumeId,
+  batchId: v.batchId ?? v.volumeId,
   owner: v.owner ?? SIGNER,
   payer: v.owner ?? SIGNER,
   chunkSigner: v.chunkSigner ?? SIGNER,
@@ -240,6 +244,7 @@ export function mockChain(options: MockChainOptions = {}) {
           ? volumeTuple(found)
           : {
               volumeId: id,
+              batchId: zeroHash,
               owner: zeroAddress,
               payer: zeroAddress,
               chunkSigner: zeroAddress,

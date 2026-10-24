@@ -78,5 +78,30 @@ class CreatedAddress(unittest.TestCase):
             new_wallet.created_address("Created new encrypted keystore file: /x\n")
 
 
+class CheckKeystore(unittest.TestCase):
+    def test_a_new_wallet_needs_a_free_name(self) -> None:
+        new_wallet.check_keystore("k", exists=False, existing=False)
+        with self.assertRaises(SystemExit):
+            new_wallet.check_keystore("k", exists=True, existing=False)
+
+    def test_existing_needs_the_account(self) -> None:
+        new_wallet.check_keystore("k", exists=True, existing=True)
+        with self.assertRaises(SystemExit):
+            new_wallet.check_keystore("k", exists=False, existing=True)
+
+
+class ReportedAddress(unittest.TestCase):
+    def test_reads_cast_wallet_address_output(self) -> None:
+        self.assertEqual(
+            new_wallet.reported_address("0x09f6A576cC728450eB8815448b67a1A9B931F6fB\n"),
+            "0x09f6A576cC728450eB8815448b67a1A9B931F6fB",
+        )
+
+    def test_fails_on_anything_else(self) -> None:
+        for output in ("", "Error: bad password\n", "0x1234\n"):
+            with self.subTest(output=output), self.assertRaises(SystemExit):
+                new_wallet.reported_address(output)
+
+
 if __name__ == "__main__":
     unittest.main()

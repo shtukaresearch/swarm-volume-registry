@@ -422,9 +422,9 @@ password, and funds it from `volume-registry-deployer`, prompting for that keyst
 password. Add `--password-prompt` to enter both in desktop dialogs. It sends the native
 token only: the keeper pays gas and never holds BZZ. Fund it well above the env's
 `MIN_BALANCE_WEI`, the level at which runs start to warn. The script refuses a label with
-no deployment record, an RPC on another chain, and an account that already exists; top an
-existing wallet up with `cast send <address> --value <amount> --account
-volume-registry-deployer`.
+no deployment record, an RPC on another chain, and an account that already exists. With
+`--existing` it instead requires the account and only funds it: rerun that way when a run
+created the wallet but failed to fund it, or to top the wallet up.
 
 ### C3. First deploy
 

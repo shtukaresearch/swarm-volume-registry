@@ -10,6 +10,8 @@ token only: a keeper pays gas and never holds BZZ.
 
 The script refuses a label with no committed deployment record, an RPC on a
 different chain from that record, and an account name already in the keystore.
+``--existing`` instead requires the account to exist and only funds it, which
+finishes a run that created the wallet but failed to fund it, or tops one up.
 It never prints or stores the private key; ``RELEASING.md`` shows how to hand it
 to the Worker.
 """
@@ -31,6 +33,7 @@ KEYSTORES = Path.home() / ".foundry" / "keystores"
 LABEL = re.compile(
     r"(?P<network>[a-z][a-z0-9]*)-(?P<release>v[1-9][0-9]*(-rc[1-9][0-9]*)?)\Z"
 )
+ADDRESS = re.compile(r"0x[0-9a-fA-F]{40}\Z")
 ADDRESS_LINE = re.compile(r"^Address:\s*(0x[0-9a-fA-F]{40})\s*$", re.MULTILINE)
 DEFAULT_FUNDER = "volume-registry-deployer"
 
@@ -78,6 +81,28 @@ def created_address(output: str) -> str:
     if match is None:
         fail("could not find the new wallet's address in cast's output")
     return match[1]
+
+
+def check_keystore(account: str, exists: bool, existing: bool) -> None:
+    """Fail unless the keystore account's presence is what the run expects.
+
+    A new wallet must not overwrite one; ``--existing`` must name one.
+    """
+    if existing and not exists:
+        fail(f"--existing: keystore account {account!r} does not exist")
+    if not existing and exists:
+        fail(
+            f"keystore account {account!r} already exists; "
+            "rerun with --existing to fund it"
+        )
+
+
+def reported_address(output: str) -> str:
+    """The address `cast wallet address` prints."""
+    address = output.strip()
+    if not ADDRESS.fullmatch(address):
+        fail(f"cast did not report an address: {address!r}")
+    return address
 
 
 def rpc_chain_id(rpc_url: str) -> int:
@@ -138,6 +163,27 @@ def create_wallet(account: str, password_prompt: bool) -> str:
     return created_address(result.stdout)
 
 
+def existing_address(account: str, password_prompt: bool) -> str:
+    """Unlock keystore `account` and return its address.
+
+    The keystore file does not record the address, so this takes the account's
+    password: on the terminal from cast, or from a zenity dialog.
+    """
+    command = ["cast", "wallet", "address", "--account", account]
+    if not password_prompt:
+        result = subprocess.run(command, check=True, stdout=subprocess.PIPE, text=True)
+        return reported_address(result.stdout)
+    fd = password_memfd(zenity_password(f"Unlock Foundry keystore {account!r}"))
+    try:
+        command.extend(("--password-file", f"/dev/fd/{fd}"))
+        result = subprocess.run(
+            command, check=True, stdout=subprocess.PIPE, text=True, pass_fds=(fd,)
+        )
+    finally:
+        os.close(fd)
+    return reported_address(result.stdout)
+
+
 def fund(
     address: str, value: str, funder: str, rpc_url: str, password_prompt: bool
 ) -> None:
@@ -177,6 +223,11 @@ def main(argv: list[str] | None = None) -> None:
         help=f"keystore account that pays (default: {DEFAULT_FUNDER})",
     )
     parser.add_argument(
+        "--existing",
+        action="store_true",
+        help="fund the existing keystore account instead of creating it",
+    )
+    parser.add_argument(
         "--password-prompt",
         action="store_true",
         help="ask for keystore passwords in desktop dialogs instead of the terminal",
@@ -186,19 +237,20 @@ def main(argv: list[str] | None = None) -> None:
     account = account_name(args.label)
     value = parse_value(args.value)
     chain_id = record_chain_id(args.label)
-    if (KEYSTORES / account).exists():
-        fail(
-            f"keystore account {account!r} already exists; top it up with "
-            f"`cast send <address> --value <amount> --account {args.funder}`"
-        )
+    check_keystore(account, (KEYSTORES / account).exists(), args.existing)
     actual = rpc_chain_id(args.rpc_url)
     if actual != chain_id:
         fail(f"{args.label} is on chain {chain_id}, but the RPC reports chain {actual}")
 
-    address = create_wallet(account, args.password_prompt)
-    print(f"created keystore account {account}: {address}")
+    # Flushed as it goes, so a failure later still shows how far the run got.
+    if args.existing:
+        address = existing_address(account, args.password_prompt)
+        print(f"using keystore account {account}: {address}", flush=True)
+    else:
+        address = create_wallet(account, args.password_prompt)
+        print(f"created keystore account {account}: {address}", flush=True)
     fund(address, value, args.funder, args.rpc_url, args.password_prompt)
-    print(f"funded {address} with {value} from {args.funder}")
+    print(f"funded {address} with {value} from {args.funder}", flush=True)
 
 
 if __name__ == "__main__":

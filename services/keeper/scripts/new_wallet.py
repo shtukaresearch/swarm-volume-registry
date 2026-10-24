@@ -34,7 +34,6 @@ LABEL = re.compile(
     r"(?P<network>[a-z][a-z0-9]*)-(?P<release>v[1-9][0-9]*(-rc[1-9][0-9]*)?)\Z"
 )
 ADDRESS = re.compile(r"0x[0-9a-fA-F]{40}\Z")
-ADDRESS_LINE = re.compile(r"^Address:\s*(0x[0-9a-fA-F]{40})\s*$", re.MULTILINE)
 DEFAULT_FUNDER = "volume-registry-deployer"
 
 
@@ -75,14 +74,6 @@ def parse_value(value: str) -> str:
     return f"{amount}ether"
 
 
-def created_address(output: str) -> str:
-    """The address `cast wallet new` reports for the keystore it wrote."""
-    match = ADDRESS_LINE.search(output)
-    if match is None:
-        fail("could not find the new wallet's address in cast's output")
-    return match[1]
-
-
 def check_keystore(account: str, exists: bool, existing: bool) -> None:
     """Fail unless the keystore account's presence is what the run expects.
 
@@ -98,7 +89,11 @@ def check_keystore(account: str, exists: bool, existing: bool) -> None:
 
 
 def reported_address(output: str) -> str:
-    """The address `cast wallet address` prints."""
+    """The address `cast wallet new` or `cast wallet address` prints on stdout.
+
+    `cast wallet new` writes only the bare address there; its labelled
+    ``Address:`` line goes to stderr with the keystore path.
+    """
     address = output.strip()
     if not ADDRESS.fullmatch(address):
         fail(f"cast did not report an address: {address!r}")
@@ -160,7 +155,7 @@ def create_wallet(account: str, password_prompt: bool) -> str:
     result = subprocess.run(
         command, check=True, stdout=subprocess.PIPE, text=True, env=env
     )
-    return created_address(result.stdout)
+    return reported_address(result.stdout)
 
 
 def existing_address(account: str, password_prompt: bool) -> str:

@@ -61,23 +61,6 @@ class ParseValue(unittest.TestCase):
                 new_wallet.parse_value(value)
 
 
-class CreatedAddress(unittest.TestCase):
-    def test_reads_cast_wallet_new_output(self) -> None:
-        output = (
-            "Created new encrypted keystore file: /home/u/.foundry/keystores/k\n"
-            "Address:    0x533A755A75eeA24746d1D1655dA550A9AB1dE31b\n"
-            "0x533A755A75eeA24746d1D1655dA550A9AB1dE31b\n"
-        )
-        self.assertEqual(
-            new_wallet.created_address(output),
-            "0x533A755A75eeA24746d1D1655dA550A9AB1dE31b",
-        )
-
-    def test_fails_without_an_address(self) -> None:
-        with self.assertRaises(SystemExit):
-            new_wallet.created_address("Created new encrypted keystore file: /x\n")
-
-
 class CheckKeystore(unittest.TestCase):
     def test_a_new_wallet_needs_a_free_name(self) -> None:
         new_wallet.check_keystore("k", exists=False, existing=False)
@@ -91,14 +74,15 @@ class CheckKeystore(unittest.TestCase):
 
 
 class ReportedAddress(unittest.TestCase):
-    def test_reads_cast_wallet_address_output(self) -> None:
+    def test_reads_the_bare_address_cast_prints_on_stdout(self) -> None:
         self.assertEqual(
             new_wallet.reported_address("0x09f6A576cC728450eB8815448b67a1A9B931F6fB\n"),
             "0x09f6A576cC728450eB8815448b67a1A9B931F6fB",
         )
 
     def test_fails_on_anything_else(self) -> None:
-        for output in ("", "Error: bad password\n", "0x1234\n"):
+        labelled = "Address:    0x09f6A576cC728450eB8815448b67a1A9B931F6fB\n"
+        for output in ("", "Error: bad password\n", "0x1234\n", labelled):
             with self.subTest(output=output), self.assertRaises(SystemExit):
                 new_wallet.reported_address(output)
 

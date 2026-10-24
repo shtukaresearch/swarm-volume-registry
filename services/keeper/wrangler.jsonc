@@ -1,7 +1,16 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  // Each env below deploys as its own Worker, named `keeper-<env>`. Top level is
-  // not a deployment: it holds only what both envs share.
+  // Each env below is one registry deployment, keyed by its deployment label
+  // (`<network>-<release>`, as in contracts/deployments/), and deploys as its own
+  // Worker named `keeper-cloudflare-<label>`. Top level is not a deployment: it
+  // holds only what the envs share.
+  //
+  // One Worker per registry deployment, never repointed: a new deployment
+  // replaces its predecessor's env here, and the predecessor's Worker keeps
+  // running whatever it was last deployed with until it is deleted out of band.
+  // Workers retired from this file, and the commit each was last deployed from:
+  //
+  //   keeper-sepolia  v2-rc2 0x00f72ee2…3c5a4177  a4f5b62
   "name": "keeper",
   "main": "src/index.ts",
   "compatibility_date": "2026-09-15",
@@ -21,12 +30,12 @@
   // Subrequests per invocation: every RPC call and Telegram message is one, and a
   // run polls for each receipt. Set explicitly because a version keeps the limit
   // it was uploaded under — versions uploaded on Workers Free stay at 50. The
-  // Workers Paid default and our setting are both 10,000. Inherited by both envs.
+  // Workers Paid default and our setting are both 10,000. Inherited by every env.
   "limits": { "subrequests": 10000 },
 
   // `secrets` is not inherited, so this top-level copy only guards the root: a
   // bare `wrangler deploy` with no `--env` fails on missing secrets instead of
-  // quietly creating a third, cron-less `keeper` Worker.
+  // quietly creating a cron-less `keeper` Worker.
   "secrets": {
     "required": ["PRIVATE_KEY", "RPC_URL", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"]
   },
@@ -45,16 +54,17 @@
   //   probe (5 s) + CYCLE_TIMEOUT_MS + RECEIPT_TIMEOUT_MS + 5 s slack ≤ interval
   // and also ≤ the 15 min Cron Trigger wall-clock limit.
   "env": {
-    // Sepolia — registry v2-rc2, graceBlocks = 300 (~1 h at 12 s blocks). Every
+    // Sepolia — registry v2-rc3, graceBlocks = 300 (~1 h at 12 s blocks). Every
     // ten minutes leaves ~50 min of slack for missed runs. A run starts new
     // transactions for up to 8 min (CYCLE_TIMEOUT_MS), roughly 40 volumes at
-    // 12 s blocks, capped at 30. Warnings go to Telegram so skipped top-ups, retirements and
-    // RPC failovers cannot make a run look healthy.
-    "sepolia": {
+    // 12 s blocks, capped at 30. Warnings go to Telegram so skipped top-ups,
+    // retirements and RPC failovers cannot make a run look healthy.
+    "sepolia-v2-rc3": {
+      "name": "keeper-cloudflare-sepolia-v2-rc3",
       "vars": {
-        "DEPLOYMENT_NAME": "keeper-sepolia",
+        "DEPLOYMENT_NAME": "keeper-cloudflare-sepolia-v2-rc3",
         "CHAIN_ID": "11155111",
-        "REGISTRY_ADDRESS": "0x00f72ee2970df8112fdf04c0225b33c43c5a4177",
+        "REGISTRY_ADDRESS": "0xab326d6dbdcd1e90e06af22f4e72fa480078745e",
         "NOTIFY_WARNINGS": "true",
         "MIN_BALANCE_WEI": "50000000000000000",
         "MAX_VOLUMES_PER_CYCLE": "30",
@@ -66,30 +76,6 @@
         "required": ["PRIVATE_KEY", "RPC_URL", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"]
       },
       "triggers": { "crons": ["*/10 * * * *"] }
-    },
-
-    // Gnosis Chain — graceBlocks = 17280 (~24 h at 5 s blocks), so hourly leaves
-    // ~23 h of slack for missed runs, and a run may take up to ~11 min.
-    //
-    // Still registry *v1*: no v2 is deployed on Gnosis yet. The keeper works
-    // against both — trigger(bytes32), the views and the events are identical
-    // in v1 and v2, which only dropped transferVolumeOwnership.
-    "gnosis": {
-      "vars": {
-        "DEPLOYMENT_NAME": "keeper-gnosis",
-        "CHAIN_ID": "100",
-        "REGISTRY_ADDRESS": "0x9639ae4c7a8fa9efe585738d516a3915ddd02aad",
-        "NOTIFY_WARNINGS": "true",
-        "MIN_BALANCE_WEI": "500000000000000000",
-        "MAX_VOLUMES_PER_CYCLE": "100",
-        "CYCLE_TIMEOUT_MS": "600000",
-        "RECEIPT_TIMEOUT_MS": "60000",
-        "CONFIRMATIONS": "1"
-      },
-      "secrets": {
-        "required": ["PRIVATE_KEY", "RPC_URL", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"]
-      },
-      "triggers": { "crons": ["0 * * * *"] }
     }
   }
 }

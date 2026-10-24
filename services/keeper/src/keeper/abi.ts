@@ -43,6 +43,7 @@ export const registryAbi = [
         name: "",
         components: [
           { name: "volumeId", type: "bytes32" },
+          { name: "batchId", type: "bytes32" },
           { name: "owner", type: "address" },
           { name: "payer", type: "address" },
           { name: "chunkSigner", type: "address" },
@@ -68,6 +69,7 @@ export const registryAbi = [
         name: "",
         components: [
           { name: "volumeId", type: "bytes32" },
+          { name: "batchId", type: "bytes32" },
           { name: "owner", type: "address" },
           { name: "payer", type: "address" },
           { name: "chunkSigner", type: "address" },
@@ -126,6 +128,7 @@ export const registryAbi = [
   // the registry you think it is — a stale deployment, a wrong chain — which is
   // exactly when a keeper's logs are all you have.
   { type: "error", name: "AccountNotActive", inputs: [] },
+  { type: "error", name: "BatchNotLive", inputs: [] },
   { type: "error", name: "DesignationClearedOnActivate", inputs: [] },
   {
     type: "error",
@@ -135,6 +138,7 @@ export const registryAbi = [
       { type: "uint64", name: "floor_" },
     ],
   },
+  { type: "error", name: "ImportTopupFailed", inputs: [] },
   { type: "error", name: "NotAuthorizedToRevoke", inputs: [] },
   { type: "error", name: "NotDesignated", inputs: [] },
   { type: "error", name: "NotVolumeOwner", inputs: [] },
@@ -142,10 +146,10 @@ export const registryAbi = [
   { type: "error", name: "ZeroAddress", inputs: [] },
 ] as const;
 
-/** Volume.status values (VolumeRegistry.sol). */
+/** `Status` enum values (IVolumeRegistryViews.sol). */
 export const VOLUME_STATUS = { active: 1, retired: 2 } as const;
 
-/** `VolumeRetired(volumeId, reason)` reason codes, decoded to names. */
+/** `RetireReason` enum values, carried by `VolumeRetired(volumeId, reason)`. */
 export const RETIRE_REASONS: Record<number, string> = {
   1: "OwnerDeleted",
   2: "VolumeExpired",
@@ -154,7 +158,7 @@ export const RETIRE_REASONS: Record<number, string> = {
   5: "BatchOwnerMismatch",
 };
 
-/** `TopupSkipped(volumeId, reason)` reason codes, decoded to names. */
+/** `SkipReason` enum values, carried by `TopupSkipped(volumeId, reason)`. */
 export const SKIP_REASONS: Record<number, string> = {
   1: "NoAuth",
   2: "PaymentFailed",

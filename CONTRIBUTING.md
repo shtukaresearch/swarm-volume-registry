@@ -83,22 +83,23 @@ steps are in [`RELEASING.md`](./RELEASING.md).
 
 ## Keeper
 
-[`services/keeper`](./services/keeper) is the keeper: one Cloudflare Worker,
-deployed as `keeper-sepolia` and `keeper-gnosis`. A standalone Bun project with
-its own lockfile; nothing else in the repository depends on it.
+[`services/keeper`](./services/keeper) is the keeper: one Cloudflare Worker per
+registry deployment, each an env in its `wrangler.jsonc`. A standalone Bun project
+with its own lockfile; nothing else in the repository depends on it.
 
 ```sh
 cd services/keeper
 bun install
 bun test
 bun run typecheck
-bun run check:deploy   # wrangler deploy --dry-run, both envs
+bun run check:deploy   # wrangler deploy --dry-run
+python3 -m unittest discover -s scripts/tests
 ```
 
 None of this needs chain access or Cloudflare credentials. CI runs the same
-steps (`.github/workflows/keeper-ci.yml`); deploys go through
-`.github/workflows/keeper-deploy.yml`. Setup, configuration and local runs are
-in its [README](./services/keeper/README.md).
+steps (`.github/workflows/keeper-ci.yml`); deploys are by hand with `wrangler`
+([`RELEASING.md`](./RELEASING.md) Part C for a new deployment). Setup,
+configuration and local runs are in its [README](./services/keeper/README.md).
 
 ## Indexer
 

@@ -71,8 +71,10 @@ type ErrorName = Extract<(typeof registryAbi)[number], { type: "error" }>["name"
 // selector here is a type error, not a test that quietly stops covering it.
 const SELECTORS: Record<ErrorName, `0x${string}`> = {
   AccountNotActive: "0x4d571464",
+  BatchNotLive: "0xe004958b",
   DesignationClearedOnActivate: "0x2b8cb86b",
   GraceBlocksBelowFloor: "0xa728cabc",
+  ImportTopupFailed: "0xf60090aa",
   NotAuthorizedToRevoke: "0xb4a8529c",
   NotDesignated: "0x69f3dfcd",
   NotVolumeOwner: "0x431be6b7",

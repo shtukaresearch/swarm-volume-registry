@@ -258,6 +258,28 @@ def validate_artifact(artifact: dict[str, Any], deployed_initcode: str) -> list[
     return abi
 
 
+def timestamped_broadcast(broadcast_path: Path, transaction_hash: str) -> Path:
+    """The run-<ms>.json that Forge wrote alongside run-latest.json for this deployment.
+
+    Every broadcast rewrites run-latest.json, so a record citing it loses its
+    source at the next deploy. Forge names the timestamped copy after the run's
+    start but sets its `timestamp` at the end, so the two differ whenever a run
+    takes longer than a moment. Match on the deployment transaction instead.
+    """
+    if broadcast_path.name != "run-latest.json":
+        return broadcast_path
+    for sibling in sorted(broadcast_path.parent.glob("run-*.json")):
+        if sibling.name == "run-latest.json":
+            continue
+        try:
+            transactions = json.loads(sibling.read_text()).get("transactions") or []
+        except (OSError, ValueError, AttributeError):
+            continue
+        if any(isinstance(t, dict) and t.get("hash") == transaction_hash for t in transactions):
+            return sibling
+    return broadcast_path
+
+
 def build_manifest(
     profile_name: str,
     version: str,
@@ -273,12 +295,8 @@ def build_manifest(
     initcode, salt = deployment_initcode(transaction, version)
     abi = validate_artifact(artifact, initcode)
 
-    source_broadcast = broadcast_path
+    source_broadcast = timestamped_broadcast(broadcast_path, transaction["hash"])
     timestamp = broadcast.get("timestamp")
-    if broadcast_path.name == "run-latest.json" and isinstance(timestamp, int):
-        timestamped_broadcast = broadcast_path.with_name(f"run-{timestamp}.json")
-        if timestamped_broadcast.exists():
-            source_broadcast = timestamped_broadcast
 
     linked_data: dict[str, Any] = {
         "version": version,

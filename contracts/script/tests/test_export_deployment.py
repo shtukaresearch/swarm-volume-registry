@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 import unittest
@@ -81,6 +82,38 @@ class BuildManifestTests(unittest.TestCase):
         self.assertEqual(manifest["args"][2], 12)
         self.assertEqual(manifest["linkedData"]["chainId"], 11155111)
         self.assertEqual(manifest["linkedData"]["version"], VERSION)
+
+    # Forge names run-<ms>.json after the run's start but stamps `timestamp` at
+    # its end, and every later broadcast rewrites run-latest.json.
+    def test_cites_the_timestamped_broadcast_that_holds_the_deployment(self) -> None:
+        with tempfile.TemporaryDirectory(dir=export_deployment.CONTRACTS) as directory:
+            runs = Path(directory)
+            broadcast = broadcast_fixture()
+            broadcast["timestamp"] = 1792637974374
+            (runs / "run-1792637950786.json").write_text(json.dumps(broadcast))
+            later = broadcast_fixture()
+            later["transactions"][0]["hash"] = "0x" + "11" * 32
+            (runs / "run-1792731554365.json").write_text(json.dumps(later))
+
+            manifest = export_deployment.build_manifest(
+                PROFILE_NAME,
+                VERSION,
+                PROFILE,
+                broadcast,
+                {"abi": [{"type": "constructor", "inputs": []}], "bytecode": {"object": "0x6000"}},
+                "VolumeRegistry",
+                runs / "run-latest.json",
+            )
+
+            self.assertEqual(
+                manifest["linkedData"]["broadcast"],
+                str((runs / "run-1792637950786.json").relative_to(export_deployment.CONTRACTS)),
+            )
+            self.assertEqual(manifest["linkedData"]["timestamp"], 1792637974374)
+
+    def test_keeps_run_latest_without_a_timestamped_copy(self) -> None:
+        manifest = self.build()
+        self.assertTrue(manifest["linkedData"]["broadcast"].endswith("run-latest.json"))
 
     def test_rejects_wrong_chain(self) -> None:
         broadcast = broadcast_fixture()

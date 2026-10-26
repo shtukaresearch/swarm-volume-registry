@@ -20,6 +20,7 @@ Each env in [`wrangler.jsonc`](./wrangler.jsonc) is one registry deployment, key
 | `src/keeper/` | the keeper cycle: enumerate at a pinned block, trigger each volume, decode each receipt |
 | `src/reporting.ts` | the one structured report per run that logs and alerts are both rendered from |
 | `src/notifications/telegram.ts` | formats that report for Telegram and sends it |
+| `src/render/run.ts` | the same run as a one-shot Node process, for a Render Cron Job |
 
 ## What a run reports
 
@@ -125,6 +126,20 @@ Notes:
 * `HEALTH` is unauthenticated and reveals only the wallet address, not secret values.
 * Keep `PRIVATE_KEY` per deployment; keys are never shared. `TELEGRAM_CHAT_ID` is also a per-deployment secret, even when deployments post to the same group.
 * After rotation, the next cron tick uses the new value; no Workers restart needed. Old secrets are overwritten in place — delete the local `.secrets.*` file after.
+
+### Render Cron Job
+
+The same keeper also runs as a [Render Cron Job](https://render.com/docs/cronjobs), which never starts a run while the previous one is active. It runs one cycle and exits, non-zero when the run failed:
+
+| Setting | Value |
+|---|---|
+| Root directory | `services/keeper` |
+| Build command | `corepack pnpm install --frozen-lockfile && corepack pnpm build:render` |
+| Command | `node dist/render/run.mjs` |
+| Schedule | the env's cron in `wrangler.jsonc` (UTC) |
+| Environment | the env's `vars` (with its own `DEPLOYMENT_NAME`), the four secrets, and `NODE_VERSION=24` |
+
+It needs its own wallet, like every deployment. There is no `/health`: the job's run history and logs show each run's report.
 
 ## Working on it
 

@@ -1,14 +1,14 @@
-# Secrets for `bun run dev` (wrangler dev --env sepolia). Copy to .dev.vars and
+# Secrets for `pnpm dev` (wrangler dev --env sepolia). Copy to .dev.vars and
 # fill in; never commit .dev.vars.
 #
 # Only the names in `secrets.required` are loaded from this file — anything
 # else here is ignored. Non-secret overrides go on the command line instead:
 #
-#   bun run dev --var DRY_RUN:true
+#   pnpm dev --var DRY_RUN:true
 #
 # For a deployment these are set per env, once, and never shared between envs:
 #
-#   bunx wrangler secret put PRIVATE_KEY --env sepolia
+#   pnpm exec wrangler secret put PRIVATE_KEY --env sepolia
 
 # The keeper wallet. Generate a fresh one — `cast wallet new` — and reuse no key
 # from anywhere else. It only pays gas: it never holds or moves BZZ and needs no

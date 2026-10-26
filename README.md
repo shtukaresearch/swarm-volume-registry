@@ -68,7 +68,7 @@ contracts/         Foundry project — VolumeRegistry contract and tests
   deployments/     Deployment records, one per network and release
   lib/             Submodules: forge-std, storage-incentives
 services/          Off-chain services, each a standalone project
-  keeper/          Cloudflare Worker keeper (Bun)
+  keeper/          Cloudflare Worker keeper (pnpm, Node 24)
   indexer/         ethswarm-volumes — indexer and CLI for VolumeRegistry deployments (Python)
 docs/              Design and integration documentation
 ```

@@ -30,30 +30,31 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: oven-sh/setup-bun@v2
+      # pnpm from package.json's `packageManager`, Node from its
+      # `devEngines.runtime`, then `pnpm install --frozen-lockfile`.
+      - uses: pnpm/setup@v3
         with:
-          bun-version: latest
-
-      - name: Install
-        run: bun install --frozen-lockfile
+          working-directory: services/keeper
+          cache: true
+          require-lockfile: true
 
       # worker-configuration.d.ts is generated from wrangler.jsonc and
       # committed. Stale, it types the Worker against bindings that no longer
       # exist.
       - name: Generated types are current
-        run: bun run check:types
+        run: pnpm check:types
 
       - name: Typecheck
-        run: bun run typecheck
+        run: pnpm typecheck
 
       # Includes test/config.test.ts, which validates each deployment in
       # wrangler.jsonc against the Worker's own config rules — the part a dry
       # run does not check.
       - name: Test
-        run: bun test
+        run: pnpm test
 
       - name: Bundle the deployment
-        run: bun run check:deploy
+        run: pnpm check:deploy
 
       - name: Wallet script tests
         run: python3 -m unittest discover -s scripts/tests -v

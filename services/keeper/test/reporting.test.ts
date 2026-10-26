@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { sepolia } from "viem/chains";
 import type { EndpointHealth } from "../src/client.js";
 import { runKeeperCycle } from "../src/keeper/actions/runKeeperCycle.js";
@@ -275,7 +275,7 @@ describe("brief", () => {
 });
 
 describe("logReport", () => {
-  const spies = [spyOn(console, "log"), spyOn(console, "warn"), spyOn(console, "error")];
+  const spies = [vi.spyOn(console, "log"), vi.spyOn(console, "warn"), vi.spyOn(console, "error")];
   afterEach(() => spies.forEach((s) => s.mockClear()));
 
   // Workers Logs files each line under its console level, so the dashboard's

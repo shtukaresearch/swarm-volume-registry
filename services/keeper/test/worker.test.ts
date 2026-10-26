@@ -5,7 +5,7 @@
  * path: bindings → config → endpoint probe → viem `http` transports → cycle →
  * report → log → Telegram. Nothing is injected past the network boundary.
  */
-import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { privateKeyToAccount } from "viem/accounts";
 import worker, { KeeperRunFailed } from "../src/index.js";
 import type { KeeperEnv } from "../src/config.js";
@@ -87,13 +87,13 @@ beforeEach(() => {
   for (const level of ["log", "warn", "error"] as const) {
     logs[level] = [];
     spies.push(
-      spyOn(console, level).mockImplementation((line: unknown) => {
+      vi.spyOn(console, level).mockImplementation((line: unknown) => {
         logs[level].push(String(line));
       }),
     );
   }
   spies.push(
-    spyOn(globalThis, "fetch").mockImplementation(((input: RequestInfo | URL, init?: RequestInit) =>
+    vi.spyOn(globalThis, "fetch").mockImplementation(((input: RequestInfo | URL, init?: RequestInit) =>
       serve(String(input), init)) as typeof fetch),
   );
 });
@@ -114,7 +114,7 @@ function logged(): KeeperReport {
 const everything = () => [...logs.log, ...logs.warn, ...logs.error, ...telegram.sent].join("\n");
 
 async function scheduled(bindings: KeeperEnv) {
-  const noRetry = mock(() => {});
+  const noRetry = vi.fn(() => {});
   const controller = { cron: "* * * * *", scheduledTime: Date.now(), type: "scheduled", noRetry };
   const outcome = await worker
     .scheduled(controller as unknown as ScheduledController, bindings)

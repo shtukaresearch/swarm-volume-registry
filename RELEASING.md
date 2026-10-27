@@ -135,16 +135,19 @@ deployments/sepolia/.chainId
 deployments/sepolia/VolumeRegistry-v2-rc3.json
 ```
 
-The exporter reads `run-latest.json` and cites, as the record's `linkedData.broadcast`,
-the one `run-<ms>.json` beside it with identical bytes. To export an earlier broadcast,
-pass its timestamped file with `--broadcast`.
+Without `--broadcast`, the exporter exports the one `run-<ms>.json` beside
+`run-latest.json` with identical bytes, and cites it as the record's
+`linkedData.broadcast`. `--broadcast` names the run file to export and is used as given;
+use it to export an earlier broadcast. How the default could pick up a run other than the
+one you meant, and which of the checks below catch it, is recorded in
+contracts [ADR-0006](docs/adr/0006-immutable-deployment-records.md).
 
 The versioned record is immutable: it contains the address and ABI required for
 discovery, plus its transaction hash, receipt, constructor arguments, release name and
 source-broadcast metadata. The exporter refuses to write a record when:
 
-- `run-latest.json` has no single identical `run-<ms>.json` beside it, or the record
-  would cite `run-latest.json` itself;
+- without `--broadcast`, `run-latest.json` has no single identical `run-<ms>.json`
+  beside it; or the record would cite `run-latest.json` itself;
 - the release name is not `vN` or `vN-rcM`;
 - the network already records a different deployment under that name;
 - the broadcast chain differs from the selected profile;

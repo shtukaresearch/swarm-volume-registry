@@ -215,7 +215,7 @@ class Create2ManifestTests(unittest.TestCase):
             )
 
 
-class SourceBroadcastTests(unittest.TestCase):
+class LatestRunTests(unittest.TestCase):
     """run-latest.json resolves to the run-<ms>.json Forge wrote with it, by content."""
 
     def runs(self, directory: str, files: dict[str, str]) -> Path:
@@ -237,13 +237,9 @@ class SourceBroadcastTests(unittest.TestCase):
                 },
             )
             self.assertEqual(
-                export_deployment.source_broadcast(latest),
+                export_deployment.latest_run(latest),
                 latest.with_name("run-1792637950786.json"),
             )
-
-    def test_other_paths_are_their_own_source(self) -> None:
-        path = BROADCAST_PATH  # need not exist: it is not read
-        self.assertEqual(export_deployment.source_broadcast(path), path)
 
     def test_refuses_run_latest_without_a_twin(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -252,7 +248,7 @@ class SourceBroadcastTests(unittest.TestCase):
                 {"run-1792630492858.json": '{"a": 1}', "run-latest.json": '{"a": 2}'},
             )
             with self.assertRaisesRegex(SystemExit, "found 0"):
-                export_deployment.source_broadcast(latest)
+                export_deployment.latest_run(latest)
 
     def test_refuses_run_latest_with_several_twins(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -261,14 +257,14 @@ class SourceBroadcastTests(unittest.TestCase):
                 {"run-1.json": "{}", "run-2.json": "{}", "run-latest.json": "{}"},
             )
             with self.assertRaisesRegex(SystemExit, "found 2"):
-                export_deployment.source_broadcast(latest)
+                export_deployment.latest_run(latest)
 
     def test_refuses_a_missing_run_latest(self) -> None:
         with (
             tempfile.TemporaryDirectory() as directory,
             self.assertRaisesRegex(SystemExit, "not found"),
         ):
-            export_deployment.source_broadcast(Path(directory) / "run-latest.json")
+            export_deployment.latest_run(Path(directory) / "run-latest.json")
 
 
 class WriteManifestTests(unittest.TestCase):

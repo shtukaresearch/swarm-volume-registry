@@ -259,29 +259,27 @@ def validate_artifact(artifact: dict[str, Any], deployed_initcode: str) -> list[
     return abi
 
 
-def source_broadcast(broadcast_path: Path) -> Path:
-    """The immutable run file holding the broadcast at ``broadcast_path``.
+def latest_run(latest_path: Path) -> Path:
+    """The immutable run file that ``latest_path`` (a ``run-latest.json``) is a copy of.
 
     Forge writes each broadcast twice in one step: to ``run-<ms>.json`` (``<ms>`` is the
     run's start, not the broadcast's ``timestamp``) and to ``run-latest.json``, which the
-    next broadcast overwrites. A record must cite the former. Any path other than
-    ``run-latest.json`` is its own source; for ``run-latest.json`` the source is the one
-    sibling ``run-*.json`` with identical bytes, and none or several is an error.
+    next broadcast overwrites. A record must cite the former, which is the one sibling
+    ``run-*.json`` with identical bytes; none or several is an error. Which wrong runs this
+    can and cannot pick up is recorded in ``docs/adr/0006-immutable-deployment-records.md``.
     """
-    if broadcast_path.name != LATEST_BROADCAST:
-        return broadcast_path
     try:
-        latest = broadcast_path.read_bytes()
+        latest = latest_path.read_bytes()
     except FileNotFoundError:
-        fail(f"Forge broadcast not found: {broadcast_path}")
+        fail(f"Forge broadcast not found: {latest_path}")
     twins = [
         sibling
-        for sibling in sorted(broadcast_path.parent.glob("run-*.json"))
-        if sibling.name != LATEST_BROADCAST and sibling.read_bytes() == latest
+        for sibling in sorted(latest_path.parent.glob("run-*.json"))
+        if sibling != latest_path and sibling.read_bytes() == latest
     ]
     if len(twins) != 1:
         fail(
-            f"{display_path(broadcast_path)} must have exactly one identical run-<ms>.json "
+            f"{display_path(latest_path)} must have exactly one identical run-<ms>.json "
             f"beside it; found {len(twins)}. Pass that run file with --broadcast."
         )
     return twins[0]
@@ -402,8 +400,8 @@ def main() -> None:
         "--broadcast",
         type=Path,
         help=(
-            "Forge broadcast JSON (defaults to the selected chain's run-latest.json, "
-            "resolved to the run-<ms>.json it copies)"
+            "Forge broadcast run file to export, used as given (default: the run-<ms>.json "
+            "that the selected chain's run-latest.json copies)"
         ),
     )
     parser.add_argument("--artifact", type=Path, default=DEFAULT_ARTIFACT)
@@ -422,12 +420,12 @@ def main() -> None:
             f"deployment profile {args.profile!r} must define a valid "
             "'deployment_network', or pass --network"
         )
-    broadcast_path = source_broadcast(
-        resolve_from_contracts(
-            args.broadcast
-            or Path("broadcast") / DEFAULT_SCRIPT / str(profile["chain_id"]) / LATEST_BROADCAST
+    if args.broadcast:
+        broadcast_path = resolve_from_contracts(args.broadcast)
+    else:
+        broadcast_path = latest_run(
+            CONTRACTS / "broadcast" / DEFAULT_SCRIPT / str(profile["chain_id"]) / LATEST_BROADCAST
         )
-    )
     artifact_path = resolve_from_contracts(args.artifact)
     output_root = resolve_from_contracts(args.deployments_dir)
 

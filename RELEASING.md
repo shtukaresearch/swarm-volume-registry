@@ -142,6 +142,12 @@ use it to export an earlier broadcast. How the default could pick up a run other
 one you meant, and which of the checks below catch it, is recorded in
 contracts [ADR-0006](docs/adr/0006-immutable-deployment-records.md).
 
+Once committed, neither the record nor the run file it cites may change: CI's
+`Immutable deployment facts` job fails any change that modifies or deletes a committed
+broadcast (other than `run-latest.json`) or versioned record. The script tests check that
+every record has the fields the exporter writes, does not cite `run-latest.json`, and
+cites a run file holding its deployment transaction.
+
 The versioned record is immutable: it contains the address and ABI required for
 discovery, the creation bytecode deployed (without constructor arguments), plus its
 transaction hash, receipt, constructor arguments, release name and source-broadcast

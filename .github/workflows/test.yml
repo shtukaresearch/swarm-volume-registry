@@ -41,3 +41,37 @@ jobs:
 
       - name: Run Forge tests
         run: forge test -vvv
+
+  immutable-facts:
+    # A deployment record and the broadcast it cites are facts: once committed they are
+    # never changed or removed (RELEASING.md A3). Adding new ones is fine. Excluded:
+    # run-latest.json, which Forge rewrites on every broadcast, and each network's latest
+    # pointer deployments/<network>/VolumeRegistry.json, which A4 moves by design.
+    name: Immutable deployment facts
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Committed broadcasts and deployment records are unchanged
+        env:
+          # A pull request is checked out as its merge into the base, so diffing from the
+          # base tip gives exactly the PR's changes. A push is diffed from the previous tip.
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ -z "$BASE" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            echo "No base commit to compare against (new branch or rewritten history); skipping."
+            exit 0
+          fi
+          changed=$(git diff --no-renames --diff-filter=DMT --name-only "$BASE" HEAD -- \
+            'contracts/broadcast/**' 'contracts/deployments/*/*-v*.json' \
+            ':(exclude,glob)contracts/broadcast/**/run-latest.json')
+          if [ -n "$changed" ]; then
+            echo "::error::Committed deployment facts were modified or deleted:"
+            echo "$changed"
+            exit 1
+          fi

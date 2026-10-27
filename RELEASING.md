@@ -378,7 +378,7 @@ Each registry deployment gets its own keeper Worker and wallet, and an existing 
 never repointed. The new deployment's env replaces its predecessor's in
 `services/keeper/wrangler.jsonc`; the predecessor's Worker is not touched and keeps
 running whatever it was last deployed with until it is deleted out of band
-(`bunx wrangler delete --name <worker>`). This is how the keeper service the maintainers
+(`pnpm exec wrangler delete --name <worker>`). This is how the keeper service the maintainers
 run is operated, not a rule for anyone else running a keeper.
 
 Run commands in this part from `services/keeper/`. The deployment label is the network
@@ -403,10 +403,10 @@ fails until the env names a committed deployment record and the ABI matches that
 record's. Regenerate the binding types and check everything:
 
 ```sh
-bun run types
-bun test
-bun run typecheck
-bun run check:deploy
+pnpm types
+pnpm test
+pnpm typecheck
+pnpm check:deploy
 ```
 
 Commit, PR to `main` and merge before deploying, so the commit that deploys is on `main`.
@@ -437,7 +437,7 @@ umask 077
   printf 'PRIVATE_KEY=%s\n' "$(cast wallet private-key --account keeper-cloudflare-sepolia-v2-rc3)"
   printf 'RPC_URL=https://…,https://…\nTELEGRAM_BOT_TOKEN=…\nTELEGRAM_CHAT_ID=-100…\n'
 } > .secrets.sepolia-v2-rc3
-bunx wrangler deploy --env sepolia-v2-rc3 --secrets-file .secrets.sepolia-v2-rc3
+pnpm exec wrangler deploy --env sepolia-v2-rc3 --secrets-file .secrets.sepolia-v2-rc3
 rm .secrets.sepolia-v2-rc3
 ```
 
@@ -447,7 +447,7 @@ rm .secrets.sepolia-v2-rc3
 
 ```sh
 curl https://keeper-cloudflare-sepolia-v2-rc3.<subdomain>.workers.dev/health
-bunx wrangler tail --env sepolia-v2-rc3 --format json
+pnpm exec wrangler tail --env sepolia-v2-rc3 --format json
 ```
 
 Wait for one cron tick and confirm the run reports `ok` against the new registry address.

@@ -1,7 +1,7 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { unstable_readConfig } from "wrangler";
+import { experimental_readRawConfig, unstable_readConfig } from "wrangler";
 import { PROBE_TIMEOUT_MS } from "../src/client.js";
 import {
   ConfigError,
@@ -166,14 +166,13 @@ describe("reading around a broken config", () => {
 // accepts a misspelled key and cannot see secrets.
 // ---------------------------------------------------------------------------
 
-const WRANGLER = join(import.meta.dir, "..", "wrangler.jsonc");
-const RECORDS = join(import.meta.dir, "..", "..", "..", "contracts", "deployments");
+const WRANGLER = join(import.meta.dirname, "..", "wrangler.jsonc");
+const RECORDS = join(import.meta.dirname, "..", "..", "..", "contracts", "deployments");
 const SECRETS = ["PRIVATE_KEY", "RPC_URL", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"].sort();
 
-// Every env in the file, read raw (Bun parses JSONC): a deployment added there
-// is covered here without anyone remembering to list it.
-const RAW = (await import(WRANGLER)).default as { env?: Record<string, unknown> };
-const DEPLOYMENTS = Object.keys(RAW.env ?? {});
+// Every env in the file, read raw: a deployment added there is covered here
+// without anyone remembering to list it.
+const DEPLOYMENTS = Object.keys(experimental_readRawConfig({ config: WRANGLER }).rawConfig.env ?? {});
 
 /**
  * An env is keyed by its registry deployment's label, `<network>-<release>`,

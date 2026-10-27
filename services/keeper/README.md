@@ -52,7 +52,9 @@ Declared in `secrets.required`, so `wrangler deploy` refuses to ship a deploymen
 
 Variables, in `wrangler.jsonc` per env: `DEPLOYMENT_NAME`, `CHAIN_ID`, `REGISTRY_ADDRESS`, `NOTIFY_WARNINGS`, `MIN_BALANCE_WEI` (0 disables the warning), and the cycle limits `MAX_VOLUMES_PER_CYCLE`, `CYCLE_TIMEOUT_MS`, `RECEIPT_TIMEOUT_MS`, `CONFIRMATIONS`. Not set by any deployment, but accepted: `DRY_RUN`, `VOLUME_IDS` (maintain only these), `PAGE_SIZE`.
 
-**A run must fit inside its cron interval**, so two runs never share the wallet at once: 5 s of RPC probing, plus `CYCLE_TIMEOUT_MS` (no new transaction starts after it), plus `RECEIPT_TIMEOUT_MS` for the last one, plus 5 s of slack. `test/config.test.ts` holds each env to that, and to the 15-minute Cron Trigger limit. On Sepolia that is up to 8 minutes of new transactions, roughly 40 volumes at 12 s blocks, capped at 30 by `MAX_VOLUMES_PER_CYCLE`.
+**A run must fit inside its cron interval**, so two runs never share the wallet at once: 5 s of RPC probing, plus `CYCLE_TIMEOUT_MS` (no new transaction starts after it), plus `RECEIPT_TIMEOUT_MS` for the last one, plus 5 s of slack. `test/config.test.ts` holds each env to that, and to the 15-minute Cron Trigger limit. On Sepolia that is up to 7 minutes of new transactions, roughly 35 volumes at 12 s blocks, capped at 30 by `MAX_VOLUMES_PER_CYCLE`, and up to 2 minutes for each receipt. Volumes are sent one at a time, so a run reaches roughly `CYCLE_TIMEOUT_MS / block time` of them. The rest are deferred, with a warning, and each run starts at a different point in the list so the same volumes are not deferred every time. If the active set outgrows that, raise the budget.
+
+Every RPC request counts against the platform's per-invocation subrequest cap: 50 on Workers Free, 10,000 on Workers Paid. A run spends about 20 on fixed work (probing each endpoint twice, enumeration, nonce and fees once per cycle, the balance check, the alert), then several per volume: its gas estimate, its send, and the receipt wait. On Workers Free, runs reached about 3 volumes, whatever `CYCLE_TIMEOUT_MS` allowed.
 
 ## Setting up a deployment
 
@@ -68,19 +70,19 @@ A new deployment's Worker is set up by [`RELEASING.md`](../../RELEASING.md) Part
 2. Verify locally:
 
    ```bash
-   bun install
-   bun test               # includes whole scheduled runs against mock-chain
-   bun run typecheck
-   bun run check:deploy   # wrangler deploy --dry-run
+   pnpm install
+   pnpm test           # includes whole scheduled runs against mock-chain
+   pnpm typecheck
+   pnpm check:deploy   # wrangler deploy --dry-run
    ```
 
-   If you changed `wrangler.jsonc`, run `bun run types` and commit the regenerated `worker-configuration.d.ts` (CI fails if stale).
+   If you changed `wrangler.jsonc`, run `pnpm types` and commit the regenerated `worker-configuration.d.ts` (CI fails if stale).
 
 3. Push to a branch — `keeper-ci.yml` runs the same checks. It never runs a keeper cycle or deploys.
 4. Merge to `main`, then deploy by hand from it:
 
    ```bash
-   bunx wrangler deploy --env sepolia-v2-rc3
+   pnpm exec wrangler deploy --env sepolia-v2-rc3
    ```
 
 ### Retiring a Worker
@@ -88,7 +90,7 @@ A new deployment's Worker is set up by [`RELEASING.md`](../../RELEASING.md) Part
 A Worker whose env has left `wrangler.jsonc` is never redeployed from this tree: it would run code written for another deployment. It keeps running until it is deleted, out of band:
 
 ```bash
-bunx wrangler delete --name keeper-sepolia
+pnpm exec wrangler delete --name keeper-sepolia
 ```
 
 ### Secret rotation
@@ -99,14 +101,14 @@ Rotate one value without redeploying code:
 
 ```bash
 # single value
-bunx wrangler secret put PRIVATE_KEY --env sepolia-v2-rc3
-bunx wrangler secret put RPC_URL --env sepolia-v2-rc3          # comma-separated, independent providers
-bunx wrangler secret put TELEGRAM_BOT_TOKEN --env sepolia-v2-rc3
-bunx wrangler secret put TELEGRAM_CHAT_ID --env sepolia-v2-rc3
+pnpm exec wrangler secret put PRIVATE_KEY --env sepolia-v2-rc3
+pnpm exec wrangler secret put RPC_URL --env sepolia-v2-rc3          # comma-separated, independent providers
+pnpm exec wrangler secret put TELEGRAM_BOT_TOKEN --env sepolia-v2-rc3
+pnpm exec wrangler secret put TELEGRAM_CHAT_ID --env sepolia-v2-rc3
 
 # or atomically via file (avoids typing a key into shell history)
 printf 'PRIVATE_KEY=0x…\nRPC_URL=https://…,https://…\nTELEGRAM_BOT_TOKEN=…\nTELEGRAM_CHAT_ID=-100…\n' > .secrets.sepolia-v2-rc3
-bunx wrangler deploy --env sepolia-v2-rc3 --secrets-file .secrets.sepolia-v2-rc3
+pnpm exec wrangler deploy --env sepolia-v2-rc3 --secrets-file .secrets.sepolia-v2-rc3
 rm .secrets.sepolia-v2-rc3
 ```
 
@@ -114,7 +116,7 @@ Validate immediately:
 
 ```bash
 curl https://keeper-cloudflare-sepolia-v2-rc3.<subdomain>.workers.dev/health   # 200 + wallet if ok, 503 with every problem if not
-bunx wrangler tail --env sepolia-v2-rc3   # then force a cycle: curl "localhost:8787/cdn-cgi/local/scheduled?format=json" in dev, or wait one cron tick
+pnpm exec wrangler tail --env sepolia-v2-rc3   # then force a cycle: curl "localhost:8787/cdn-cgi/local/scheduled?format=json" in dev, or wait one cron tick
 ```
 
 Notes:
@@ -127,18 +129,18 @@ Notes:
 ## Working on it
 
 ```bash
-bun install
-bun test               # includes whole scheduled runs against a mock chain
-bun run typecheck
-bun run check:deploy   # bundles the env, as CI does
+pnpm install
+pnpm test           # includes whole scheduled runs against a mock chain
+pnpm typecheck
+pnpm check:deploy   # bundles the env, as CI does
 ```
 
-After changing `wrangler.jsonc`, run `bun run types` and commit `worker-configuration.d.ts`; CI fails if it is stale.
+After changing `wrangler.jsonc`, run `pnpm types` and commit `worker-configuration.d.ts`; CI fails if it is stale.
 
 To run it locally against a real chain, put the four secrets in `.dev.vars` (see `.dev.vars.example`), then:
 
 ```bash
-bun run dev --var DRY_RUN:true          # wrangler dev --env sepolia-v2-rc3-v2-rc3
+pnpm dev --var DRY_RUN:true          # wrangler dev --env sepolia-v2-rc3-v2-rc3
 curl "localhost:8787/cdn-cgi/local/scheduled?format=json"
 ```
 

@@ -13,8 +13,13 @@ export type TriggerParameters = {
   gas?: bigint;
   /** Headroom over the estimate. Default 1.2 — see below for why it matters. */
   gasMultiplier?: number;
-  /** Lower bound on the scaled estimate. Default 300_000 — see below. */
+  /** Lower bound on the scaled estimate. Default 3_000_000 — see below. */
   gasFloor?: bigint;
+  /** Fetched by viem when omitted. */
+  nonce?: number;
+  /** EIP-1559 fees, fetched by viem when either is omitted. */
+  maxFeePerGas?: bigint;
+  maxPriorityFeePerGas?: bigint;
 };
 
 export type TriggerReturnType = Hex;
@@ -44,6 +49,11 @@ const scaleGas = (gas: bigint, multiplier: number): bigint =>
  * covers the top-up path outright. Unused gas is refunded, so the floor costs
  * nothing on the no-op path it usually lands on.
  *
+ * The top-up path itself varies with PostageStamp state: on Sepolia it has
+ * cost from ~480k to ~1.5M, and a trigger estimated at ~680k one block ran out
+ * of gas inside `topUp` the next. Hence a floor well above anything observed,
+ * not just above a typical top-up.
+ *
  * Estimation doubles as the pre-flight check: `_triggerOne` reverts
  * `VolumeNotActive` on a volume retired since enumeration, and that revert
  * surfaces here — named, before a transaction is paid for.
@@ -67,7 +77,7 @@ export async function trigger<
     account = client.account,
     chain = client.chain,
     gasMultiplier = 1.2,
-    gasFloor = 300_000n,
+    gasFloor = 3_000_000n,
   } = parameters;
 
   const call = {
@@ -80,17 +90,27 @@ export async function trigger<
   } as const;
 
   // No separate simulate pass: estimation runs the same call and reverts the
-  // same way, so an eth_call first would only cost a round trip.
+  // same way, so an eth_call first would only cost a round trip. `prepare:
+  // false`, because the node needs only from, to and data to estimate, and
+  // for a local account viem would otherwise fetch a nonce, a block and a tip
+  // for every estimate — round trips the send then repeats.
   let gas = parameters.gas;
   if (gas === undefined) {
     const estimate = await getAction(
       client,
       estimateContractGas,
       "estimateContractGas",
-    )(call as never);
+    )({ ...call, prepare: false } as never);
     gas = scaleGas(estimate, gasMultiplier);
     if (gas < gasFloor) gas = gasFloor;
   }
 
-  return getAction(client, writeContract, "writeContract")({ ...call, gas } as never);
+  // With chainId, nonce and fees all supplied, viem has nothing left to fill
+  // and sends without first trying `eth_fillTransaction`.
+  const { nonce, maxFeePerGas, maxPriorityFeePerGas } = parameters;
+  return getAction(
+    client,
+    writeContract,
+    "writeContract",
+  )({ ...call, gas, chainId: chain?.id, nonce, maxFeePerGas, maxPriorityFeePerGas } as never);
 }

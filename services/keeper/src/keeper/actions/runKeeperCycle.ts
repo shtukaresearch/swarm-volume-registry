@@ -1,6 +1,10 @@
 import type { Account, Address, Chain, Client, Hex, Transport } from "viem";
+import { hexToBigInt, keccak256, numberToHex } from "viem";
 import {
+  estimateMaxPriorityFeePerGas,
+  getBlock,
   getBlockNumber,
+  getTransactionCount,
   multicall,
   simulateContract,
   waitForTransactionReceipt,
@@ -27,7 +31,7 @@ export type RunKeeperCycleParameters = {
   maxVolumesPerCycle?: number;
   /** Headroom over the gas estimate. Default 1.2 — see {@link trigger}. */
   gasMultiplier?: number;
-  /** Lower bound on the scaled estimate. Default 300_000 — see {@link trigger}. */
+  /** Lower bound on the scaled estimate. Default 3_000_000 — see {@link trigger}. */
   gasFloor?: bigint;
   /** Default 1. */
   confirmations?: number;
@@ -75,6 +79,32 @@ export type RunKeeperCycleReturnType = {
 const message = (err: unknown): string =>
   err instanceof Error ? err.message : String(err);
 
+/** What every transaction in a cycle shares, read once — see {@link runKeeperCycle}. */
+type Sending = { nonce: number; maxFeePerGas: bigint; maxPriorityFeePerGas: bigint };
+
+/**
+ * `ids`, rotated to start at a position derived from `blockNumber`.
+ *
+ * A cycle that hits `cycleTimeout` or `maxVolumesPerCycle` defers the tail of
+ * its list. Without rotation that is the same tail every cycle: those volumes
+ * are never triggered and die while the head is topped up every time. Starting
+ * each cycle at a different place moves the deferred set around, with nothing
+ * remembered between cycles.
+ *
+ * The start comes from a hash of the block, not the block itself: runs on a
+ * fixed cron are a near-constant number of blocks apart, and a step that shares
+ * a factor with the volume count would revisit the same few starts forever.
+ *
+ * This spreads a shortfall; it does not remove one. The cycle limits still have
+ * to cover every Active volume well within `graceBlocks`.
+ */
+export function rotateVolumes<T>(ids: readonly T[], blockNumber: bigint): T[] {
+  if (ids.length < 2) return [...ids];
+  const hash = keccak256(numberToHex(blockNumber, { size: 32 }));
+  const start = Number(hexToBigInt(hash) % BigInt(ids.length));
+  return [...ids.slice(start), ...ids.slice(0, start)];
+}
+
 /**
  * One full keeper cycle: read the registry's active volumes and trigger each
  * one.
@@ -101,7 +131,16 @@ const message = (err: unknown): string =>
  * transactions rather than truncating one in flight, and anything left over is
  * warned about and picked up next cycle. A cycle therefore handles roughly
  * `cycleTimeout / confirmation time` volumes — size the schedule for that
- * against `graceBlocks`.
+ * against `graceBlocks`. Each cycle starts somewhere different in the list
+ * ({@link rotateVolumes}), so what one cycle defers, a later one reaches.
+ *
+ * **Nonce and fees are read once per cycle**, not once per transaction: every
+ * RPC request is a subrequest, and a platform's per-invocation cap on those
+ * (50 on Workers Free) bounds a cycle as surely as `cycleTimeout` does. That
+ * leaves a volume its estimate, its send and its receipt polls. The nonce is
+ * counted up locally, which is safe for the same reason sequential sending is:
+ * nothing else spends from this wallet mid-cycle. Any failure discards both,
+ * and the next send reads them fresh.
  *
  * **Never throws.** Every failure is folded into the returned result, because
  * one volume failing must not stop the rest from being attempted, and a run
@@ -138,6 +177,7 @@ export async function runKeeperCycle<
   } = parameters;
 
   const startedAt = Date.now();
+  let sending: Sending | undefined;
   const result: RunKeeperCycleReturnType = {
     ok: true,
     mode: mode.type,
@@ -171,7 +211,7 @@ export async function runKeeperCycle<
       return result;
     }
 
-    const attempting = volumeIds.slice(0, maxVolumesPerCycle);
+    const attempting = rotateVolumes(volumeIds, blockNumber).slice(0, maxVolumesPerCycle);
     if (attempting.length < volumeIds.length) {
       result.warnings.push({
         message: `maxVolumesPerCycle (${maxVolumesPerCycle}) reached: ${
@@ -252,6 +292,29 @@ export async function runKeeperCycle<
     return active;
   }
 
+  /**
+   * The fee cap is fixed for the whole cycle, so it carries twice the current
+   * base fee: enough for about six consecutive full blocks of increases. Only
+   * the base fee actually due, plus the tip, is paid.
+   */
+  async function readSending(): Promise<Sending> {
+    const address = client.account!.address;
+    const [nonce, block, maxPriorityFeePerGas] = await Promise.all([
+      getAction(client, getTransactionCount, "getTransactionCount")({
+        address,
+        blockTag: "pending",
+      }),
+      getAction(client, getBlock, "getBlock")({}),
+      getAction(
+        client,
+        estimateMaxPriorityFeePerGas,
+        "estimateMaxPriorityFeePerGas",
+      )({ chain: client.chain }),
+    ]);
+    const baseFee = block.baseFeePerGas ?? 0n;
+    return { nonce, maxFeePerGas: baseFee * 2n + maxPriorityFeePerGas, maxPriorityFeePerGas };
+  }
+
   async function sendOne(volumeId: Hex): Promise<VolumeResult> {
     let hash: Hex | undefined;
     try {
@@ -273,12 +336,15 @@ export async function runKeeperCycle<
         return { volumeId, status: "simulated" };
       }
 
+      sending ??= await readSending();
       hash = await trigger(client, {
         registry,
         volumeId,
         gasMultiplier: parameters.gasMultiplier,
         gasFloor: parameters.gasFloor,
+        ...sending,
       });
+      sending.nonce++;
 
       const receipt = await getAction(
         client,
@@ -327,6 +393,9 @@ export async function runKeeperCycle<
 
       return { ...mined, status: "success" as const, ...summary };
     } catch (err) {
+      // Whether a failed send used its nonce is unknowable from here, and a
+      // stuck transaction may mean the fees went stale: read both again.
+      sending = undefined;
       // A sent-but-unconfirmed transaction still reports its hash so it can be
       // followed up; the next cycle re-decides from chain state regardless.
       return {

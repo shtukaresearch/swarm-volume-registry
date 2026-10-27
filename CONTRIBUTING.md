@@ -84,15 +84,15 @@ steps are in [`RELEASING.md`](./RELEASING.md).
 ## Keeper
 
 [`services/keeper`](./services/keeper) is the keeper: one Cloudflare Worker per
-registry deployment, each an env in its `wrangler.jsonc`. A standalone Bun project
+registry deployment, each an env in its `wrangler.jsonc`. A standalone pnpm project (Node 24)
 with its own lockfile; nothing else in the repository depends on it.
 
 ```sh
 cd services/keeper
-bun install
-bun test
-bun run typecheck
-bun run check:deploy   # wrangler deploy --dry-run
+pnpm install
+pnpm test
+pnpm typecheck
+pnpm check:deploy   # wrangler deploy --dry-run
 python3 -m unittest discover -s scripts/tests
 ```
 

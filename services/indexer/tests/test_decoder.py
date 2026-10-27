@@ -78,12 +78,12 @@ def test_log_without_block_timestamp_is_an_error():
 def test_pinned_abis_match_version_fixture():
     """The two pinned copies of each version agree (pure unit, no node).
 
-    ``decode._VERSIONS[v]`` (the package's decode reference data) and
-    ``tests/fixtures/<v>/`` (the frozen build the harness deploys) are independent pins of
-    the same deployed contract; this ties them together. The pinned event set must be
-    exactly the fixture ``VolumeRegistry``'s events plus the ERC-20 ``Transfer`` (the fee
-    leg), each ABI verbatim (name, inputs, indexed flags) — the version key doubles as the
-    fixture directory name, so an entry without a fixture (or vice versa) also fails here.
+    ``decode._VERSIONS[v]`` (the package's decode reference data) and the ``VolumeRegistry``
+    the harness deploys for ``v`` (from its deployment records; v1 from its pinned fixture)
+    are independent pins of the same deployed contract; this ties them together. The pinned
+    event set must be exactly the deployed ``VolumeRegistry``'s events plus the ERC-20
+    ``Transfer`` (the fee leg), each ABI verbatim (name, inputs, indexed flags); a supported
+    version with neither a record nor a fixture fails here.
     """
 
     def by_name(abi):

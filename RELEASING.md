@@ -3,9 +3,11 @@
 Operational runbook. The concepts — what a release name *is*, the two version axes, why
 nothing here can break an existing indexer install — live in
 [`services/indexer/docs/VERSIONING.md`](services/indexer/docs/VERSIONING.md) and ADRs
-[0010](services/indexer/docs/adr/0010-extensional-contract-versions.md) and
-[0012](services/indexer/docs/adr/0012-release-names-and-latest-pointers.md); this file is
-the commands.
+[0010](services/indexer/docs/adr/0010-extensional-contract-versions.md),
+[0012](services/indexer/docs/adr/0012-release-names-and-latest-pointers.md) and
+[0013](services/indexer/docs/adr/0013-harness-deploys-from-deployment-records.md), and
+contracts [ADR-0006](docs/adr/0006-immutable-deployment-records.md); this file is the
+commands.
 
 There are two tracks:
 
@@ -13,13 +15,13 @@ There are two tracks:
   follow it, teaches the `ethswarm-volumes` package about it (Part B). Part B may follow
   Part A in the same PR or much later: until it ships, installed indexers simply do not
   see the new deployment. Part C starts the keeper we run for it.
-- A **package-only release** ships indexer/client changes with no new contract (step B5
+- A **package-only release** ships indexer/client changes with no new contract (step B4
   alone).
 
 ## Release names
 
 Every deployment carries a release name, used verbatim as the git tag, the
-`registry_version`, the deployment-record filename and the test-fixture directory:
+`registry_version` and the deployment-record filename:
 
 - **`vN-rcM`** — a testnet release candidate. Each testnet deployment gets the next `rc`
   of the upcoming release, so several can land between mainnet releases.
@@ -31,7 +33,7 @@ same release to another network reuses the name (no new tag).
 
 A deployment is labelled `<network>-<name>` (`gnosis-v1`, `sepolia-v2-rc1`). The bare
 network name is a **latest pointer**, moved only by an explicit step below (A4 on the
-contracts side, B4 in the package).
+contracts side, B3 in the package).
 
 ## Part A — Deploy a contract release
 
@@ -302,29 +304,7 @@ Run commands in this part from the repository root. Nothing in Part B changes wh
 deployed; it is the package's acknowledgement that it can index the release
 ([ADR-0011](services/indexer/docs/adr/0011-derived-deployment-registry.md)).
 
-### B1. Vendor the pinned test fixture
-
-No build is needed: the fixture comes from the deployment records committed in Part A.
-
-```sh
-python3 services/indexer/scripts/vendor_fixtures.py release v2-rc3
-```
-
-This writes `services/indexer/tests/fixtures/v2-rc3/VolumeRegistry.json` with the record's
-ABI and the creation bytecode of the recorded deployment (its initcode from the
-broadcast — a CREATE transaction's input, or a CREATE2 factory call's input after the
-salt recorded in `linkedData.create2` — minus the constructor arguments, which are checked
-against the record's `args`), so the fixture is the deployed code by construction. It reads every network's
-`VolumeRegistry-v2-rc3.json` and fails if they disagree. `provenance.json` names the
-records, transactions and git tag. Commit the fixture directory; `test_fixtures.py`
-re-derives it from the records on every test run.
-
-The test-support contracts the harness deploys around the registry (`PostageStamp`,
-`PriceOracle`, `TestToken`) are shared across versions in `tests/fixtures/support/`. Only
-when the `storage-incentives` submodule pin moves, refresh them after `forge build` with
-`vendor_fixtures.py support`.
-
-### B2. Add the decode reference data
+### B1. Add the decode reference data
 
 In `services/indexer/src/ethswarm_volumes/decode.py`, add the `_VERSIONS["v2-rc3"]` entry:
 
@@ -333,11 +313,13 @@ In `services/indexer/src/ethswarm_volumes/decode.py`, add the `_VERSIONS["v2-rc3
   (e.g. a gas-only release, or a mainnet `vN` identical to its last release candidate).
 
 `test_decoder.py::test_pinned_abis_match_version_fixture` fails until this and the
-fixture from B1 agree verbatim.
+ABI in the release's deployment records agree verbatim. Adding the entry is also what
+puts the release under test: the harness deploys every supported version from its
+records, so no fixture needs vendoring.
 
-### B3. Handle changed semantics (only if they changed)
+### B2. Handle changed semantics (only if they changed)
 
-B2 teaches the package to *decode* the release; this step checks it still *means* the same.
+B1 teaches the package to *decode* the release; this step checks it still *means* the same.
 Diff the contract source against the previous release tag
 (`git diff <previous-tag> <tag> -- contracts/src`) and ask whether anything the indexer
 relies on changed: what an event signifies, how fees flow to Postage, what adds a volume
@@ -367,7 +349,7 @@ If something changed, update the tests and the implementation together:
   bump). A change the kernel cannot absorb is a `schema_version` major bump — see
   [`services/indexer/docs/VERSIONING.md`](services/indexer/docs/VERSIONING.md).
 
-### B4. Register the deployments and latest pointers
+### B3. Register the deployments and latest pointers
 
 Derive the package's registry from the committed deployment records — nothing is
 hand-transcribed:
@@ -383,7 +365,7 @@ reported and left alone, and so is the pointer that names one. Pass
 `--exclude NETWORK-VERSION` to keep a recorded deployment out of the fleet. Review the
 diff to `services/indexer/src/ethswarm_volumes/deployments.json` and commit.
 
-### B5. Release the package
+### B4. Release the package
 
 - Bump `version` in `services/indexer/pyproject.toml`.
 - PR to `main`. `indexer-ci` runs on the PR; on merge, the publish workflow
@@ -473,4 +455,4 @@ Wait for one cron tick and confirm the run reports `ok` against the new registry
 
 ## Package-only release
 
-Step B5 alone: bump `version` in `services/indexer/pyproject.toml`, PR to `main`, merge.
+Step B4 alone: bump `version` in `services/indexer/pyproject.toml`, PR to `main`, merge.

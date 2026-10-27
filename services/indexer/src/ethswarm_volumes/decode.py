@@ -19,9 +19,8 @@ The event ABIs below are the **version-pinned reference data** the architecture 
 build dependency: they are the events ABI of the *deployed* ``VolumeRegistry`` for each
 ``registry_version`` plus the ERC-20 ``Transfer`` of the BZZ token (the fee leg). Pinning
 them per ``registry_version`` keeps the package self-contained — the decode is still
-mechanical, driven by these ABIs. Each pin is cross-checked against the frozen build
-fixture at ``tests/fixtures/<registry_version>/`` (``test_decoder``), so the keys here
-double as fixture directory names.
+mechanical, driven by these ABIs. Each pin is cross-checked against the ABI of the
+deployed contract the test harness deploys for that ``registry_version`` (``test_decoder``).
 """
 
 from __future__ import annotations

@@ -9,10 +9,10 @@ Green. Originally written as a TDD red suite against the interface stubs; the im
 has since filled in.
 
 Run: `uv run --group dev pytest`. Needs `anvil`; **skips** the node tiers cleanly when it is
-absent. The contract artifacts the harness deploys are the pinned per-version fixtures in
-`fixtures/<registry_version>/` plus the shared `fixtures/support/` (committed — no `forge build`
-needed); see `docs/TESTING.md` §2a
-and each fixture dir's `provenance.json`.
+absent. The harness deploys each release's registry from its deployment record in
+`contracts/deployments/` (v1, which has none, from `fixtures/v1/`), plus the shared test-support
+contracts in `fixtures/support/` (all committed — no `forge build` needed); see
+`docs/TESTING.md` §2a.
 
 ## Layout
 
@@ -33,7 +33,7 @@ logs, decodes them, and asserts each `EventLogRow`: known `event_name`, exact `a
 addresses, integer amounts, tz-aware `block_ts`.
 
 `test_decoder.py::test_pinned_abis_match_version_fixture` — pure unit: for every
-`registry_version`, the decode-layer pinned event ABIs match the frozen fixture build verbatim.
+`registry_version`, the decode-layer pinned event ABIs match the deployed contract's ABI verbatim.
 
 ### Tier 2 — decoder + projector vs node state (`docs/TESTING.md` §3)
 

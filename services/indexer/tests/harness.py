@@ -12,9 +12,11 @@ of real transactions, and exposes:
   (``getActiveVolumeCount`` / ``getActiveVolumes`` / ``getAccount`` / ``balanceOf`` at any
   historical block) used as the independent source of truth.
 
-ABI + bytecode come from the **pinned per-version fixtures** (``tests/fixtures/<version>/``):
-the registry exactly as deployed under that release, derived from its deployment record
-(see ``provenance.json`` there), plus shared test-support contracts (``tests/fixtures/support/``). The harness therefore tests each ``registry_version`` against the contracts actually
+The registry's ABI + bytecode for a release come from its committed **deployment records**
+(``contracts/deployments/<network>/VolumeRegistry-<version>.json``, whose ``bytecode`` is
+the creation bytecode actually deployed); v1, which predates deployment records, from the
+pinned ``tests/fixtures/v1/``. The test-support contracts come from ``tests/fixtures/support/``.
+The harness therefore tests each ``registry_version`` against the contracts actually
 deployed under that version — contracts ``HEAD`` can drift without touching this suite, and
 no Foundry toolchain is needed to run it (only ``anvil``).
 """
@@ -29,22 +31,25 @@ from typing import Any
 
 from web3 import Web3
 
+from ethswarm_volumes import decode
+
 ONE_DAY = 86400
 #: Timeline genesis — a UTC midnight comfortably in the future, so warping forward from the
 #: node's (real-clock) deploy blocks is always monotonic. Calendar date is irrelevant.
 GENESIS = 1893456000  # 2030-01-01T00:00:00Z
 
 _FIXTURES = Path(__file__).resolve().parent / "fixtures"
+_RECORDS = Path(__file__).resolve().parents[3] / "contracts" / "deployments"
 
-#: The registry versions this harness drives: every version with a pinned fixture dir. The
-#: ``chain`` fixture (``conftest.py``) runs each node-backed test once per version. The
-#: ``Chain`` driver's function signatures and oracle reads are as version-specific as the
-#: fixture bytecode; it uses only calls every version here shares (v2 dropped
-#: ``transferVolumeOwnership``, which the driver never calls), so a future version with
-#: changed semantics gets its own driver variant rather than edits to this one.
-REGISTRY_VERSIONS = tuple(
-    sorted(p.name for p in _FIXTURES.iterdir() if p.is_dir() and p.name != "support")
-)
+#: The registry versions this harness drives: every version the package supports
+#: (``decode.supported_versions()``, the single claim site; ADR-0011), so a deployed but
+#: not yet supported release is not tested. The ``chain`` fixture (``conftest.py``) runs
+#: each node-backed test once per version. The ``Chain`` driver's function signatures and
+#: oracle reads are as version-specific as the deployed bytecode; it uses only calls every
+#: version here shares (v2 dropped ``transferVolumeOwnership``, which the driver never
+#: calls), so a future version with changed semantics gets its own driver variant rather
+#: than edits to this one.
+REGISTRY_VERSIONS = tuple(sorted(decode.supported_versions()))
 
 #: Test-support contracts, shared by every version (``tests/fixtures/support/``); only
 #: ``VolumeRegistry`` is pinned per release.
@@ -60,11 +65,25 @@ ONE_BZZ_PLUR = 10**16  # TestToken has 16 decimals
 
 
 def load_artifact(name: str, version: str) -> tuple[list, str]:
-    """Return ``(abi, bytecode)`` for a contract: ``VolumeRegistry`` from the pinned
-    ``version`` fixture, test-support contracts from the shared ``support`` set."""
-    folder = "support" if name in SUPPORT_CONTRACTS else version
-    doc = json.loads((_FIXTURES / folder / f"{name}.json").read_text())
-    return doc["abi"], doc["bytecode"]["object"]
+    """Return ``(abi, bytecode)`` for a contract.
+
+    Test-support contracts come from the shared ``support`` set. ``VolumeRegistry`` comes
+    from ``version``'s deployment records, every network's of which must agree; a version
+    with no record (v1) falls back to its pinned ``tests/fixtures/<version>/``.
+    """
+    if name in SUPPORT_CONTRACTS:
+        doc = json.loads((_FIXTURES / "support" / f"{name}.json").read_text())
+        return doc["abi"], doc["bytecode"]["object"]
+    records = sorted(_RECORDS.glob(f"*/{name}-{version}.json"))
+    if not records:
+        doc = json.loads((_FIXTURES / version / f"{name}.json").read_text())
+        return doc["abi"], doc["bytecode"]["object"]
+    artifacts = []
+    for path in records:
+        doc = json.loads(path.read_text())
+        artifacts.append((doc["abi"], doc["bytecode"]))
+        assert artifacts[-1] == artifacts[0], f"{path} disagrees with {records[0]}"
+    return artifacts[0]
 
 
 @dataclass

@@ -2,7 +2,7 @@
 
 The contract-derived tiers run against a real chain (``docs/TESTING.md``). A session-scoped
 Anvil subprocess is started on a free port; each test gets a clean chain (``anvil_reset``) with
-a fresh deployment from the pinned per-version fixtures (``tests/fixtures/``). Tests are
+a fresh deployment of each supported version's contracts (``harness.load_artifact``). Tests are
 skipped when the ``anvil`` binary is absent (so a node-less environment doesn't fail the
 suite); no Foundry build is needed.
 """

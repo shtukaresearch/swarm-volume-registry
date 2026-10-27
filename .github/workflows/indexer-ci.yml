@@ -1,9 +1,10 @@
 # Indexer (ethswarm-volumes) CI. Lints and runs the full Python suite,
 # including the integration tiers against a real Anvil node.
 #
-# The suite deploys from the pinned per-version contract fixtures committed
-# under services/indexer/tests/fixtures/ (no forge build — it tests the
-# deployed contract versions, not contracts HEAD). Nothing here needs chain
+# The suite deploys each release's registry from its committed deployment
+# record in contracts/deployments/, plus test-support contracts committed under
+# services/indexer/tests/fixtures/ (no forge build — it tests the deployed
+# contract versions, not contracts HEAD). Nothing here needs chain
 # access or credentials, so it runs the same on pull requests from forks.
 
 name: indexer-ci

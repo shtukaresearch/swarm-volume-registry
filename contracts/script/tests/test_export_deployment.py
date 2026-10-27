@@ -22,6 +22,7 @@ PROFILE = {
 }
 ADDRESS = "0x33a53c79a08ed1f863905cd4c6ce036a4c493729"
 TX_HASH = "0x59dd245cd9d30e53175a38930b437f9048c5ce47ff20588ec46fd4359d225924"
+BROADCAST_PATH = export_deployment.CONTRACTS / "broadcast/example/run-1787275286220.json"
 
 
 def broadcast_fixture() -> dict:
@@ -65,7 +66,7 @@ class BuildManifestTests(unittest.TestCase):
                 "bytecode": {"object": "0x6000"},
             },
             "VolumeRegistry",
-            export_deployment.CONTRACTS / "broadcast/example/run-latest.json",
+            BROADCAST_PATH,
         )
 
     def test_builds_compatible_manifest(self) -> None:
@@ -81,6 +82,25 @@ class BuildManifestTests(unittest.TestCase):
         self.assertEqual(manifest["args"][2], 12)
         self.assertEqual(manifest["linkedData"]["chainId"], 11155111)
         self.assertEqual(manifest["linkedData"]["version"], VERSION)
+
+    def test_cites_the_broadcast_it_was_built_from(self) -> None:
+        manifest = self.build()
+
+        self.assertEqual(
+            manifest["linkedData"]["broadcast"], "broadcast/example/run-1787275286220.json"
+        )
+
+    def test_refuses_to_cite_run_latest(self) -> None:
+        with self.assertRaisesRegex(SystemExit, "immutable run file"):
+            export_deployment.build_manifest(
+                PROFILE_NAME,
+                VERSION,
+                PROFILE,
+                broadcast_fixture(),
+                {"abi": [], "bytecode": {"object": "0x6000"}},
+                "VolumeRegistry",
+                BROADCAST_PATH.with_name("run-latest.json"),
+            )
 
     def test_rejects_wrong_chain(self) -> None:
         broadcast = broadcast_fixture()
@@ -112,7 +132,7 @@ class BuildManifestTests(unittest.TestCase):
                 broadcast_fixture(),
                 {"abi": [], "bytecode": {"object": "0x1234"}},
                 "VolumeRegistry",
-                export_deployment.CONTRACTS / "broadcast/example/run-latest.json",
+                BROADCAST_PATH,
             )
 
 
@@ -147,7 +167,7 @@ class Create2ManifestTests(unittest.TestCase):
                 "bytecode": {"object": "0x6000"},
             },
             "VolumeRegistry",
-            export_deployment.CONTRACTS / "broadcast/example/run-latest.json",
+            BROADCAST_PATH,
         )
 
     def test_records_factory_and_salt(self) -> None:
@@ -191,8 +211,60 @@ class Create2ManifestTests(unittest.TestCase):
                 create2_broadcast_fixture(),
                 {"abi": [], "bytecode": {"object": "0x1234"}},
                 "VolumeRegistry",
-                export_deployment.CONTRACTS / "broadcast/example/run-latest.json",
+                BROADCAST_PATH,
             )
+
+
+class LatestRunTests(unittest.TestCase):
+    """run-latest.json resolves to the run-<ms>.json Forge wrote with it, by content."""
+
+    def runs(self, directory: str, files: dict[str, str]) -> Path:
+        root = Path(directory)
+        for name, text in files.items():
+            (root / name).write_text(text)
+        return root / "run-latest.json"
+
+    def test_resolves_run_latest_to_its_identical_twin(self) -> None:
+        # The rc2 case: the file is named for the run's start, 1792637950786, while its
+        # broadcast `timestamp` is the end, 1792637974374. An earlier run sits beside it.
+        with tempfile.TemporaryDirectory() as directory:
+            latest = self.runs(
+                directory,
+                {
+                    "run-1792630492858.json": '{"timestamp": 1792630492858}',
+                    "run-1792637950786.json": '{"timestamp": 1792637974374}',
+                    "run-latest.json": '{"timestamp": 1792637974374}',
+                },
+            )
+            self.assertEqual(
+                export_deployment.latest_run(latest),
+                latest.with_name("run-1792637950786.json"),
+            )
+
+    def test_refuses_run_latest_without_a_twin(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            latest = self.runs(
+                directory,
+                {"run-1792630492858.json": '{"a": 1}', "run-latest.json": '{"a": 2}'},
+            )
+            with self.assertRaisesRegex(SystemExit, "found 0"):
+                export_deployment.latest_run(latest)
+
+    def test_refuses_run_latest_with_several_twins(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            latest = self.runs(
+                directory,
+                {"run-1.json": "{}", "run-2.json": "{}", "run-latest.json": "{}"},
+            )
+            with self.assertRaisesRegex(SystemExit, "found 2"):
+                export_deployment.latest_run(latest)
+
+    def test_refuses_a_missing_run_latest(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            self.assertRaisesRegex(SystemExit, "not found"),
+        ):
+            export_deployment.latest_run(Path(directory) / "run-latest.json")
 
 
 class WriteManifestTests(unittest.TestCase):

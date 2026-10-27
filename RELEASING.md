@@ -3,9 +3,11 @@
 Operational runbook. The concepts — what a release name *is*, the two version axes, why
 nothing here can break an existing indexer install — live in
 [`services/indexer/docs/VERSIONING.md`](services/indexer/docs/VERSIONING.md) and ADRs
-[0010](services/indexer/docs/adr/0010-extensional-contract-versions.md) and
-[0012](services/indexer/docs/adr/0012-release-names-and-latest-pointers.md); this file is
-the commands.
+[0010](services/indexer/docs/adr/0010-extensional-contract-versions.md),
+[0012](services/indexer/docs/adr/0012-release-names-and-latest-pointers.md) and
+[0013](services/indexer/docs/adr/0013-harness-deploys-from-deployment-records.md), and
+contracts [ADR-0006](docs/adr/0006-immutable-deployment-records.md); this file is the
+commands.
 
 There are two tracks:
 

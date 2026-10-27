@@ -370,6 +370,61 @@ class CommittedRecordTests(unittest.TestCase):
                 with self.subTest(latest=str(latest.relative_to(root))):
                     self.assertIn(latest.read_bytes(), versioned.values())
 
+    @staticmethod
+    def records() -> list[tuple[str, dict]]:
+        """``(name, record)`` for every committed versioned record."""
+        root = export_deployment.CONTRACTS / export_deployment.DEFAULT_DEPLOYMENTS
+        return [
+            (str(path.relative_to(root)), export_deployment.read_json(path, "deployment record"))
+            for path in sorted(root.glob("*/VolumeRegistry-*.json"))
+        ]
+
+    def test_records_have_the_fields_the_exporter_writes(self) -> None:
+        for name, record in self.records():
+            with self.subTest(record=name):
+                self.assertEqual(
+                    set(record),
+                    {
+                        "address",
+                        "abi",
+                        "bytecode",
+                        "transactionHash",
+                        "receipt",
+                        "args",
+                        "linkedData",
+                    },
+                )
+                self.assertRegex(record["address"], export_deployment.ADDRESS)
+                self.assertIsInstance(record["abi"], list)
+                self.assertRegex(record["bytecode"], r"0x(?:[0-9a-f]{2})+\Z")
+                self.assertRegex(record["transactionHash"], export_deployment.TRANSACTION_HASH)
+                self.assertIsInstance(record["receipt"], dict)
+                self.assertIsInstance(record["args"], list)
+                self.assertLessEqual(
+                    {"version", "chainId", "profile", "broadcast"}, set(record["linkedData"])
+                )
+
+    def test_records_do_not_cite_run_latest(self) -> None:
+        # Every broadcast rewrites run-latest.json; v2-rc2's record lost its deployment that way.
+        for name, record in self.records():
+            with self.subTest(record=name):
+                cited = Path(record["linkedData"]["broadcast"])
+                self.assertNotEqual(cited.name, export_deployment.LATEST_BROADCAST)
+
+    def test_cited_broadcast_holds_the_recorded_deployment(self) -> None:
+        for name, record in self.records():
+            with self.subTest(record=name):
+                broadcast = export_deployment.read_json(
+                    export_deployment.CONTRACTS / record["linkedData"]["broadcast"],
+                    "Forge broadcast",
+                )
+                deployments = [
+                    transaction
+                    for transaction in broadcast["transactions"]
+                    if transaction.get("transactionType") in export_deployment.DEPLOYMENT_TYPES
+                    and transaction.get("hash", "").lower() == record["transactionHash"].lower()
+                ]
+                self.assertEqual(len(deployments), 1)
 
 if __name__ == "__main__":
     unittest.main()

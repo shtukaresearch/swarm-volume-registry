@@ -10,6 +10,10 @@ A deployment is either a plain contract-creation transaction (``CREATE``; releas
 v2-rc2) or a call to ``deploy.CREATE2_FACTORY`` whose calldata is salt ‖ initcode
 (``CREATE2``). A CREATE2 deployment must be salted with ``deploy.release_salt(version)``,
 and its address is recomputed from factory, salt and initcode with ``cast``.
+
+A record's ``bytecode`` is the deployed creation bytecode: the initcode without its
+ABI-encoded constructor arguments (which must be the profile's), equal to the compiled
+artifact's. It is what a consumer needs to redeploy the release, e.g. in tests.
 """
 
 from __future__ import annotations
@@ -245,17 +249,41 @@ def normalized_receipt(receipt: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def validate_artifact(artifact: dict[str, Any], deployed_initcode: str) -> list[Any]:
+def constructor_args(profile: dict[str, Any]) -> list[Any]:
+    """``VolumeRegistry(postageStamp, bzz, graceBlocks)``'s arguments, as the profile sets them."""
+    return [profile["postage_stamp"], profile["bzz"], profile["grace_blocks"]]
+
+
+def encode_constructor_args(args: list[Any]) -> str:
+    """``abi.encode(address, address, uint64)`` of ``args``, as hex without a prefix."""
+    postage_stamp, bzz, grace_blocks = args
+    return (
+        postage_stamp.lower().removeprefix("0x").rjust(64, "0")
+        + bzz.lower().removeprefix("0x").rjust(64, "0")
+        + format(grace_blocks, "064x")
+    )
+
+
+def creation_bytecode(initcode: str, args: list[Any]) -> str:
+    """The deployed creation bytecode: ``initcode`` without its ABI-encoded ``args``."""
+    initcode = initcode.lower()
+    encoded = encode_constructor_args(args)
+    if not initcode.endswith(encoded):
+        fail("deployed initcode does not end with the profile's encoded constructor arguments")
+    return initcode[: len(initcode) - len(encoded)]
+
+
+def validate_artifact(artifact: dict[str, Any], deployed_bytecode: str) -> list[Any]:
     abi = artifact.get("abi")
     if not isinstance(abi, list):
         fail("contract artifact is missing its ABI array")
 
     bytecode = artifact.get("bytecode")
-    artifact_initcode = bytecode.get("object") if isinstance(bytecode, dict) else None
-    if not isinstance(artifact_initcode, str) or not artifact_initcode.startswith("0x"):
+    artifact_bytecode = bytecode.get("object") if isinstance(bytecode, dict) else None
+    if not isinstance(artifact_bytecode, str) or not artifact_bytecode.startswith("0x"):
         fail("contract artifact is missing its creation bytecode")
-    if not deployed_initcode.lower().startswith(artifact_initcode.lower()):
-        fail("compiled artifact bytecode does not match the deployed initcode")
+    if artifact_bytecode.lower() != deployed_bytecode:
+        fail("compiled artifact bytecode does not match the deployed creation bytecode")
     return abi
 
 
@@ -298,7 +326,9 @@ def build_manifest(
     validate_profile(profile_name, profile, broadcast, transaction)
 
     initcode, salt = deployment_initcode(transaction, version)
-    abi = validate_artifact(artifact, initcode)
+    args = constructor_args(profile)
+    bytecode = creation_bytecode(initcode, args)
+    abi = validate_artifact(artifact, bytecode)
 
     if broadcast_path.name == LATEST_BROADCAST:
         fail(f"a record must cite an immutable run file, not {LATEST_BROADCAST}")
@@ -320,13 +350,10 @@ def build_manifest(
     return {
         "address": transaction["contractAddress"],
         "abi": abi,
+        "bytecode": bytecode,
         "transactionHash": transaction["hash"],
         "receipt": normalized_receipt(receipt),
-        "args": [
-            profile["postage_stamp"],
-            profile["bzz"],
-            profile["grace_blocks"],
-        ],
+        "args": args,
         "linkedData": linked_data,
     }
 

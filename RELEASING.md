@@ -114,7 +114,9 @@ broadcast/DeployVolumeRegistry.s.sol/<chain-id>/run-latest.json
 ```
 
 Retain this broadcast output. Forge uses it as an execution journal, and it provides
-the detailed audit trail for the deployment.
+the detailed audit trail for the deployment. The timestamped `run-<ms>.json` (named for
+the run's start) is a byte-identical copy of `run-latest.json` at this point; the next
+broadcast overwrites `run-latest.json` but never the timestamped file.
 
 ### A3. Export the deployment record
 
@@ -133,10 +135,16 @@ deployments/sepolia/.chainId
 deployments/sepolia/VolumeRegistry-v2-rc3.json
 ```
 
+The exporter reads `run-latest.json` and cites, as the record's `linkedData.broadcast`,
+the one `run-<ms>.json` beside it with identical bytes. To export an earlier broadcast,
+pass its timestamped file with `--broadcast`.
+
 The versioned record is immutable: it contains the address and ABI required for
 discovery, plus its transaction hash, receipt, constructor arguments, release name and
 source-broadcast metadata. The exporter refuses to write a record when:
 
+- `run-latest.json` has no single identical `run-<ms>.json` beside it, or the record
+  would cite `run-latest.json` itself;
 - the release name is not `vN` or `vN-rcM`;
 - the network already records a different deployment under that name;
 - the broadcast chain differs from the selected profile;

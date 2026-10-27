@@ -143,16 +143,18 @@ one you meant, and which of the checks below catch it, is recorded in
 contracts [ADR-0006](docs/adr/0006-immutable-deployment-records.md).
 
 The versioned record is immutable: it contains the address and ABI required for
-discovery, plus its transaction hash, receipt, constructor arguments, release name and
-source-broadcast metadata. The exporter refuses to write a record when:
+discovery, the creation bytecode deployed (without constructor arguments), plus its
+transaction hash, receipt, constructor arguments, release name and source-broadcast
+metadata. The exporter refuses to write a record when:
 
 - without `--broadcast`, `run-latest.json` has no single identical `run-<ms>.json`
   beside it; or the record would cite `run-latest.json` itself;
 - the release name is not `vN` or `vN-rcM`;
 - the network already records a different deployment under that name;
 - the broadcast chain differs from the selected profile;
-- the constructor arguments differ from the profile;
-- the compiled creation bytecode differs from the deployment transaction;
+- the constructor arguments differ from the profile, or the deployed initcode does not
+  end with their encoding;
+- the compiled creation bytecode differs from the deployed creation bytecode;
 - there is not exactly one matching contract creation;
 - the receipt failed or its deployed address does not match; or
 - the network directory already belongs to another chain ID.

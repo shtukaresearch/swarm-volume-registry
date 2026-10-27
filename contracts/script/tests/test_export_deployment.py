@@ -22,6 +22,12 @@ PROFILE = {
 }
 ADDRESS = "0x33a53c79a08ed1f863905cd4c6ce036a4c493729"
 TX_HASH = "0x59dd245cd9d30e53175a38930b437f9048c5ce47ff20588ec46fd4359d225924"
+# abi.encode(postage_stamp, bzz, grace_blocks) of PROFILE.
+ENCODED_ARGS = (
+    "000000000000000000000000cdfdc3752caaa826fe62531e0000c40546ec56a6"
+    "000000000000000000000000543ddb01ba47acb11de34891cd86b675f04840db"
+    "000000000000000000000000000000000000000000000000000000000000000c"
+)
 BROADCAST_PATH = export_deployment.CONTRACTS / "broadcast/example/run-1787275286220.json"
 
 
@@ -34,7 +40,7 @@ def broadcast_fixture() -> dict:
                 "contractName": "VolumeRegistry",
                 "contractAddress": ADDRESS,
                 "arguments": [PROFILE["postage_stamp"], PROFILE["bzz"], "12"],
-                "transaction": {"input": "0x6000c0ffee"},
+                "transaction": {"input": "0x6000" + ENCODED_ARGS},
             }
         ],
         "receipts": [
@@ -82,6 +88,22 @@ class BuildManifestTests(unittest.TestCase):
         self.assertEqual(manifest["args"][2], 12)
         self.assertEqual(manifest["linkedData"]["chainId"], 11155111)
         self.assertEqual(manifest["linkedData"]["version"], VERSION)
+
+    def test_records_creation_bytecode_without_constructor_args(self) -> None:
+        manifest = self.build()
+
+        self.assertEqual(manifest["bytecode"], "0x6000")
+        self.assertEqual(
+            manifest["args"],
+            [PROFILE["postage_stamp"], PROFILE["bzz"], PROFILE["grace_blocks"]],
+        )
+
+    def test_rejects_initcode_without_the_profiles_args(self) -> None:
+        broadcast = broadcast_fixture()
+        broadcast["transactions"][0]["transaction"]["input"] = "0x6000c0ffee"
+
+        with self.assertRaisesRegex(SystemExit, "encoded constructor arguments"):
+            self.build(broadcast)
 
     def test_cites_the_broadcast_it_was_built_from(self) -> None:
         manifest = self.build()
@@ -137,9 +159,9 @@ class BuildManifestTests(unittest.TestCase):
 
 
 # CREATE2 through the factory, salted with release_salt(VERSION). The address is
-# `cast compute-address <factory> --salt <salt> --init-code 0x6000c0ffee`.
+# `cast compute-address <factory> --salt <salt> --init-code 0x6000<ENCODED_ARGS>`.
 CREATE2_SALT = "0x76322d7263310000000000000000000000000000000000000000000000000000"
-CREATE2_ADDRESS = "0xfc31a2aafb4f0ebaf814b3039f7b15dedfb7fded"
+CREATE2_ADDRESS = "0x42d7ab7f5ec9687bf1d2ec74a74d257c05dc573a"
 FACTORY = "0x4e59b44847b379578588920ca78fbf26c0b4956c"
 
 
@@ -148,7 +170,7 @@ def create2_broadcast_fixture(salt: str = CREATE2_SALT) -> dict:
     transaction = broadcast["transactions"][0]
     transaction["transactionType"] = "CREATE2"
     transaction["contractAddress"] = CREATE2_ADDRESS
-    transaction["transaction"] = {"to": FACTORY, "input": salt + "6000c0ffee"}
+    transaction["transaction"] = {"to": FACTORY, "input": salt + "6000" + ENCODED_ARGS}
     receipt = broadcast["receipts"][0]
     receipt["contractAddress"] = None
     receipt["to"] = FACTORY
@@ -175,6 +197,7 @@ class Create2ManifestTests(unittest.TestCase):
         manifest = self.build(create2_broadcast_fixture())
 
         self.assertEqual(manifest["address"], CREATE2_ADDRESS)
+        self.assertEqual(manifest["bytecode"], "0x6000")
         self.assertEqual(
             manifest["linkedData"]["create2"], {"factory": FACTORY, "salt": CREATE2_SALT}
         )

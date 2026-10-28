@@ -140,7 +140,7 @@ After changing `wrangler.jsonc`, run `pnpm types` and commit `worker-configurati
 To run it locally against a real chain, put the four secrets in `.dev.vars` (see `.dev.vars.example`), then:
 
 ```bash
-pnpm dev --var DRY_RUN:true          # wrangler dev --env sepolia-v2-rc3-v2-rc3
+pnpm dev --var DRY_RUN:true          # wrangler dev --env sepolia-v2-rc3
 curl "localhost:8787/cdn-cgi/local/scheduled?format=json"
 ```
 

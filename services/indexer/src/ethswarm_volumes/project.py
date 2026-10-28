@@ -35,6 +35,11 @@ PAID_IN_WINDOW_DAYS: tuple[int, ...] = (1, 7, 30)
 #: Seconds in a UTC calendar day.
 ONE_DAY = 86_400
 
+#: The events that add a volume to the active set, each carrying ``volume_id``, ``owner``
+#: and ``depth``: a create, and (from v2-rc3) an import of an existing Postage batch. The
+#: projector is version-blind: a version that never emits one simply has no such rows.
+ADMIT_EVENTS: tuple[str, ...] = ("VolumeCreated", "VolumeImported")
+
 #: Atomic units (PLUR) per 1 BZZ. BZZ has 16 decimals; the conversion to the artifact's
 #: lossy ``float`` BZZ divides by this.
 BZZ_DECIMALS = 16
@@ -78,8 +83,9 @@ def fee_volume_daily(events: EventLog, *, as_of: datetime) -> list[DailyFee]:
 
     Every captured ``Transfer`` row is a fee forward (registry -> postage); its BZZ value
     is summed into its UTC day. The ``Toppedup`` / ``VolumeCreated`` siblings carry no
-    additional BZZ (they only name the volume), and ``TopupSkipped`` moves none — so the
-    daily flow is exactly the sum of ``Transfer`` values. Empty days are present with
+    additional BZZ (they only name the volume), and ``TopupSkipped`` and ``VolumeImported``
+    move none (an ``importVolume`` fee is its ``Toppedup`` pair) — so the daily flow is
+    exactly the sum of ``Transfer`` values. Empty days are present with
     ``bzz == 0`` (gap-filled). Amounts convert PLUR -> BZZ (lossy).
     """
     as_of_ts = _epoch(as_of)
@@ -106,15 +112,15 @@ def fee_volume_daily(events: EventLog, *, as_of: datetime) -> list[DailyFee]:
 def _active_set_at(events: EventLog, cutoff_ts: int) -> dict[str, int]:
     """The active volumes (``volume_id -> depth``) as of ``cutoff_ts`` (inclusive).
 
-    Replays the ``VolumeCreated`` / ``VolumeRetired`` logs in chain order: a create adds
-    the volume at its depth, any retire reason removes it. Rows are in non-decreasing
-    ``block_ts`` order, so the walk stops at the first event past the cutoff.
+    Replays the admit (:data:`ADMIT_EVENTS`) / ``VolumeRetired`` logs in chain order: an
+    admit adds the volume at its depth, any retire reason removes it. Rows are in
+    non-decreasing ``block_ts`` order, so the walk stops at the first event past the cutoff.
     """
     active: dict[str, int] = {}
-    for row in events.of("VolumeCreated", "VolumeRetired"):
+    for row in events.of(*ADMIT_EVENTS, "VolumeRetired"):
         if _epoch(row.block_ts) > cutoff_ts:
             break
-        if row.event_name == "VolumeCreated":
+        if row.event_name in ADMIT_EVENTS:
             active[row.args["volume_id"]] = row.args["depth"]
         else:
             active.pop(row.args["volume_id"], None)
@@ -124,19 +130,19 @@ def _active_set_at(events: EventLog, cutoff_ts: int) -> dict[str, int]:
 def capacity_daily(events: EventLog, *, as_of: datetime) -> list[DailyCapacity]:
     """Per-UTC-day capacity level (stock), sampled at each day's end.
 
-    Active-set membership is reconstructed from the ``VolumeCreated`` / ``VolumeRetired``
-    logs merged in chain order (any retire reason removes). ``nominal_bytes`` /
-    ``effective_bytes`` sum the per-depth lookups (:mod:`ethswarm_volumes.capacity`) over
-    the active set at the day boundary. A volume created and retired within one day is
-    absent at day end.
+    Active-set membership is reconstructed from the admit (:data:`ADMIT_EVENTS`) /
+    ``VolumeRetired`` logs merged in chain order (any retire reason removes).
+    ``nominal_bytes`` / ``effective_bytes`` sum the per-depth lookups
+    (:mod:`ethswarm_volumes.capacity`) over the active set at the day boundary. A volume
+    admitted and retired within one day is absent at day end.
     """
     as_of_ts = _epoch(as_of)
     as_of_day = as_of_ts // ONE_DAY
 
-    creates = events.of("VolumeCreated")
+    admits = events.of(*ADMIT_EVENTS)
     first_day = (
-        min(_epoch(r.block_ts) // ONE_DAY for r in creates if _epoch(r.block_ts) <= as_of_ts)
-        if any(_epoch(r.block_ts) <= as_of_ts for r in creates)
+        min(_epoch(r.block_ts) // ONE_DAY for r in admits if _epoch(r.block_ts) <= as_of_ts)
+        if any(_epoch(r.block_ts) <= as_of_ts for r in admits)
         else as_of_day
     )
 
@@ -198,15 +204,16 @@ def accounts_daily(events: EventLog, *, as_of: datetime) -> list[DailyAccounts]:
 def _owner_timeline(events: EventLog) -> dict[str, list[tuple[int, str]]]:
     """Per-volume ownership history: ``volume_id -> [(block, owner), ...]`` in chain order.
 
-    The initial owner comes from ``VolumeCreated``; each ``VolumeOwnershipTransferred``
-    appends the new owner. Keyed by ``block_number`` only: ownership is resolved *up to the
-    payment block* (``docs/data-model/projection.md``), and the create that establishes a
-    volume's first owner is emitted in the same tx as — but at a higher ``log_index`` than —
-    its own create-fee ``Transfer``, so a (block, log_index) cut would miss it.
+    The initial owner comes from the admit (:data:`ADMIT_EVENTS`); each
+    ``VolumeOwnershipTransferred`` appends the new owner. Keyed by ``block_number`` only:
+    ownership is resolved *up to the payment block* (``docs/data-model/projection.md``), and
+    the create that establishes a volume's first owner is emitted in the same tx as — but at
+    a higher ``log_index`` than — its own create-fee ``Transfer``, so a (block, log_index)
+    cut would miss it.
     """
     timeline: dict[str, list[tuple[int, str]]] = defaultdict(list)
-    for row in events.of("VolumeCreated", "VolumeOwnershipTransferred"):
-        owner = row.args["owner"] if row.event_name == "VolumeCreated" else row.args["to"]
+    for row in events.of(*ADMIT_EVENTS, "VolumeOwnershipTransferred"):
+        owner = row.args["owner"] if row.event_name in ADMIT_EVENTS else row.args["to"]
         timeline[row.args["volume_id"]].append((row.block_number, owner))
     return timeline
 
@@ -218,7 +225,9 @@ def paid_in_window(
 
     Each captured ``Transfer`` is a payment; its same-tx sibling (``VolumeCreated`` /
     ``Toppedup``, matched in ``log_index`` order — a batched ``trigger`` interleaves
-    several pairs) names the volume, and the payment is attributed to the volume's owner
+    several pairs) names the volume. ``VolumeImported`` is never a sibling: it moves no
+    BZZ, and the fee of an ``importVolume`` is the tx's ``Toppedup`` pair. The payment is
+    attributed to the volume's owner
     *resolved at the payment block* (replaying the ownership log). An account paying twice
     counts once; the window boundary is inclusive of payments exactly ``N`` days before
     ``as_of``. Returns e.g. ``{"1d": 3, "7d": 9, "30d": 20}``.

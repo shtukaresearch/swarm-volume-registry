@@ -55,10 +55,12 @@ def _project(chain, as_of_ts: int):
 
 @pytest.mark.parametrize(
     "driver",
-    [H.drive_basic, H.drive_revoke_reconfirm],
-    ids=["basic", "revoke-reconfirm"],
+    [H.drive_basic, H.drive_revoke_reconfirm, H.drive_register_import],
+    ids=["basic", "revoke-reconfirm", "register-import"],
 )
 def test_projection_matches_node_state(chain, driver):
+    if driver is H.drive_register_import and not chain.supports("importVolume"):
+        pytest.skip(f"{chain.version} cannot wrap an existing batch")
     as_of_ts = driver(chain)
     orc = H.oracle(chain, as_of_ts)
     entry = _project(chain, as_of_ts)

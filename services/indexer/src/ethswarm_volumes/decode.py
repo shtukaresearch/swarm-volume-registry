@@ -160,6 +160,43 @@ _V2_RC1_EVENT_ABIS: list[dict[str, Any]] = [
     abi for abi in _V1_EVENT_ABIS if abi["name"] != "VolumeOwnershipTransferred"
 ]
 
+#: v2-rc3 (Sepolia): volume IDs are no longer batch IDs, so ``VolumeCreated`` gains an
+#: indexed ``batchId`` (a new signature, hence a new topic0), and the new
+#: ``VolumeImported`` admits a volume wrapping an existing Postage batch (``registerVolume``
+#: / ``importVolume``). The reason codes became Solidity enums whose unused ``None = 0``
+#: keeps every emitted value equal to its old code, so the enum tables are unchanged.
+_V2_RC3_EVENT_ABIS: list[dict[str, Any]] = [
+    abi for abi in _V2_RC1_EVENT_ABIS if abi["name"] != "VolumeCreated"
+] + [
+    {
+        "type": "event",
+        "name": "VolumeCreated",
+        "anonymous": False,
+        "inputs": [
+            {"name": "volumeId", "type": "bytes32", "indexed": True},
+            {"name": "owner", "type": "address", "indexed": True},
+            {"name": "batchId", "type": "bytes32", "indexed": True},
+            {"name": "chunkSigner", "type": "address", "indexed": False},
+            {"name": "depth", "type": "uint8", "indexed": False},
+            {"name": "ttlExpiry", "type": "uint64", "indexed": False},
+        ],
+    },
+    {
+        "type": "event",
+        "name": "VolumeImported",
+        "anonymous": False,
+        "inputs": [
+            {"name": "volumeId", "type": "bytes32", "indexed": True},
+            {"name": "owner", "type": "address", "indexed": True},
+            {"name": "batchId", "type": "bytes32", "indexed": True},
+            {"name": "chunkSigner", "type": "address", "indexed": False},
+            {"name": "depth", "type": "uint8", "indexed": False},
+            {"name": "ttlExpiry", "type": "uint64", "indexed": False},
+            {"name": "normalisedBalance", "type": "uint256", "indexed": False},
+        ],
+    },
+]
+
 #: All version-specific reference data, keyed by ``registry_version``. Adding a key here
 #: is the act that makes a contract version *supported* — the single claim site gating
 #: registration (ADR-0011). A release with an unchanged indexer surface aliases its
@@ -169,6 +206,7 @@ _VERSIONS = {
     "v2-rc1": {"abis": _V2_RC1_EVENT_ABIS, "enums": _V1_ENUMS},
     # Same source as v2-rc1; only the constructor's graceBlocks differs.
     "v2-rc2": {"abis": _V2_RC1_EVENT_ABIS, "enums": _V1_ENUMS},
+    "v2-rc3": {"abis": _V2_RC3_EVENT_ABIS, "enums": _V1_ENUMS},
 }
 
 

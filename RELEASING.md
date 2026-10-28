@@ -1,22 +1,12 @@
 # Releasing
 
-Operational runbook. The concepts — what a release name *is*, the two version axes, why
-nothing here can break an existing indexer install — live in
-[`services/indexer/docs/VERSIONING.md`](services/indexer/docs/VERSIONING.md) and ADRs
-[0010](services/indexer/docs/adr/0010-extensional-contract-versions.md),
-[0012](services/indexer/docs/adr/0012-release-names-and-latest-pointers.md) and
-[0013](services/indexer/docs/adr/0013-harness-deploys-from-deployment-records.md), and
-contracts [ADR-0006](docs/adr/0006-immutable-deployment-records.md); this file is the
-commands.
+Operational runbook. Deployment records are specified by contracts
+[ADR-0006](docs/adr/0006-immutable-deployment-records.md).
 
-There are two tracks:
-
-- A **contract release** deploys a `VolumeRegistry` (Part A) and, when the indexer should
-  follow it, teaches the `ethswarm-volumes` package about it (Part B). Part B may follow
-  Part A in the same PR or much later: until it ships, installed indexers simply do not
-  see the new deployment. Part C starts the keeper we run for it.
-- A **package-only release** ships indexer/client changes with no new contract (step B4
-  alone).
+A **contract release** deploys a `VolumeRegistry` (Part A), adds it to the
+`ethswarm-volumes` package when the indexer should follow it (Part B), and starts the
+keeper we run for it (Part C). A **package-only release** ships indexer or client changes
+with no new contract; it is step B4 of Part B.
 
 ## Release names
 
@@ -28,11 +18,12 @@ Every deployment carries a release name, used verbatim as the git tag, the
 - **`vN`** — a mainnet release. It gets its own name even when its source is identical to
   the last release candidate.
 
-A network holds at most one deployment per name; a redeploy is a new name. Deploying the
-same release to another network reuses the name (no new tag).
+Deploying the same release to another network reuses the name (no new tag). Deploying a
+release twice to one network is not supported: records are named by release, a CREATE2
+deployment is salted with the release name, and the package labels a deployment
+`<network>-<release>` (`gnosis-v1`, `sepolia-v2-rc1`).
 
-A deployment is labelled `<network>-<name>` (`gnosis-v1`, `sepolia-v2-rc1`). The bare
-network name is a **latest pointer**, moved only by an explicit step below (A4 on the
+The bare network name is a **latest pointer**, moved only by an explicit step (A4 on the
 contracts side, B3 in the package).
 
 ## Part A — Deploy a contract release
@@ -300,78 +291,10 @@ release.
 
 ## Part B — Add the release to `ethswarm-volumes`
 
-Run commands in this part from the repository root. Nothing in Part B changes what is
-deployed; it is the package's acknowledgement that it can index the release
-([ADR-0011](services/indexer/docs/adr/0011-derived-deployment-registry.md)).
-
-### B1. Add the decode reference data
-
-In `services/indexer/src/ethswarm_volumes/decode.py`, add the `_VERSIONS["v2-rc3"]` entry:
-
-- events ABI + enum tables for the new surface, **or**
-- a one-line alias of the predecessor's entry if the indexer-visible surface is unchanged
-  (e.g. a gas-only release, or a mainnet `vN` identical to its last release candidate).
-
-`test_decoder.py::test_pinned_abis_match_version_fixture` fails until this and the
-ABI in the release's deployment records agree verbatim. Adding the entry is also what
-puts the release under test: the harness deploys every supported version from its
-records, so no fixture needs vendoring.
-
-### B2. Handle changed semantics (only if they changed)
-
-B1 teaches the package to *decode* the release; this step checks it still *means* the same.
-Diff the contract source against the previous release tag
-(`git diff <previous-tag> <tag> -- contracts/src`) and ask whether anything the indexer
-relies on changed: what an event signifies, how fees flow to Postage, what adds a volume
-to or removes it from the active set, how accounts are authorized or revoked, or the
-wiring getters (`postage`, `bzz`, `graceBlocks`, `priceOracle`). A pure removal can need
-nothing — v2-rc1 dropped ownership transfer, and without transfer events every volume
-simply stays with its creator.
-
-If something changed, update the tests and the implementation together:
-
-- **Tests.** Run the suite first: the `chain` fixture runs every existing scenario against
-  the new fixture and checks the projection against state read back from the node, so a
-  changed fee flow, capacity rule or authorization rule already fails there. For
-  behaviour the existing scenarios don't reach, add scenarios, and give the release its
-  own `Chain` driver variant in `services/indexer/tests/harness.py` if its calls or
-  signatures changed (see
-  [`services/indexer/docs/TESTING.md`](services/indexer/docs/TESTING.md) §2a).
-- **Implementation.** Make the projection version-aware where the meaning changed:
-  `project.py` (the fold from `event_log` to the three measures; a single projector
-  serves every version today, so the first semantic change introduces dispatch on
-  `registry_version`) and `node.resolve_extra` (the wiring reads and the version-specific
-  `extra`, documented in
-  [`services/indexer/docs/SCHEMA.md`](services/indexer/docs/SCHEMA.md) §3).
-- **Artifact.** The three measures and the artifact kernel stay stable across contract
-  versions ([ADR-0001](services/indexer/docs/adr/0001-three-measures.md)); new
-  version-specific facts go in `extra` or an additive section (a `schema_version` minor
-  bump). A change the kernel cannot absorb is a `schema_version` major bump — see
-  [`services/indexer/docs/VERSIONING.md`](services/indexer/docs/VERSIONING.md).
-
-### B3. Register the deployments and latest pointers
-
-Derive the package's registry from the committed deployment records — nothing is
-hand-transcribed:
-
-```sh
-uv run --project services/indexer services/indexer/scripts/derive_deployments.py
-```
-
-This adds an entry for every versioned record whose release is in `_VERSIONS` and not
-yet registered, and sets the package's `latest` pointer for each network whose
-`VolumeRegistry.json` names a registered deployment. Records of unsupported releases are
-reported and left alone, and so is the pointer that names one. Pass
-`--exclude NETWORK-VERSION` to keep a recorded deployment out of the fleet. Review the
-diff to `services/indexer/src/ethswarm_volumes/deployments.json` and commit.
-
-### B4. Release the package
-
-- Bump `version` in `services/indexer/pyproject.toml`.
-- PR to `main`. `indexer-ci` runs on the PR; on merge, the publish workflow
-  ([`.github/workflows/publish-python.yml`](.github/workflows/publish-python.yml)) reruns
-  it and uploads to PyPI via trusted publishing. Uploads are idempotent
-  (`skip-existing`), so only the version-raising merge publishes.
+Steps B1–B4 are in [`services/indexer/docs/RELEASING.md`](services/indexer/docs/RELEASING.md):
+add the decode reference data (B1), handle changed semantics (B2), register the
+deployments and latest pointers with `derive_deployments.py` (B3), and release the
+package (B4).
 
 ## Part C — Start a keeper for the deployment
 
@@ -452,7 +375,3 @@ pnpm exec wrangler tail --env sepolia-v2-rc3 --format json
 ```
 
 Wait for one cron tick and confirm the run reports `ok` against the new registry address.
-
-## Package-only release
-
-Step B4 alone: bump `version` in `services/indexer/pyproject.toml`, PR to `main`, merge.

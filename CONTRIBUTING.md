@@ -115,8 +115,8 @@ uv run --group dev python -m pytest
 uvx ruff check . && uvx ruff format --check .
 ```
 
-The suite deploys pinned per-release contract fixtures, not contracts `HEAD`, so contract
-changes never break it. CI runs the same steps (`.github/workflows/indexer-ci.yml`);
+The suite deploys each supported release from its deployment record, not contracts
+`HEAD`, so contract changes never break it. CI runs the same steps (`.github/workflows/indexer-ci.yml`);
 publishing to PyPI goes through `.github/workflows/publish-python.yml`. Design and
 decision records are in its [docs](./services/indexer/docs/README.md); releasing is in
-[`RELEASING.md`](./RELEASING.md).
+[`services/indexer/docs/RELEASING.md`](./services/indexer/docs/RELEASING.md).

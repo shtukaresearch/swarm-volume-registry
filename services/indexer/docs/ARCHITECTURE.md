@@ -1,6 +1,6 @@
 # Volume Registry Data API — Architecture
 
-The architecture of the data API wrapping the `VolumeRegistry` contract. It covers components, data flow, the web3-isolation seam, and delivery. The goal and the three measures are in [`README.md`](./README.md); the data model in [`data-model/`](./data-model/); the client interface in [`CLIENT.md`](./CLIENT.md); the versioning & upgrade path in [`VERSIONING.md`](./VERSIONING.md); the wire format in [`SCHEMA.md`](./SCHEMA.md); decision rationale in [`adr/`](./adr/).
+The architecture of the data API wrapping the `VolumeRegistry` contract. It covers components, data flow, the web3-isolation seam, and delivery. The goal and the three measures are in [`README.md`](./README.md); the data model in [`data-model/`](./data-model/); the client interface in [`CLIENT.md`](./CLIENT.md); how a contract release reaches the package in [`RELEASING.md`](./RELEASING.md); the wire format in [`SCHEMA.md`](./SCHEMA.md); decision rationale in [`adr/`](./adr/).
 
 ## 1. Components
 
@@ -64,6 +64,6 @@ This is one of the two clean seams of the system (§4). The row shape it produce
 
 - Three measures × identical temporal access patterns (as-of / window / series); flow-vs-stock is the one structural difference.
 - One artifact, two renderers (CLI / planned dashboard) with shared option semantics.
-- Stable public contract (artifact) over per-version private decode (the per-deployment, per-event-type [`event_log`](./data-model/event-log.md) + the projector for the deployment's `registry_version` — one projector serves every version so far; per-version dispatch arrives with the first release whose semantics differ).
+- Stable public contract (artifact) over per-version private decode (the per-deployment, per-event-type [`event_log`](./data-model/event-log.md) + the projector for the deployment's `registry_version`; one serves every version so far, see [projection](./data-model/projection.md)).
 - The web3 layer acquires per event type, the store keeps per event type, and the projector merges only the logs each measure needs — one shape across acquisition, storage, and read.
 - Two clean seams: `event_log` separates web3 from everything else (§2); the artifact separates the indexer write path from the client read path.

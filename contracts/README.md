@@ -77,9 +77,6 @@ deployments/<network>/VolumeRegistry-<release>.json   one immutable record per r
 deployments/<network>/VolumeRegistry.json             copy of the current one (--latest)
 ```
 
-Release names are `vN` on a mainnet and `vN-rcM` for a testnet release candidate; a
-network holds one deployment per name.
-
 Commit the deployment record together with its production broadcast files. See
 [`RELEASING.md`](../RELEASING.md) for the complete release procedure.
 

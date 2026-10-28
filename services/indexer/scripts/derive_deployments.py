@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Derive registry entries from the committed deployment records (release step B3).
+"""Derive registry entries from the committed deployment records (``docs/RELEASING.md`` B3).
 
 Registration made mechanical but **manually triggered** (ADR-0011,
 ``services/indexer/docs/adr/0011-derived-deployment-registry.md``): this script scans the

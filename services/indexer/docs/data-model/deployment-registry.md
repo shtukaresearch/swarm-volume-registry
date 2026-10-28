@@ -13,7 +13,7 @@ deployment(
 latest(network -> label)   -- explicit pointer: what the bare network name means
 ```
 
-A network holds at most one deployment per release, so the label is a second key. The `latest` pointer is set only by a release step, never inferred from version order ([ADR-0012](../adr/0012-release-names-and-latest-pointers.md)).
+The `latest` pointer is set only by a release step, never inferred from version order ([ADR-0012](../adr/0012-release-names-and-latest-pointers.md)).
 
 Version-specific facts (`grace_blocks`, dependency addresses) live in the artifact's `extra` ([`SCHEMA.md`](../SCHEMA.md)).
 

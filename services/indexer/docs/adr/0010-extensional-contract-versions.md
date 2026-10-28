@@ -1,6 +1,6 @@
 # ADR-0010: `registry_version` names a deployed release; fixtures pinned per version
 
-Status: Accepted; release-name grammar (`vN`, `vN-rcM`) in [ADR-0012](./0012-release-names-and-latest-pointers.md); per-version fixtures replaced by deployment records in [ADR-0013](./0013-harness-deploys-from-deployment-records.md)
+Status: Superseded. Release names are defined by the repository's [`RELEASING.md`](../../../../RELEASING.md) ("Release names"); the harness deploys each release from its deployment record per [ADR-0013](./0013-harness-deploys-from-deployment-records.md); how the package adds a release is [`RELEASING.md`](../RELEASING.md)
 
 ## Context
 

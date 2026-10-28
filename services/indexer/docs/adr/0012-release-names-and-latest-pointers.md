@@ -1,6 +1,6 @@
 # ADR-0012: Release names, `<network>-<version>` labels, explicit latest pointers
 
-Status: Accepted; `stat` resolves bare names through the registry, not the artifact's map, per [ADR-0014](./0014-stat-resolves-through-the-registry.md)
+Status: Accepted in part. Release names, including the one-deployment-per-name rule, are superseded by the repository's [`RELEASING.md`](../../../../RELEASING.md) ("Release names"), which states that rule as a limitation; `stat` resolves bare names through the registry, not the artifact's map, per [ADR-0014](./0014-stat-resolves-through-the-registry.md)
 
 ## Context
 

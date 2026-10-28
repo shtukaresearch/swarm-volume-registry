@@ -6,7 +6,7 @@ Design documents for the data API wrapping the `VolumeRegistry` contract (the co
 - [`ARCHITECTURE.md`](./ARCHITECTURE.md) — components, the web3-isolation boundary, versioning, delivery, and the cross-cutting symmetries.
 - [`data-model/`](./data-model/) — the persisted things and the projection: the [deployment registry](./data-model/deployment-registry.md), the [`event_log`](./data-model/event-log.md), and the [projection](./data-model/projection.md).
 - [`CLIENT.md`](./CLIENT.md) — the `ethswarm-volumes` client interface (`sync` / `stat`).
-- [`VERSIONING.md`](./VERSIONING.md) — the versioning axes and upgrade path.
+- [`RELEASING.md`](./RELEASING.md) — adding a contract release to the package, and releasing the package.
 - [`SCHEMA.md`](./SCHEMA.md) — the artifact wire format and the client `--json` view-model.
 - [`TESTING.md`](./TESTING.md) — the test strategy.
 - [`adr/`](./adr/) — the decision records (the *why* behind what these docs state).

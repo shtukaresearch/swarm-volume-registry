@@ -20,10 +20,9 @@ and its mitigations.
 | Sepolia (chain 11155111) | `v2-rc2` | `0x00f72ee2970df8112fdf04c0225b33c43c5a4177` | `300` (≈ 1 h at 12-second blocks) |
 | Sepolia (chain 11155111) | `v2-rc3` | `0xab326d6dbdcd1e90e06af22f4e72fa480078745e` | `300` (≈ 1 h at 12-second blocks) |
 
-Releases are named `vN` on mainnet and `vN-rcM` for testnet release candidates; each name is
-a git tag. Machine-readable records live in
-[`contracts/deployments/`](./contracts/deployments), one `VolumeRegistry-<release>.json` per
-deployment plus a `VolumeRegistry.json` copy of the network's current one. See
+Machine-readable records live in [`contracts/deployments/`](./contracts/deployments), one
+`VolumeRegistry-<release>.json` per deployment plus a `VolumeRegistry.json` copy of the
+network's current one. Release names and the release procedure are in
 [`RELEASING.md`](./RELEASING.md).
 
 Companion-contract addresses (`PostageStamp`, `BZZ`, `PriceOracle`) and runtime discovery snippets are in [`docs/usage.md`](./docs/usage.md) §2. `graceBlocks` is constructor-immutable; a different runway target requires a fresh deployment.

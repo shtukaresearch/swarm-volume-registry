@@ -12,10 +12,19 @@ Skips with the rest of the integration suite when ``anvil`` / artifacts are abse
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 
 import pytest
 
 from ethswarm_volumes import capacity, cli, registry, serialize, store
+from ethswarm_volumes.model import (
+    AccountsSnapshot,
+    Artifact,
+    ArtifactEntry,
+    AsOf,
+    Capacity,
+    Snapshot,
+)
 
 import harness as H
 
@@ -33,8 +42,8 @@ def _write_config(tmp_path, chain) -> str:
                         "registry": chain.s.registry.address,
                     }
                 ],
-                # the bare network resolves through the explicit pointer, carried into
-                # the artifact so `stat anvil` works against the published file
+                # the bare network resolves through the explicit pointer, for `sync anvil`
+                # and `stat anvil` alike
                 "latest": {"anvil": f"anvil-{chain.version}"},
             }
         )
@@ -112,7 +121,17 @@ def test_cli_sync_then_stat(chain, tmp_path, capsys):
 
     # --- stat --json reads the artifact back and folds it ---
     rc = cli.main(
-        ["--store-dir", store_dir, "stat", "anvil", "--source", str(artifact_path), "--json"]
+        [
+            "--store-dir",
+            store_dir,
+            "stat",
+            "anvil",
+            "--config",
+            cfg,
+            "--source",
+            str(artifact_path),
+            "--json",
+        ]
     )
     assert rc == 0
     summary = json.loads(capsys.readouterr().out)
@@ -320,3 +339,117 @@ def test_rpc_variables_are_named_by_chain_short_name():
     assert cli.rpc_env(11155111) == "SEP_RPC_URL"
     assert cli.rpc_env(31337) is None  # no short name: --rpc is required
     assert cli.RPC_ENV == "GNO_RPC_URL"  # a bare `sync` keeps its default
+
+
+# ---------------------------------------------------------------------------
+# stat selects through the registry's latest pointers (no node)
+# ---------------------------------------------------------------------------
+
+_TS = datetime(2030, 1, 1, tzinfo=timezone.utc)
+
+
+def _entry(label: str, registry_addr: str, active: int) -> ArtifactEntry:
+    """A minimal artifact entry; ``active`` tells entries apart in the rendered summary."""
+    return ArtifactEntry(
+        label=label,
+        chain_id=31337,
+        registry=registry_addr,
+        registry_version=label.removeprefix("anvil-"),
+        genesis_ts=_TS,
+        as_of=AsOf(block=1, ts=_TS),
+        fiat_currencies=[],
+        extra={},
+        snapshot=Snapshot(
+            fee_volume_total_bzz=0.0,
+            capacity=Capacity(active_volumes=active, nominal_bytes=0, effective_bytes=0),
+            accounts=AccountsSnapshot(authorized=0, paid_in_window={"1d": 0, "7d": 0, "30d": 0}),
+        ),
+        fee_volume_daily=[],
+        capacity_daily=[],
+        accounts_daily=[],
+        price_daily=[],
+    )
+
+
+def _stale_setup(tmp_path, *, entries, artifact_latest, registry_latest):
+    """An artifact written under one pointer, and a registry that has since moved it."""
+    artifact = Artifact(
+        schema_version=serialize.SCHEMA_VERSION,
+        generated_at=_TS,
+        deployments=entries,
+        latest=artifact_latest,
+    )
+    source = tmp_path / "artifact.json"
+    source.write_text(serialize.artifact_to_json(artifact))
+    cfg = tmp_path / "registry.json"
+    cfg.write_text(
+        json.dumps(
+            {
+                "deployments": [
+                    {
+                        "network": "anvil",
+                        "registry_version": v,
+                        "chain_id": 31337,
+                        "registry": addr,
+                    }
+                    for v, addr in (("v2-rc2", "0xaa"), ("v2-rc3", "0xbb"))
+                ],
+                "latest": registry_latest,
+            }
+        )
+    )
+    return str(source), str(cfg)
+
+
+def _stat(source, cfg, selector):
+    return cli.main(["stat", selector, "--config", cfg, "--source", source, "--json"])
+
+
+def test_stat_follows_the_registry_pointer_not_the_artifacts(tmp_path, capsys):
+    source, cfg = _stale_setup(
+        tmp_path,
+        entries=[_entry("anvil-v2-rc2", "0xaa", 2), _entry("anvil-v2-rc3", "0xbb", 3)],
+        artifact_latest={"anvil": "anvil-v2-rc2"},
+        registry_latest={"anvil": "anvil-v2-rc3"},
+    )
+    assert _stat(source, cfg, "anvil") == 0
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["deployment"]["label"] == "anvil-v2-rc3"
+    assert summary["capacity"]["active_volumes"] == 3
+
+
+def test_stat_refuses_a_pointer_the_artifact_does_not_carry(tmp_path, capsys):
+    source, cfg = _stale_setup(
+        tmp_path,
+        entries=[_entry("anvil-v2-rc2", "0xaa", 2)],
+        artifact_latest={"anvil": "anvil-v2-rc2"},
+        registry_latest={"anvil": "anvil-v2-rc3"},
+    )
+    assert _stat(source, cfg, "anvil") == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "anvil is anvil-v2-rc3" in captured.err and "run `sync anvil`" in captured.err
+
+
+def test_stat_label_selects_regardless_of_pointers(tmp_path, capsys):
+    source, cfg = _stale_setup(
+        tmp_path,
+        entries=[_entry("anvil-v2-rc2", "0xaa", 2), _entry("anvil-v2-rc3", "0xbb", 3)],
+        artifact_latest={"anvil": "anvil-v2-rc3"},
+        registry_latest={"anvil": "anvil-v2-rc3"},
+    )
+    assert _stat(source, cfg, "anvil-v2-rc2") == 0
+    assert json.loads(capsys.readouterr().out)["deployment"]["label"] == "anvil-v2-rc2"
+
+
+def test_stat_ignores_a_pointer_only_the_artifact_has(tmp_path, capsys):
+    source, cfg = _stale_setup(
+        tmp_path,
+        entries=[_entry("anvil-v2-rc2", "0xaa", 2), _entry("anvil-v2-rc3", "0xbb", 3)],
+        artifact_latest={"anvil": "anvil-v2-rc2"},
+        registry_latest={},
+    )
+    assert _stat(source, cfg, "anvil") == 2
+    err = capsys.readouterr().err
+    assert "select a deployment: anvil-v2-rc2, anvil-v2-rc3" in err
+    assert "(=" not in err

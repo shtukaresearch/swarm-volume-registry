@@ -19,3 +19,4 @@ Format per record: **Context** → **Decision** → **Consequences**.
 | [0011](./0011-derived-deployment-registry.md) | Facts vs claims; the built-in registry derived, not hand-written |
 | [0012](./0012-release-names-and-latest-pointers.md) | Release names (`vN`, `vN-rcM`), `<network>-<version>` labels, explicit latest pointers |
 | [0013](./0013-harness-deploys-from-deployment-records.md) | The test harness deploys each release from its deployment record; no vendored fixture |
+| [0014](./0014-stat-resolves-through-the-registry.md) | `stat` resolves a bare network name through the registry, as `sync` does |

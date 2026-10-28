@@ -58,7 +58,13 @@ def test_label_is_network_and_version():
 
 def test_default_registry_is_the_live_fleet():
     labels = {s.label for s in registry.DEFAULT_REGISTRY}
-    assert {"gnosis-v1", "sepolia-v1", "sepolia-v2-rc1", "sepolia-v2-rc2"} <= labels
+    assert {
+        "gnosis-v1",
+        "sepolia-v1",
+        "sepolia-v2-rc1",
+        "sepolia-v2-rc2",
+        "sepolia-v2-rc3",
+    } <= labels
     assert registry.DEFAULT_REGISTRY.latest == {
         "gnosis": "gnosis-v1",
         "sepolia": "sepolia-v2-rc2",

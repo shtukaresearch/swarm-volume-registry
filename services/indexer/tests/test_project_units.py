@@ -1,4 +1,5 @@
-"""Pure projector unit tests for owner attribution + window boundaries (``paid_in_window``).
+"""Pure projector unit tests: owner attribution + window boundaries (``paid_in_window``)
+and imported-volume admission (``capacity_daily``).
 
 The integration suite (``test_pipeline``) does not assert ``paid_in_window``, and its inputs
 have a non-circular oracle only for the node-state measures. The windowing and
@@ -13,7 +14,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from ethswarm_volumes.model import EventLog, EventLogRow
-from ethswarm_volumes.project import paid_in_window
+from ethswarm_volumes.project import capacity_daily, paid_in_window
 
 _DEP = (100, "0xreg")
 _DAY = 86_400
@@ -113,3 +114,68 @@ def test_ownership_transfer_reattributes_later_payment():
     # within 1d: only the day-8 payment (owner B); within 30d: both A (day0) and B (day8)
     result = paid_in_window(EventLog.from_rows(rows), as_of=as_of)
     assert result == {"1d": 1, "7d": 1, "30d": 2}
+
+
+def _import(*, block, day, vol, owner, tx, log_index=1):
+    """A ``VolumeImported`` admit (v2-rc3): it names the owner but moves no BZZ."""
+    return _row(
+        "VolumeImported",
+        block=block,
+        log_index=log_index,
+        day=day,
+        args={"volume_id": vol, "owner": owner, "batch_id": "0xb" + vol[2:], "depth": 20},
+        tx=tx,
+    )
+
+
+def _topup_payment(*, block, day, vol, tx, log_index=2):
+    """A topup: the fee Transfer + its Toppedup sibling (higher log_index)."""
+    return [
+        _row("Transfer", block=block, log_index=log_index, day=day, args={"value": 5}, tx=tx),
+        _row(
+            "Toppedup",
+            block=block,
+            log_index=log_index + 1,
+            day=day,
+            args={"volume_id": vol, "amount": 5, "new_normalised_balance": 9},
+            tx=tx,
+        ),
+    ]
+
+
+def test_import_payment_attributed_to_importer():
+    # importVolume: VolumeImported, then the topup's Transfer + Toppedup, all in one tx.
+    # The Transfer pairs with the Toppedup, and the owner comes from the VolumeImported.
+    rows = [
+        _import(block=10, day=0, vol="0xv1", owner="0xA", tx="0xt1"),
+        *_topup_payment(block=10, day=0, vol="0xv1", tx="0xt1"),
+    ]
+    as_of = _T0 + timedelta(days=3)
+    assert paid_in_window(EventLog.from_rows(rows), as_of=as_of) == {"1d": 0, "7d": 1, "30d": 1}
+
+
+def test_topup_of_registered_volume_attributed_to_its_owner():
+    # registerVolume moves no BZZ; the volume's first payment is a later trigger.
+    rows = [
+        _import(block=10, day=0, vol="0xv1", owner="0xA", tx="0xt1"),
+        *_topup_payment(block=20, day=2, vol="0xv1", tx="0xt2"),
+    ]
+    as_of = _T0 + timedelta(days=2, hours=12)
+    assert paid_in_window(EventLog.from_rows(rows), as_of=as_of) == {"1d": 1, "7d": 1, "30d": 1}
+
+
+def test_imported_volume_counts_toward_capacity_until_retired():
+    rows = [
+        _import(block=10, day=0, vol="0xv1", owner="0xA", tx="0xt1"),
+        _row(
+            "VolumeRetired",
+            block=30,
+            log_index=1,
+            day=2,
+            args={"volume_id": "0xv1", "reason": "OwnerDeleted"},
+            tx="0xt3",
+        ),
+    ]
+    cap = capacity_daily(EventLog.from_rows(rows), as_of=_T0 + timedelta(days=3))
+    assert [d.active_volumes for d in cap] == [1, 1, 0, 0]
+    assert cap[0].date == "2030-01-01"

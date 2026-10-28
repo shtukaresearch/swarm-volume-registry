@@ -30,22 +30,24 @@ contracts in `fixtures/support/` (all committed — no `forge build` needed); se
 `test_decoder.py::test_decoded_rows_conform_to_schema` — drives `drive_basic`, acquires the real
 logs, decodes them, and asserts each `EventLogRow`: known `event_name`, exact `args` keys per the
 [`data-model/event-log.md`](../docs/data-model/event-log.md) catalogue, enum→name, lowercased
-addresses, integer amounts, tz-aware `block_ts`.
+addresses, integer amounts, tz-aware `block_ts`. The catalogue is the emitting version's.
+`test_imported_volume_rows_conform_to_schema` does the same for `drive_register_import` on versions
+with `importVolume`.
 
 `test_decoder.py::test_pinned_abis_match_version_fixture` — pure unit: for every
 `registry_version`, the decode-layer pinned event ABIs match the deployed contract's ABI verbatim.
 
 ### Tier 2 — decoder + projector vs node state (`docs/TESTING.md` §3)
 
-`test_pipeline.py::test_projection_matches_node_state[basic|revoke-reconfirm]` — runs the full
+`test_pipeline.py::test_projection_matches_node_state[basic|revoke-reconfirm|register-import]` — runs the full
 pipeline and asserts the daily series + snapshot against the node oracle:
 
 | Measure | Node oracle |
 |---|---|
-| fee daily + total | postage BZZ-balance delta per UTC day-end |
+| fee daily + total | postage BZZ-balance delta per UTC day-end, less BZZ the driver paid into postage directly |
 | capacity active set + day-end levels | `getActiveVolumeCount` + `getActiveVolumes` depths |
 | capacity bytes (nominal / effective) | `Σ lookup(depth)` over the trusted `capacity.py` table |
 | accounts authorized (daily + snapshot) | `getAccount` recount |
 
-Scenarios live in `harness.py` (`drive_basic`, `drive_revoke_reconfirm`); the per-day oracle is
+Scenarios live in `harness.py` (`drive_basic`, `drive_revoke_reconfirm`, `drive_register_import`; the last only on versions with `importVolume`); the per-day oracle is
 `harness.oracle`.

@@ -31,8 +31,24 @@ CATALOGUE = {
     "PayerDesignated": {"owner", "payer"},
     "TopupSkipped": {"volume_id", "reason"},
 }
+#: From v2-rc3 a volume names its batch (volume IDs are no longer batch IDs), and a volume
+#: can also be admitted by importing an existing batch.
+CATALOGUE_V2_RC3 = {
+    **CATALOGUE,
+    "VolumeCreated": CATALOGUE["VolumeCreated"] | {"batch_id"},
+    "VolumeImported": CATALOGUE["VolumeCreated"] | {"batch_id", "normalised_balance"},
+}
+_CATALOGUES = {"v1": CATALOGUE, "v2-rc1": CATALOGUE, "v2-rc2": CATALOGUE}
 _ADDR_FIELDS = {"owner", "payer", "from", "to", "revoker", "chunk_signer"}
-_INT_FIELDS = {"depth", "ttl_expiry", "amount", "value", "new_normalised_balance"}
+_INT_FIELDS = {
+    "depth",
+    "ttl_expiry",
+    "amount",
+    "value",
+    "new_normalised_balance",
+    "normalised_balance",
+}
+_BYTES32_FIELDS = {"volume_id", "batch_id"}
 
 
 def _decoded_rows(chain):
@@ -106,13 +122,12 @@ def test_pinned_abis_match_version_fixture():
             assert shape(event) == shape(compiled), f"{version}:{name}"
 
 
-def test_decoded_rows_conform_to_schema(chain):
-    H.drive_basic(chain)
-    rows = _decoded_rows(chain)
-    assert rows, "expected the acquisition to return some logs"
+def _assert_conforms(rows, version):
+    """Each row matches the ``event_log`` catalogue for ``version`` (exact ``args`` keys)."""
+    catalogue = _CATALOGUES.get(version, CATALOGUE_V2_RC3)
     for r in rows:
-        assert r.event_name in CATALOGUE, f"unknown event {r.event_name!r}"
-        assert set(r.args) == CATALOGUE[r.event_name], f"args mismatch for {r.event_name}"
+        assert r.event_name in catalogue, f"unknown event {r.event_name!r}"
+        assert set(r.args) == catalogue[r.event_name], f"args mismatch for {r.event_name}"
         # enums decoded to names (strings, not ints)
         if "reason" in r.args:
             assert isinstance(r.args["reason"], str) and not r.args["reason"].isdigit()
@@ -122,8 +137,36 @@ def test_decoded_rows_conform_to_schema(chain):
             assert isinstance(v, str) and v.startswith("0x") and v == v.lower()
         for k in _INT_FIELDS & set(r.args):
             assert isinstance(r.args[k], int)
-        if "volume_id" in r.args:
-            assert isinstance(r.args["volume_id"], str) and r.args["volume_id"].startswith("0x")
+        for k in _BYTES32_FIELDS & set(r.args):
+            v = r.args[k]
+            assert isinstance(v, str) and v.startswith("0x") and len(v) == 66
         # boundary record stamps
         assert r.block_ts.tzinfo is not None
         assert isinstance(r.block_number, int) and isinstance(r.log_index, int)
+
+
+def test_catalogue_names_every_version():
+    """A supported version without its own catalogue entry gets the v2-rc3 one; that is
+    only right while every version after v2-rc2 shares the rc3 surface."""
+    for version in decode.supported_versions() - set(_CATALOGUES):
+        names = {a["name"] for a in decode._VERSIONS[version]["abis"]}
+        assert names == set(CATALOGUE_V2_RC3) - {"VolumeOwnershipTransferred"}, version
+
+
+def test_decoded_rows_conform_to_schema(chain):
+    H.drive_basic(chain)
+    rows = _decoded_rows(chain)
+    assert rows, "expected the acquisition to return some logs"
+    _assert_conforms(rows, chain.version)
+
+
+def test_imported_volume_rows_conform_to_schema(chain):
+    if not chain.supports("importVolume"):
+        pytest.skip(f"{chain.version} cannot wrap an existing batch")
+    H.drive_register_import(chain)
+    rows = _decoded_rows(chain)
+    names = [r.event_name for r in rows]
+    # two admits by import (register + import), and two topups (the import's and day 2's)
+    assert names.count("VolumeImported") == 2 and names.count("Toppedup") == 2
+    assert "VolumeCreated" in names
+    _assert_conforms(rows, chain.version)

@@ -59,4 +59,18 @@ Decoding at the boundary produces a **complete and faithful** log:
 | `PayerDesignated` | registry | `{owner, payer}` | fidelity |
 | `TopupSkipped` | registry | `{volume_id, reason}` | diagnostics |
 
+### Changes by version
+
+The catalogue above is v1's. Later versions change it as follows; the `args` of a row are those of the version that emitted it.
+
+- **v2-rc1, v2-rc2:** no `VolumeOwnershipTransferred` (ownership transfer was removed).
+- **v2-rc3:** as v2-rc2, except that volume IDs are no longer batch IDs, so a volume names its Postage batch:
+
+| `event_name` | `emitter` | `args` | Used by |
+|---|---|---|---|
+| `VolumeCreated` | registry | `{volume_id, owner, batch_id, chunk_signer, depth, ttl_expiry}` | capacity; fee (create sibling) |
+| `VolumeImported` | registry | `{volume_id, owner, batch_id, chunk_signer, depth, ttl_expiry, normalised_balance}` | capacity; fee owner-resolution |
+
+`VolumeImported` admits a volume over an existing batch (`registerVolume` / `importVolume`). It moves no BZZ; an `importVolume` that tops the batch up emits a `Toppedup` + `Transfer` pair in the same tx. Before v2-rc3 a volume's ID is its batch ID.
+
 **Acquisition filter.** All logs with `emitter == registry` (decoded against the registry ABI), plus BZZ `Transfer` logs with `emitter == bzz_token`, `from == registry`, `to == postage` — the canonical fee leg, resolved server-side by topic filter. Both up to `finalized`.

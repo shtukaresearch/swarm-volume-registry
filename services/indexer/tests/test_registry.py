@@ -67,10 +67,13 @@ def test_default_registry_is_the_live_fleet():
     } <= labels
     assert registry.DEFAULT_REGISTRY.latest == {
         "gnosis": "gnosis-v1",
-        "sepolia": "sepolia-v2-rc2",
+        "sepolia": "sepolia-v2-rc3",
     }
     # the bare network follows its pointer; superseded deployments stay addressable
     assert registry.select(registry.DEFAULT_REGISTRY, "sepolia").registry == (
+        "0xab326d6dbdcd1e90e06af22f4e72fa480078745e"
+    )
+    assert registry.select(registry.DEFAULT_REGISTRY, "sepolia-v2-rc2").registry == (
         "0x00f72ee2970df8112fdf04c0225b33c43c5a4177"
     )
     assert registry.select(registry.DEFAULT_REGISTRY, "sepolia-v2-rc1").registry == (

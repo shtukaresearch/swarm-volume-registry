@@ -134,25 +134,25 @@ def test_registry_document_round_trips():
         "deployments": [_entry("gnosis", "v1", 100, "0xa", genesis_block=7)],
         "latest": {"gnosis": "gnosis-v1"},
     }
-    assert registry.registry_to_dict(registry.registry_from_dict(doc)) == doc
+    assert registry.Registry.from_dict(doc).to_dict() == doc
 
 
 def test_version_is_required():
     with pytest.raises(KeyError):
-        registry.registry_from_dict(
+        registry.Registry.from_dict(
             {"deployments": [{"network": "x", "chain_id": 1, "registry": "0xa"}]}
         )
 
 
 def test_rejects_malformed_version():
     with pytest.raises(ValueError, match="registry_version"):
-        registry.registry_from_dict({"deployments": [_entry("x", "2.0")]})
+        registry.Registry.from_dict({"deployments": [_entry("x", "2.0")]})
 
 
 def test_rejects_two_deployments_of_one_version_on_one_network():
     doc = {"deployments": [_entry("x", "v1", address="0xa"), _entry("x", "v1", address="0xb")]}
     with pytest.raises(ValueError, match="duplicate deployment 'x-v1'"):
-        registry.registry_from_dict(doc)
+        registry.Registry.from_dict(doc)
 
 
 @pytest.mark.parametrize(
@@ -163,7 +163,7 @@ def test_rejects_two_deployments_of_one_version_on_one_network():
 def test_rejects_latest_pointer_off_its_network(latest):
     doc = {"deployments": [_entry("x", "v1"), _entry("y", "v1", address="0xb")], "latest": latest}
     with pytest.raises(ValueError, match="latest"):
-        registry.registry_from_dict(doc)
+        registry.Registry.from_dict(doc)
 
 
 def test_select_by_label_network_then_chain_address():
@@ -177,7 +177,7 @@ def test_select_by_label_network_then_chain_address():
 
 def test_bare_network_without_pointer_does_not_resolve():
     """No pointer, no guess: a bare name never falls back to version order."""
-    reg = registry.registry_from_dict(
+    reg = registry.Registry.from_dict(
         {"deployments": [_entry("x", "v1", address="0xa"), _entry("x", "v2-rc1", address="0xb")]}
     )
     assert registry.select(reg, "x") is None
@@ -189,6 +189,6 @@ def test_latest_pointer_moves_explicitly():
         "deployments": [_entry("x", "v1", address="0xa"), _entry("x", "v2-rc1", address="0xb")],
         "latest": {"x": "x-v1"},
     }
-    assert registry.select(registry.registry_from_dict(doc), "x").registry == "0xa"
+    assert registry.select(registry.Registry.from_dict(doc), "x").registry == "0xa"
     doc["latest"] = {"x": "x-v2-rc1"}
-    assert registry.select(registry.registry_from_dict(doc), "x").registry == "0xb"
+    assert registry.select(registry.Registry.from_dict(doc), "x").registry == "0xb"

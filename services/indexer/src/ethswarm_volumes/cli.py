@@ -11,6 +11,10 @@ Two verbs over the one data contract (``docs/CLIENT.md``):
 - ``stat`` — the read path. Load the artifact, fold one deployment per the bucket / capacity
   / fiat options, and render it as text or ``--json`` (``docs/SCHEMA.md`` §4).
 
+Both verbs resolve a bare network name (``sepolia``) through the same registry's ``latest``
+pointer, so it selects the same deployment in each (ADR-0014). ``stat`` does not consult the
+artifact's own ``latest`` map, which is a copy taken at the last ``sync``.
+
 The RPC endpoint is ``--rpc``, or else an environment variable named for the chain by its
 EIP-3770 short name: ``sync <deployment>`` reads ``$<SHORT>_RPC_URL`` for that deployment's
 chain (``$GNO_RPC_URL`` on Gnosis, ``$SEP_RPC_URL`` on Sepolia); a bare ``sync`` reads
@@ -282,17 +286,42 @@ def cmd_sync(args) -> int:
 
 
 def cmd_stat(args) -> int:
+    """Render one deployment of the artifact.
+
+    The selector resolves against the artifact's entries, with bare network names taken
+    through the registry's ``latest`` pointers (:func:`registry.load_registry`, the same
+    registry ``sync`` reads), not the artifact's. A pointer naming a deployment the
+    artifact does not carry is an error: the artifact is older than the registry, and
+    another deployment's numbers must not stand in for it.
+    """
     store_dir = store.resolve_store_dir(args.store_dir)
+    try:
+        reg = registry.load_registry(args.config)
+    except (KeyError, ValueError) as exc:
+        print(f"error: invalid deployment registry: {exc}", file=sys.stderr)
+        return 2
     source = Path(args.source) if args.source else store_dir / DEFAULT_ARTIFACT_NAME
     if not source.is_file():
         print(f"error: artifact not found at {source} (run sync first)", file=sys.stderr)
         return 2
     artifact = serialize.artifact_from_json(source.read_text(encoding="utf-8"))
 
-    entry = registry.resolve(artifact.deployments, artifact.latest, args.deployment)
+    labels = {e.label for e in artifact.deployments}
+    selector = args.deployment
+    if selector in reg.latest and selector not in labels and reg.latest[selector] not in labels:
+        print(
+            f"error: {selector} is {reg.latest[selector]}, which {source} does not contain;"
+            f" run `sync {selector}`",
+            file=sys.stderr,
+        )
+        return 2
+
+    entry = registry.resolve(artifact.deployments, reg.latest, selector)
     if entry is None:
         choices = [e.label for e in artifact.deployments]
-        choices += [f"{net} (= {label})" for net, label in sorted(artifact.latest.items())]
+        choices += [
+            f"{net} (= {label})" for net, label in sorted(reg.latest.items()) if label in labels
+        ]
         print(f"select a deployment: {', '.join(choices)}", file=sys.stderr)
         return 2
 
@@ -364,6 +393,11 @@ def _build_parser() -> argparse.ArgumentParser:
     p_stat.add_argument("deployment", nargs="?", help="label, network or chain:address")
     p_stat.add_argument(
         "--source", help="artifact path or URL (default: <store-dir>/artifact.json)"
+    )
+    p_stat.add_argument(
+        "--config",
+        help="deployment registry JSON whose latest pointers resolve a bare network name"
+        " (default: built-in fleet)",
     )
     p_stat.add_argument("--bucket-width", choices=("1d", "7d", "30d"), default="1d")
     p_stat.add_argument("--bucket-count", "-n", type=int, default=30)

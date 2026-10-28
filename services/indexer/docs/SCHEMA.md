@@ -84,7 +84,7 @@ This document specifies the wire format the indexer writes and the clients read.
 |---|---|---|
 | `schema_version` | string (`major.minor`) | artifact structure version; synced fleet-wide |
 | `generated_at` | string (UTC ISO 8601) | publish time |
-| `latest` | `{<network>: <label>}` | what a bare network name selects; only labels present in the file ([ADR-0012](./adr/0012-release-names-and-latest-pointers.md)) |
+| `latest` | `{<network>: <label>}` | what a bare network name selected when the file was written; only labels present in the file ([ADR-0012](./adr/0012-release-names-and-latest-pointers.md)). This package's `stat` resolves through its registry instead ([ADR-0014](./adr/0014-stat-resolves-through-the-registry.md)) |
 | `deployments[]` | array | one self-contained entry per deployment |
 | `…label` | string | `<network>-<registry_version>`; human selector; unique within the file |
 | `…chain_id` | number | EVM chain id |

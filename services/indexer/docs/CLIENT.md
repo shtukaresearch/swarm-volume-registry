@@ -11,7 +11,7 @@ ethswarm-volumes stat [<deployment>] [options]  # render the 3-measure summary
 
 ## `stat`
 
-`<deployment>` selects, in order, by `label` (`gnosis-v1`, `sepolia-v2-rc1`), by bare network name through the artifact's explicit `latest` pointer (`gnosis`), or by `chain:address` (unambiguous fallback) — [ADR-0012](./adr/0012-release-names-and-latest-pointers.md). It is optional when only one deployment is present. With no `<deployment>` and several present, `stat` lists the labels and pointers. `sync <deployment>` resolves the same way against the registry.
+`<deployment>` selects, in order, by `label` (`gnosis-v1`, `sepolia-v2-rc1`), by bare network name through the registry's explicit `latest` pointer (`gnosis`), or by `chain:address` (unambiguous fallback) — [ADR-0012](./adr/0012-release-names-and-latest-pointers.md). The registry is the one `sync` uses (the built-in fleet, or `--config`), so a bare name selects the same deployment in both verbs; the artifact's own `latest` map is not consulted. If the pointer names a deployment the artifact does not contain, `stat` exits 2 and says to `sync` it ([ADR-0014](./adr/0014-stat-resolves-through-the-registry.md)). It is optional when only one deployment is present. With no `<deployment>` and several present, `stat` lists the labels and the pointers that resolve. `sync <deployment>` resolves the same way against the registry.
 
 | Option | Meaning | Default |
 |---|---|---|

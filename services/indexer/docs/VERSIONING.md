@@ -27,7 +27,7 @@ A version covers every deployment made from its tag's source, across networks an
 
 ## Labels and latest pointers
 
-A deployment is labelled `<network>-<version>` (`gnosis-v1`, `sepolia-v2-rc1`); registry entries carry `network` and `registry_version`, and the label is derived from them. The bare network name (`gnosis`) is an explicit **latest pointer**: `contracts/deployments/<network>/VolumeRegistry.json` on the contracts side, the registry's `latest` map in the package, and the artifact's `latest` map for clients. It moves only when a release step promotes a deployment — never by version order ([ADR-0012](./adr/0012-release-names-and-latest-pointers.md)).
+A deployment is labelled `<network>-<version>` (`gnosis-v1`, `sepolia-v2-rc1`); registry entries carry `network` and `registry_version`, and the label is derived from them. The bare network name (`gnosis`) is an explicit **latest pointer**: `contracts/deployments/<network>/VolumeRegistry.json` on the contracts side, the registry's `latest` map in the package, which both `sync` and `stat` resolve through ([ADR-0014](./adr/0014-stat-resolves-through-the-registry.md)), and the artifact's `latest` map for consumers of a published file. It moves only when a release step promotes a deployment — never by version order ([ADR-0012](./adr/0012-release-names-and-latest-pointers.md)).
 
 Contracts `HEAD` carries **no** version: it is the next release in development, and nothing in the Python package or its test suite binds to it.
 

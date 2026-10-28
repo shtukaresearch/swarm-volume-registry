@@ -1,6 +1,6 @@
 # ADR-0012: Release names, `<network>-<version>` labels, explicit latest pointers
 
-Status: Accepted
+Status: Accepted; `stat` resolves bare names through the registry, not the artifact's map, per [ADR-0014](./0014-stat-resolves-through-the-registry.md)
 
 ## Context
 
@@ -26,7 +26,7 @@ Alternatives weighed for resolving a bare network name:
 
 - Contracts side: `deployments/<network>/VolumeRegistry-<release>.json` is the immutable record of each deployment; `deployments/<network>/VolumeRegistry.json` is a byte-identical copy of the promoted one, written only by `export_deployment.py --latest` (or restored by copying a record).
 - Package side: the registry document's `latest` map (`{network: label}`), which `derive_deployments.py` sets from `VolumeRegistry.json` — only when the pointed-at deployment is registered, i.e. its release is supported (ADR-0011: facts may lead claims; a pointer at an unsupported release is a fact the package does not act on).
-- The artifact carries the `latest` map too, so a client resolving `stat gnosis` against a published file needs nothing else.
+- The artifact carries the `latest` map too, so a client resolving `stat gnosis` against a published file needs nothing else. (This package's `stat` resolves through the registry instead: [ADR-0014](./0014-stat-resolves-through-the-registry.md).)
 
 Selectors resolve a label first, then a bare network through `latest`, then `chain:address`. A bare network with no pointer does not resolve; nothing falls back to version order.
 

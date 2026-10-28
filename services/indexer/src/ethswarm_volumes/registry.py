@@ -81,6 +81,35 @@ class DeploymentSpec:
         """
         return (self.chain_id, self.registry)
 
+    @classmethod
+    def from_dict(cls, obj: dict) -> DeploymentSpec:
+        """Parse one ``DeploymentSpec`` from a registry-file entry."""
+        network = obj["network"]
+        version = obj["registry_version"]
+        if not NETWORK_NAME.fullmatch(network):
+            raise ValueError(f"invalid network name {network!r}")
+        if not VERSION_NAME.fullmatch(version):
+            raise ValueError(f"invalid registry_version {version!r} (expected vN or vN-rcM)")
+        return cls(
+            network=network,
+            registry_version=version,
+            chain_id=obj["chain_id"],
+            registry=obj["registry"],
+            genesis_block=obj.get("genesis_block"),
+        )
+
+    def to_dict(self) -> dict:
+        """The registry-file entry :meth:`from_dict` reads; ``genesis_block`` only if set."""
+        entry = {
+            "network": self.network,
+            "registry_version": self.registry_version,
+            "chain_id": self.chain_id,
+            "registry": self.registry,
+        }
+        if self.genesis_block is not None:
+            entry["genesis_block"] = self.genesis_block
+        return entry
+
 
 @dataclass(frozen=True)
 class Registry:
@@ -101,65 +130,41 @@ class Registry:
     def __len__(self) -> int:
         return len(self.deployments)
 
+    @classmethod
+    def from_dict(cls, doc: dict) -> Registry:
+        """Parse and validate a registry document (``{"deployments": [...], "latest": {...}}``).
 
-def _spec_from_dict(obj: dict) -> DeploymentSpec:
-    """Parse one ``DeploymentSpec`` from a registry-file entry."""
-    network = obj["network"]
-    version = obj["registry_version"]
-    if not NETWORK_NAME.fullmatch(network):
-        raise ValueError(f"invalid network name {network!r}")
-    if not VERSION_NAME.fullmatch(version):
-        raise ValueError(f"invalid registry_version {version!r} (expected vN or vN-rcM)")
-    return DeploymentSpec(
-        network=network,
-        registry_version=version,
-        chain_id=obj["chain_id"],
-        registry=obj["registry"],
-        genesis_block=obj.get("genesis_block"),
-    )
+        Enforces the naming invariants: labels are unique (one deployment per network and
+        version), and every ``latest`` pointer names a deployment of its own network.
+        """
+        specs = tuple(DeploymentSpec.from_dict(e) for e in doc["deployments"])
+        seen: set[str] = set()
+        for spec in specs:
+            if spec.label in seen:
+                raise ValueError(
+                    f"duplicate deployment {spec.label!r} (one per network and version)"
+                )
+            seen.add(spec.label)
+        by_label = {s.label: s for s in specs}
+        latest = dict(doc.get("latest", {}))
+        for network, label in latest.items():
+            target = by_label.get(label)
+            if target is None or target.network != network:
+                raise ValueError(f"latest[{network!r}] = {label!r} is not a {network} deployment")
+        return cls(deployments=specs, latest=latest)
 
-
-def registry_from_dict(doc: dict) -> Registry:
-    """Parse and validate a registry document (``{"deployments": [...], "latest": {...}}``).
-
-    Enforces the naming invariants: labels are unique (one deployment per network and
-    version), and every ``latest`` pointer names a deployment of its own network.
-    """
-    specs = tuple(_spec_from_dict(e) for e in doc["deployments"])
-    seen: set[str] = set()
-    for spec in specs:
-        if spec.label in seen:
-            raise ValueError(f"duplicate deployment {spec.label!r} (one per network and version)")
-        seen.add(spec.label)
-    by_label = {s.label: s for s in specs}
-    latest = dict(doc.get("latest", {}))
-    for network, label in latest.items():
-        target = by_label.get(label)
-        if target is None or target.network != network:
-            raise ValueError(f"latest[{network!r}] = {label!r} is not a {network} deployment")
-    return Registry(deployments=specs, latest=latest)
-
-
-def registry_to_dict(reg: Registry) -> dict:
-    """The document shape :func:`registry_from_dict` reads (``deployments.json``)."""
-    entries = []
-    for s in reg.deployments:
-        entry = {
-            "network": s.network,
-            "registry_version": s.registry_version,
-            "chain_id": s.chain_id,
-            "registry": s.registry,
+    def to_dict(self) -> dict:
+        """The document shape :meth:`from_dict` reads (``deployments.json``)."""
+        return {
+            "deployments": [s.to_dict() for s in self.deployments],
+            "latest": dict(sorted(self.latest.items())),
         }
-        if s.genesis_block is not None:
-            entry["genesis_block"] = s.genesis_block
-        entries.append(entry)
-    return {"deployments": entries, "latest": dict(sorted(reg.latest.items()))}
 
-
-def _load_default() -> Registry:
-    """Load the built-in fleet from the ``deployments.json`` package data."""
-    doc = json.loads(files(__package__).joinpath("deployments.json").read_text("utf-8"))
-    return registry_from_dict(doc)
+    @classmethod
+    def load_default(cls) -> Registry:
+        """Load the built-in fleet from the ``deployments.json`` package data."""
+        doc = json.loads(files(__package__).joinpath("deployments.json").read_text("utf-8"))
+        return cls.from_dict(doc)
 
 
 #: The live fleet, from the derived ``deployments.json`` (module docstring; ADR-0011).
@@ -167,7 +172,7 @@ def _load_default() -> Registry:
 #: state: discovery binary-searches ``eth_getCode`` over past blocks, which a pruned
 #: (non-archive) node cannot serve, so an unset value would break ``sync`` on an
 #: ordinary RPC.
-DEFAULT_REGISTRY: Registry = _load_default()
+DEFAULT_REGISTRY: Registry = Registry.load_default()
 
 
 def load_registry(path: str | os.PathLike[str] | None = None) -> Registry:
@@ -180,7 +185,7 @@ def load_registry(path: str | os.PathLike[str] | None = None) -> Registry:
     """
     if path is None:
         return DEFAULT_REGISTRY
-    return registry_from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
+    return Registry.from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
 
 
 def resolve(items, latest: dict[str, str], selector: str | None):

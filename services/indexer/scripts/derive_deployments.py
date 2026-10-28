@@ -103,7 +103,7 @@ def main() -> int:
 
     decode, registry = _import_package()
     supported = decode.supported_versions()
-    reg = registry.registry_from_dict(json.loads(DEPLOYMENTS.read_text(encoding="utf-8")))
+    reg = registry.Registry.from_dict(json.loads(DEPLOYMENTS.read_text(encoding="utf-8")))
     specs = list(reg.deployments)
     latest = dict(reg.latest)
     registered_ids = {(s.chain_id, s.registry.lower()) for s in specs}
@@ -146,8 +146,8 @@ def main() -> int:
     if not changed:
         print("registry is up to date with the deployment records; nothing to do")
         return 0
-    doc = registry.registry_to_dict(registry.Registry(deployments=tuple(specs), latest=latest))
-    registry.registry_from_dict(doc)  # the naming invariants hold before anything is written
+    doc = registry.Registry(deployments=tuple(specs), latest=latest).to_dict()
+    registry.Registry.from_dict(doc)  # the naming invariants hold before anything is written
     DEPLOYMENTS.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
     print(f"wrote {DEPLOYMENTS.relative_to(REPO)} — review the diff and commit")
     return 0

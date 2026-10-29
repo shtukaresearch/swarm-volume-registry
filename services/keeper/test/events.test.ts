@@ -129,11 +129,11 @@ describe("decodeCycleEvents", () => {
 const decode = (logs: Log[]) => decodeCycleEvents(logs, REGISTRY);
 
 describe("summarizeVolume", () => {
-  // The whole reason a v2 keeper spends a transaction per volume: an empty
-  // receipt is an answer, not a gap. Batched, this was indistinguishable from
-  // an inner call that ran out of gas and got swallowed.
-  test("no events means the volume needed nothing", () => {
-    expect(summarizeVolume(decode([]), volumeId(1))).toEqual({ outcome: "noop" });
+  // In a batch, no event is either a volume that needed nothing or one whose
+  // inner call reverted and was swallowed. The receipt cannot say which, so
+  // this does not guess; runKeeperCycle checks chain state.
+  test("no events is no answer, not a noop", () => {
+    expect(summarizeVolume(decode([]), volumeId(1))).toBeUndefined();
   });
 
   test("a top-up carries its amount", () => {
@@ -160,12 +160,13 @@ describe("summarizeVolume", () => {
     expect(summary).toEqual({ outcome: "topupSkipped", reason: "PaymentFailed" });
   });
 
+  // A batch receipt carries every volume's event.
   test("another volume's event is never attributed to this one", () => {
     const summary = summarizeVolume(
       decode([log("Toppedup", volumeId(2), topup(5000n))]),
       volumeId(1),
     );
-    expect(summary).toEqual({ outcome: "noop" });
+    expect(summary).toBeUndefined();
   });
 
   test("the volume id is matched case-insensitively", () => {
@@ -173,6 +174,6 @@ describe("summarizeVolume", () => {
       decode([log("Toppedup", volumeId(0xab), topup(1n))]),
       volumeId(0xab).toUpperCase().replace("0X", "0x") as Hex,
     );
-    expect(summary.outcome).toBe("toppedUp");
+    expect(summary?.outcome).toBe("toppedUp");
   });
 });

@@ -56,21 +56,21 @@ export function decodeCycleEvents(
 }
 
 /**
- * Reduce a successful single-volume `trigger` receipt to one outcome.
+ * One volume's outcome, from a successful batch receipt's decoded events, or
+ * `undefined` when the receipt carries none for it.
  *
- * `trigger(bytes32)` touches exactly one volume and every branch of
- * `_triggerOne` returns immediately, so at most one of the three events can be
- * present. None of them means `noop` — the deficit was zero and the contract
- * did nothing, which is what a healthy volume looks like.
+ * Every branch of `_triggerOne` returns as soon as it emits, so a volume has
+ * at most one event. No event is ambiguous in a batch: either the deficit was
+ * zero and the contract did nothing, or the volume reverted inside the batch's
+ * try/catch. `runKeeperCycle` settles which one from chain state.
  *
- * The `volumeId` filter is belt-and-braces: the receipt should carry only this
- * volume's logs, but attributing someone else's event to it would be a silent
- * lie, and the check is free.
+ * The receipt holds every volume in the batch, so the `volumeId` filter is what
+ * keeps one volume's event from being attributed to another.
  */
 export function summarizeVolume(
   decoded: DecodedEvents,
   volumeId: Hex,
-): VolumeSummary {
+): Exclude<VolumeSummary, { outcome: "noop" }> | undefined {
   const mine = (id: Hex) => id.toLowerCase() === volumeId.toLowerCase();
 
   const toppedUp = decoded.toppedUp.find((e) => mine(e.volumeId));
@@ -82,5 +82,5 @@ export function summarizeVolume(
   const skipped = decoded.topupSkipped.find((e) => mine(e.volumeId));
   if (skipped) return { outcome: "topupSkipped", reason: skipped.reason };
 
-  return { outcome: "noop" };
+  return undefined;
 }

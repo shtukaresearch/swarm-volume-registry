@@ -1,24 +1,19 @@
 // The VolumeRegistry surface a keeper cycle touches, and nothing more.
 // Kept `as const` so viem can infer per-function argument and return types.
 //
-// Deliberately partial on the call side. Enumeration, the single-volume write,
-// and the events that explain what the write did — that is the whole cycle. The
-// contract's full error set is here regardless, because decoding a failure
-// costs nothing and is worth having when there is one. `postage()`,
-// `graceBlocks()` and `reap()` are absent because nothing here calls them: the
-// contract decides what each volume needs, so the keeper never reads
-// PostageStamp state to second-guess it.
+// Deliberately partial on the call side: enumeration, the batched write, the
+// events that explain what the write did, and the two immutables that check a
+// volume the write was silent about. The contract's full error set is here
+// regardless, because decoding a failure costs nothing and is worth having when
+// there is one.
 //
-// `trigger(bytes32[])` is absent, and its absence is the point. The batched
-// overload runs every id as `try this._triggerExt(id) {} catch {}`, and an
-// inner call receives only 63/64 of the remaining gas — so a short gas limit
-// lets the inner call run out, the `catch` swallow it, and the transaction
-// *succeed* having topped up nothing. A mined batch therefore cannot tell "this
-// volume needed nothing" apart from "this volume was starved of gas", and both
-// look like a clean receipt. Per docs/KEEPERS.md, a v2 keeper calls
-// `trigger(bytes32)` once per volume: one receipt per volume, one unambiguous
-// outcome, and a real top-level revert when something is wrong. Leaving the
-// overload out of this ABI is what makes that unbypassable — and it keeps
+// `trigger(bytes32)` is absent: the keeper sends `trigger(bytes32[])` only.
+// That overload runs every id as `try this._triggerExt(id) {} catch {}`, so
+// a volume that reverts inside it, out of gas or otherwise, leaves no trace in
+// the receipt. The receipt alone cannot tell such a volume from one that
+// needed nothing. `runKeeperCycle` checks every volume the receipt is silent
+// about against PostageStamp state, through `postage()` and `graceBlocks()`
+// below and `postageAbi`. Leaving the single-volume overload out also keeps
 // viem's overload inference simple.
 
 export const registryAbi = [
@@ -86,8 +81,23 @@ export const registryAbi = [
     type: "function",
     name: "trigger",
     stateMutability: "nonpayable",
-    inputs: [{ type: "bytes32", name: "volumeId" }],
+    inputs: [{ type: "bytes32[]", name: "volumeIds" }],
     outputs: [],
+  },
+  // Immutables, read once a cycle to check volumes a receipt is silent about.
+  {
+    type: "function",
+    name: "postage",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ type: "address" }],
+  },
+  {
+    type: "function",
+    name: "graceBlocks",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ type: "uint64" }],
   },
   // Events decoded off the trigger receipt to explain per-volume outcomes.
   {
@@ -118,15 +128,10 @@ export const registryAbi = [
   // Custom errors, so a revert prints a name instead of a 4-byte blob. These
   // are a decode table like RETIRE_REASONS below, not call surface: viem
   // matches revert data against them by selector, and they add no way to drive
-  // the registry.
-  //
-  // `VolumeNotActive` is live surface now that the keeper calls
-  // `trigger(bytes32)`: step 1 of `_triggerOne` reverts on a volume that was
-  // retired between enumeration and the send, and with no batching try/catch in
-  // the way that revert reaches gas estimation, where it costs nothing and
-  // names itself. The rest earn their place when the configured address is not
-  // the registry you think it is — a stale deployment, a wrong chain — which is
-  // exactly when a keeper's logs are all you have.
+  // the registry. The batched trigger swallows every per-volume revert, so
+  // these earn their place when the configured address is not the registry you
+  // think it is — a stale deployment, a wrong chain — which is exactly when a
+  // keeper's logs are all you have.
   { type: "error", name: "AccountNotActive", inputs: [] },
   { type: "error", name: "BatchNotLive", inputs: [] },
   { type: "error", name: "DesignationClearedOnActivate", inputs: [] },
@@ -163,3 +168,39 @@ export const SKIP_REASONS: Record<number, string> = {
   1: "NoAuth",
   2: "PaymentFailed",
 };
+
+/**
+ * The PostageStamp reads that check a volume the batch receipt says nothing
+ * about: its batch's balance against the registry's top-up target, computed
+ * the way step 6 of `_triggerOne` computes it.
+ */
+export const postageAbi = [
+  {
+    type: "function",
+    name: "batches",
+    stateMutability: "view",
+    inputs: [{ type: "bytes32", name: "id" }],
+    outputs: [
+      { type: "address", name: "owner" },
+      { type: "uint8", name: "depth" },
+      { type: "uint8", name: "bucketDepth" },
+      { type: "bool", name: "immutableFlag" },
+      { type: "uint256", name: "normalisedBalance" },
+      { type: "uint256", name: "lastUpdatedBlockNumber" },
+    ],
+  },
+  {
+    type: "function",
+    name: "currentTotalOutPayment",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "lastPrice",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ type: "uint64" }],
+  },
+] as const;

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { decodeErrorResult, encodeErrorResult, encodeFunctionData } from "viem";
-import { registryAbi } from "../src/keeper/abi.js";
+import { postageAbi, registryAbi } from "../src/keeper/abi.js";
 
 // `forge inspect VolumeRegistry methodIdentifiers`, run against
 // contracts/src/VolumeRegistry.sol. The hand-written ABI has to encode the same
@@ -9,11 +9,12 @@ const METHODS = {
   "getActiveVolumeCount()": "0xe7b4ed6a",
   "getActiveVolumes(uint256,uint256)": "0x68abda20",
   "getVolume(bytes32)": "0x92650fb3",
-  "trigger(bytes32)": "0x4c097cb4",
+  "trigger(bytes32[])": "0x5ef6eac9",
+  "postage()": "0x6af20da1",
+  "graceBlocks()": "0x9ee0a21e",
 } as const;
 
-/** The overload a v2 keeper must not call. Present on chain, absent from this ABI. */
-const BATCHED_TRIGGER = "0x5ef6eac9";
+const ID = `0x${"11".repeat(32)}` as const;
 
 describe("registry call ABI", () => {
   const encoded = {
@@ -29,13 +30,15 @@ describe("registry call ABI", () => {
     "getVolume(bytes32)": encodeFunctionData({
       abi: registryAbi,
       functionName: "getVolume",
-      args: [`0x${"11".repeat(32)}`],
+      args: [ID],
     }),
-    "trigger(bytes32)": encodeFunctionData({
+    "trigger(bytes32[])": encodeFunctionData({
       abi: registryAbi,
       functionName: "trigger",
-      args: [`0x${"11".repeat(32)}`],
+      args: [[ID, ID]],
     }),
+    "postage()": encodeFunctionData({ abi: registryAbi, functionName: "postage" }),
+    "graceBlocks()": encodeFunctionData({ abi: registryAbi, functionName: "graceBlocks" }),
   } as const;
 
   for (const [signature, selector] of Object.entries(METHODS)) {
@@ -44,21 +47,33 @@ describe("registry call ABI", () => {
     });
   }
 
-  // docs/KEEPERS.md: a v2 keeper calls trigger(bytes32) per volume. The batched
-  // overload swallows per-item reverts, so a gas-starved volume is
-  // indistinguishable from a healthy one. Leaving it out of this ABI is what
-  // makes that unbypassable — put it back and the keeper can silently regress.
-  test("carries no batched trigger to fall back to", () => {
-    expect(encoded["trigger(bytes32)"].slice(0, 10)).not.toBe(BATCHED_TRIGGER);
-
+  // The keeper sends the batched overload only. With both overloads in the
+  // ABI, viem picks one by its arguments, and a single id would quietly go
+  // out as `trigger(bytes32)`.
+  test("carries the batched trigger and no other", () => {
     const triggers = registryAbi.filter(
       (item) => item.type === "function" && item.name === "trigger",
     );
     expect(triggers).toHaveLength(1);
     expect(triggers[0]).toMatchObject({
-      inputs: [{ type: "bytes32", name: "volumeId" }],
+      inputs: [{ type: "bytes32[]", name: "volumeIds" }],
     });
   });
+});
+
+// The subset of Swarm's PostageStamp in contracts/src/interfaces/IPostageStampLike.sol.
+describe("postage call ABI", () => {
+  const cases = [
+    ["batches(bytes32)", "0xc81e25ab", encodeFunctionData({ abi: postageAbi, functionName: "batches", args: [ID] })],
+    ["currentTotalOutPayment()", "0x51b17cd0", encodeFunctionData({ abi: postageAbi, functionName: "currentTotalOutPayment" })],
+    ["lastPrice()", "0x053f14da", encodeFunctionData({ abi: postageAbi, functionName: "lastPrice" })],
+  ] as const;
+
+  for (const [signature, selector, data] of cases) {
+    test(`${signature} encodes to ${selector}`, () => {
+      expect(data.slice(0, 10)).toBe(selector);
+    });
+  }
 });
 
 // Selectors as the compiler computes them: `forge inspect VolumeRegistry

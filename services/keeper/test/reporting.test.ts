@@ -91,12 +91,12 @@ describe("cycleReport", () => {
   });
 
   test("a volume that fails before sending names it, without a tx", async () => {
-    const report = await reportFor([due(1), { ...due(2), status: 2 }]);
+    const report = await reportFor([due(1)], { chain: { rejectSends: [1] } });
     expect(report.status).toBe("failure");
     expect(report.failures).toHaveLength(1);
-    expect(report.failures[0]).toMatchObject({ volumeId: volumeId(2) });
+    expect(report.failures[0]).toMatchObject({ volumeId: volumeId(1) });
     expect(report.failures[0]!.hash).toBeUndefined();
-    expect(report.failures[0]!.message).toContain("VolumeNotActive");
+    expect(report.failures[0]!.message).toContain("underpriced");
   });
 
   test("a cycle that could not read the registry is a failure", async () => {

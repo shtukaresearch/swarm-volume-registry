@@ -1,6 +1,6 @@
 # keeper
 
-The Swarm `VolumeRegistry` keeper: one Cloudflare Worker per registry deployment. Each scheduled run enumerates the registry's active volumes, sends `trigger(bytes32)` for each — one transaction per volume, per [`docs/KEEPERS.md`](../../docs/KEEPERS.md) — and reports what the contract did.
+The Swarm `VolumeRegistry` keeper: one Cloudflare Worker per registry deployment. Each scheduled run enumerates the registry's active volumes, sends them through the batched `trigger(bytes32[])`, up to 8 to a transaction, and reports what the contract did to each.
 
 Cloudflare Cron Triggers are the only scheduler. GitHub Actions only tests the Worker; deploys are by hand with `wrangler`.
 
@@ -43,7 +43,7 @@ Secrets, per deployment — never shared between them:
 
 | | |
 |---|---|
-| `PRIVATE_KEY` | The keeper wallet, one per deployment, created and funded by `scripts/new_wallet.py`. It only pays gas: fund it with Sepolia ETH or xDAI and nothing else. |
+| `PRIVATE_KEY` | The keeper wallet, one per deployment, created and funded by `scripts/new_wallet.py`. It only pays gas: fund it with Sepolia ETH or xDAI and nothing else. Every batch is sent with a fixed 16M gas limit, of which it pays only for what it uses, but the node wants the whole limit covered at the fee cap (twice the base fee) up front. |
 | `RPC_URL` | Comma-separated, from independent providers. Probed every run — chain id included — and tried in order. |
 | `TELEGRAM_BOT_TOKEN` | From @BotFather. |
 | `TELEGRAM_CHAT_ID` | Numeric user or private-group chat ID. Deployments may post to the same group, but store it independently. |
@@ -52,9 +52,9 @@ Declared in `secrets.required`, so `wrangler deploy` refuses to ship a deploymen
 
 Variables, in `wrangler.jsonc` per env: `DEPLOYMENT_NAME`, `CHAIN_ID`, `REGISTRY_ADDRESS`, `NOTIFY_WARNINGS`, `MIN_BALANCE_WEI` (0 disables the warning), and the cycle limits `MAX_VOLUMES_PER_CYCLE`, `CYCLE_TIMEOUT_MS`, `RECEIPT_TIMEOUT_MS`, `CONFIRMATIONS`. Not set by any deployment, but accepted: `DRY_RUN`, `VOLUME_IDS` (maintain only these), `PAGE_SIZE`.
 
-**A run must fit inside its cron interval**, so two runs never share the wallet at once: 5 s of RPC probing, plus `CYCLE_TIMEOUT_MS` (no new transaction starts after it), plus `RECEIPT_TIMEOUT_MS` for the last one, plus 5 s of slack. `test/config.test.ts` holds each env to that, and to the 15-minute Cron Trigger limit. On Sepolia that is up to 7 minutes of new transactions, roughly 35 volumes at 12 s blocks, capped at 30 by `MAX_VOLUMES_PER_CYCLE`, and up to 2 minutes for each receipt. Volumes are sent one at a time, so a run reaches roughly `CYCLE_TIMEOUT_MS / block time` of them. The rest are deferred, with a warning, and each run starts at a different point in the list so the same volumes are not deferred every time. If the active set outgrows that, raise the budget.
+**A run must fit inside its cron interval**, so two runs never share the wallet at once: 5 s of RPC probing, plus `CYCLE_TIMEOUT_MS` (no new transaction starts after it), plus `RECEIPT_TIMEOUT_MS` for the last one, plus 5 s of slack. `test/config.test.ts` holds each env to that, and to the 15-minute Cron Trigger limit. On Sepolia that is up to 7 minutes of new transactions, roughly 35 at 12 s blocks, and up to 2 minutes for each receipt. Transactions are sent one at a time, each with up to 8 volumes, so a run reaches roughly `8 × CYCLE_TIMEOUT_MS / block time` volumes, capped at 30 by `MAX_VOLUMES_PER_CYCLE`. The rest are deferred, with a warning, and each run starts at a different point in the list so the same volumes are not deferred every time. If the active set outgrows that, raise the budget.
 
-Every RPC request counts against the platform's per-invocation subrequest cap: 50 on Workers Free, 10,000 on Workers Paid. A run spends about 20 on fixed work (probing each endpoint twice, enumeration, nonce and fees once per cycle, the balance check, the alert), then several per volume: its gas estimate, its send, and the receipt wait. On Workers Free, runs reached about 3 volumes, whatever `CYCLE_TIMEOUT_MS` allowed.
+Every RPC request counts against the platform's per-invocation subrequest cap: 50 on Workers Free, 10,000 on Workers Paid. A run spends about 20 on fixed work (probing each endpoint twice, enumeration, nonce and fees once per cycle, the balance check, the alert), then several per transaction: its send, the receipt wait, and one multicall that checks the volumes its receipt has no event for. On Workers Free, when each volume took its own transaction, runs reached about 3 volumes, whatever `CYCLE_TIMEOUT_MS` allowed.
 
 ## Setting up a deployment
 

@@ -43,7 +43,7 @@ Secrets, per deployment — never shared between them:
 
 | | |
 |---|---|
-| `PRIVATE_KEY` | The keeper wallet, one per deployment, created and funded by `scripts/new_wallet.py`. It only pays gas: fund it with Sepolia ETH or xDAI and nothing else. A full batch reserves 16.1M gas at twice the base fee, about 0.5 ETH at 15 gwei, though it pays only for the gas it uses. A wallet holding less sends smaller batches, and the run warns. |
+| `PRIVATE_KEY` | The keeper wallet, one per deployment, created and funded by `scripts/new_wallet.py`. It only pays gas: fund it with Sepolia ETH or xDAI and nothing else. Every batch is sent with a fixed 16M gas limit, of which it pays only for what it uses, but the node wants the whole limit covered at the fee cap (twice the base fee) up front. |
 | `RPC_URL` | Comma-separated, from independent providers. Probed every run — chain id included — and tried in order. |
 | `TELEGRAM_BOT_TOKEN` | From @BotFather. |
 | `TELEGRAM_CHAT_ID` | Numeric user or private-group chat ID. Deployments may post to the same group, but store it independently. |

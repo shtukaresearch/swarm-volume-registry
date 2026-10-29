@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { decodeErrorResult, encodeErrorResult, encodeFunctionData } from "viem";
-import { postageAbi, registryAbi } from "../src/keeper/abi.js";
+import { registryAbi } from "../src/keeper/abi.js";
 
 // `forge inspect VolumeRegistry methodIdentifiers`, run against
 // contracts/src/VolumeRegistry.sol. The hand-written ABI has to encode the same
@@ -10,8 +10,7 @@ const METHODS = {
   "getActiveVolumes(uint256,uint256)": "0x68abda20",
   "getVolume(bytes32)": "0x92650fb3",
   "trigger(bytes32[])": "0x5ef6eac9",
-  "postage()": "0x6af20da1",
-  "graceBlocks()": "0x9ee0a21e",
+  "trigger(bytes32)": "0x4c097cb4",
 } as const;
 
 const ID = `0x${"11".repeat(32)}` as const;
@@ -37,8 +36,11 @@ describe("registry call ABI", () => {
       functionName: "trigger",
       args: [[ID, ID]],
     }),
-    "postage()": encodeFunctionData({ abi: registryAbi, functionName: "postage" }),
-    "graceBlocks()": encodeFunctionData({ abi: registryAbi, functionName: "graceBlocks" }),
+    "trigger(bytes32)": encodeFunctionData({
+      abi: registryAbi,
+      functionName: "trigger",
+      args: [ID],
+    }),
   } as const;
 
   for (const [signature, selector] of Object.entries(METHODS)) {
@@ -47,33 +49,17 @@ describe("registry call ABI", () => {
     });
   }
 
-  // The keeper sends the batched overload only. With both overloads in the
-  // ABI, viem picks one by its arguments, and a single id would quietly go
-  // out as `trigger(bytes32)`.
-  test("carries the batched trigger and no other", () => {
+  // viem picks the overload by its arguments, so the two must stay distinct:
+  // the batch is sent, the single id only simulated.
+  test("carries exactly the two trigger overloads", () => {
     const triggers = registryAbi.filter(
       (item) => item.type === "function" && item.name === "trigger",
     );
-    expect(triggers).toHaveLength(1);
-    expect(triggers[0]).toMatchObject({
-      inputs: [{ type: "bytes32[]", name: "volumeIds" }],
-    });
+    expect(triggers.map((t) => t.inputs)).toEqual([
+      [{ type: "bytes32[]", name: "volumeIds" }],
+      [{ type: "bytes32", name: "volumeId" }],
+    ]);
   });
-});
-
-// The subset of Swarm's PostageStamp in contracts/src/interfaces/IPostageStampLike.sol.
-describe("postage call ABI", () => {
-  const cases = [
-    ["batches(bytes32)", "0xc81e25ab", encodeFunctionData({ abi: postageAbi, functionName: "batches", args: [ID] })],
-    ["currentTotalOutPayment()", "0x51b17cd0", encodeFunctionData({ abi: postageAbi, functionName: "currentTotalOutPayment" })],
-    ["lastPrice()", "0x053f14da", encodeFunctionData({ abi: postageAbi, functionName: "lastPrice" })],
-  ] as const;
-
-  for (const [signature, selector, data] of cases) {
-    test(`${signature} encodes to ${selector}`, () => {
-      expect(data.slice(0, 10)).toBe(selector);
-    });
-  }
 });
 
 // Selectors as the compiler computes them: `forge inspect VolumeRegistry

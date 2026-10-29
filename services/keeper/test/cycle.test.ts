@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import { collectActiveVolumes } from "../src/keeper/actions/collectActiveVolumes.js";
 import { getActiveVolumeCount } from "../src/keeper/actions/getActiveVolumeCount.js";
 import { rotateVolumes, runKeeperCycle } from "../src/keeper/actions/runKeeperCycle.js";
-import { batchGas, trigger } from "../src/keeper/actions/trigger.js";
+import { TRIGGER_GAS, trigger } from "../src/keeper/actions/trigger.js";
 import { REGISTRY, mockChain, volumeId, type MockVolume } from "./mock-chain.js";
 
 const GRACE = 17_280n;
@@ -62,36 +62,35 @@ describe("trigger", () => {
   });
 
   // The batch swallows an inner out-of-gas, so an estimate would find a limit
-  // that starves volumes. Each gets its share of a fixed limit instead.
-  test("sets aside gas for every volume, without estimating", async () => {
-    const chain = mockChain({ volumes: [due(1), due(2), due(3)] });
-    await trigger(chain.client, {
+  // that starves volumes; a top-up's cost is unpredictable anyway. Every batch
+  // carries the same limit instead, whatever its size.
+  test("sends a fixed gas limit, without estimating", async () => {
+    const one = mockChain({ volumes: [due(1)] });
+    await trigger(one.client, { registry: REGISTRY, volumeIds: [volumeId(1)] });
+    const three = mockChain({ volumes: [due(1), due(2), due(3)] });
+    await trigger(three.client, {
       registry: REGISTRY,
       volumeIds: [volumeId(1), volumeId(2), volumeId(3)],
     });
 
-    expect(chain.sentGas).toEqual([100_000n + 3n * 2_000_000n]);
-    expect(chain.calls).not.toContain("eth_estimateGas");
-    expect(chain.calls).not.toContain("eth_call");
+    expect([...one.sentGas, ...three.sentGas]).toEqual([TRIGGER_GAS, TRIGGER_GAS]);
+    expect(TRIGGER_GAS).toBe(16_000_000n);
+    expect(three.calls).not.toContain("eth_estimateGas");
+    expect(three.calls).not.toContain("eth_call");
   });
 
-  test("gasPerVolume changes each volume's share", async () => {
-    const chain = mockChain({ volumes: [due(1), due(2)] });
-    await trigger(chain.client, {
-      registry: REGISTRY,
-      volumeIds: [volumeId(1), volumeId(2)],
-      gasPerVolume: 500_000n,
-    });
-    expect(chain.sentGas).toEqual([batchGas(2, 500_000n)]);
+  test("an explicit gas limit replaces the default", async () => {
+    const chain = mockChain({ volumes: [due(1)] });
+    await trigger(chain.client, { registry: REGISTRY, volumeIds: [volumeId(1)], gas: 5_000_000n });
+    expect(chain.sentGas).toEqual([5_000_000n]);
   });
 
   // EIP-7825: a node rejects a gas limit above 2^24 outright.
-  test("refuses more volumes than fit under the transaction gas cap", async () => {
-    const ids = Array.from({ length: 9 }, (_, i) => volumeId(i + 1));
-    const chain = mockChain({ volumes: ids.map((_, i) => due(i + 1)) });
+  test("refuses a gas limit above the transaction cap", async () => {
+    const chain = mockChain({ volumes: [due(1)] });
     await expect(
-      trigger(chain.client, { registry: REGISTRY, volumeIds: ids }),
-    ).rejects.toThrow(/send at most 8/);
+      trigger(chain.client, { registry: REGISTRY, volumeIds: [volumeId(1)], gas: 2n ** 24n + 1n }),
+    ).rejects.toThrow(/transaction cap/);
     expect(chain.batches).toHaveLength(0);
   });
 
@@ -187,39 +186,20 @@ describe("runKeeperCycle", () => {
     expect(chain.triggerCalls).toEqual(inCycleOrder([1, 2, 3, 4, 5]));
   });
 
-  test("by default, as many volumes as fit under the transaction gas cap", async () => {
+  test("by default, 8 volumes a transaction", async () => {
     const chain = mockChain({ volumes: Array.from({ length: 10 }, (_, i) => funded(i + 1)) });
     await runKeeperCycle(chain.client, { registry: REGISTRY, maxVolumesPerCycle: 10 });
 
     expect(chain.batches.map((b) => b.length)).toEqual([8, 2]);
   });
 
-  test("a batchSize that cannot fit is a failed cycle, not a rejected send", async () => {
+  test("a batchSize below 1 is a failed cycle, not a stuck loop", async () => {
     const chain = mockChain({ volumes: [due(1)] });
-    const result = await runKeeperCycle(chain.client, { registry: REGISTRY, batchSize: 9 });
+    const result = await runKeeperCycle(chain.client, { registry: REGISTRY, batchSize: 0 });
 
     expect(result.ok).toBe(false);
-    expect(result.error).toMatch(/batchSize must be between 1 and 8/);
+    expect(result.error).toMatch(/batchSize must be a positive integer/);
     expect(chain.batches).toHaveLength(0);
-  });
-
-  // The node wants the whole limit × fee cap covered up front. Fee cap here:
-  // twice the mock's 1 gwei base fee plus its 0.001 gwei tip.
-  test("a wallet that cannot reserve a full batch sends smaller ones, and warns", async () => {
-    const chain = mockChain({
-      volumes: Array.from({ length: 5 }, (_, i) => due(i + 1)),
-      balance: 5_000_000n * 2_001_000_000n, // gas for 2 volumes, not 3
-    });
-    const result = await runKeeperCycle(chain.client, { registry: REGISTRY });
-
-    expect(result.ok).toBe(true);
-    expect(chain.batches.map((b) => b.length)).toEqual([2, 2, 1]);
-    expect(result.warnings).toEqual([
-      {
-        message:
-          "keeper balance covers the gas for 2 volume(s) per transaction at the current fee cap, below the batch size of 8",
-      },
-    ]);
   });
 });
 
@@ -470,7 +450,7 @@ describe("bounds and failures", () => {
 describe("RPC budget", () => {
   const count = (calls: string[], method: string) => calls.filter((c) => c === method).length;
 
-  test("nonce, fees and balance are read once a cycle, not once a batch", async () => {
+  test("nonce and fees are read once a cycle, not once a batch", async () => {
     const volumes = Array.from({ length: 5 }, (_, i) => due(i + 1));
     const chain = mockChain({ volumes });
     const result = await runKeeperCycle(chain.client, { registry: REGISTRY, batchSize: 2 });
@@ -480,7 +460,6 @@ describe("RPC budget", () => {
     expect(count(chain.calls, "eth_getTransactionCount")).toBe(1);
     expect(count(chain.calls, "eth_maxPriorityFeePerGas")).toBe(1);
     expect(count(chain.calls, "eth_getBlockByNumber")).toBe(1);
-    expect(count(chain.calls, "eth_getBalance")).toBe(1);
     // Nothing left to fill, so viem never asks the node to fill it.
     expect(count(chain.calls, "eth_fillTransaction")).toBe(0);
   });

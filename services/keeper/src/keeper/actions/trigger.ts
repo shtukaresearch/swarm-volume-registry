@@ -9,8 +9,8 @@ export type TriggerParameters = {
   /** Defaults to the client's account. */
   account?: Account | Address;
   chain?: Chain | null;
-  /** Gas set aside for each volume. Default 2_000_000 — see below. */
-  gasPerVolume?: bigint;
+  /** The transaction's gas limit. Default {@link TRIGGER_GAS} — see below. */
+  gas?: bigint;
   /** Fetched by viem when omitted. */
   nonce?: number;
   /** EIP-1559 fees, fetched by viem when either is omitted. */
@@ -23,19 +23,11 @@ export type TriggerReturnType = Hex;
 /** EIP-7825: no transaction may carry a gas limit above 2^24. */
 export const TX_GAS_LIMIT_CAP = 16_777_216n;
 
-/** The transaction's own share of the limit: intrinsic gas, calldata, the loop. */
-export const BATCH_OVERHEAD_GAS = 100_000n;
+/** The gas limit every batch is sent with, whatever its size — see {@link trigger}. */
+export const TRIGGER_GAS = 16_000_000n;
 
-/** Default gas set aside per volume — see {@link trigger}. */
-export const GAS_PER_VOLUME = 2_000_000n;
-
-/** The gas limit {@link trigger} sends `count` volumes with. */
-export const batchGas = (count: number, gasPerVolume = GAS_PER_VOLUME): bigint =>
-  BATCH_OVERHEAD_GAS + BigInt(count) * gasPerVolume;
-
-/** The most volumes one transaction can carry at `gasPerVolume` each. */
-export const maxBatchSize = (gasPerVolume = GAS_PER_VOLUME): number =>
-  Number((TX_GAS_LIMIT_CAP - BATCH_OVERHEAD_GAS) / gasPerVolume);
+/** Volumes per transaction: 2M of {@link TRIGGER_GAS} each, if all of them top up. */
+export const BATCH_SIZE = 8;
 
 /**
  * Top up (or retire) several volumes in one transaction, through the batched
@@ -48,13 +40,14 @@ export const maxBatchSize = (gasPerVolume = GAS_PER_VOLUME): number =>
  * `try this._triggerExt(id) {} catch {}`, and an inner call that runs out of
  * gas is caught like any other revert, so the batch succeeds at almost any
  * limit. An estimate is the lowest limit at which the transaction succeeds, so
- * it would be a limit at which volumes run out of gas and are skipped. Instead
- * every volume gets `gasPerVolume`, enough for the whole `transferFrom` →
- * `approve` → `topUp` path. On Sepolia that path has cost from ~480k to ~1.5M,
- * depending on PostageStamp state. Unused gas is refunded, and the healthy
- * majority of volumes need about 30k, so the actual cost stays small. Each inner
- * call is offered 63/64 of the gas left, not just its share, so one expensive
- * volume draws on the room the cheap ones left.
+ * it would be a limit at which volumes run out of gas and are skipped. A
+ * top-up's cost is unpredictable anyway: the `transferFrom` → `approve` →
+ * `topUp` path has cost from ~480k to ~1.5M on Sepolia, depending on
+ * PostageStamp state. So every batch carries the same fixed limit, just under
+ * the EIP-7825 cap: enough for {@link BATCH_SIZE} volumes all topping up. Unused
+ * gas is not charged, and the healthy majority of volumes need about 30k. Each
+ * inner call is offered 63/64 of the gas left, so one expensive volume draws on
+ * the room the cheap ones left.
  *
  * Even a mined batch can still have skipped a volume. A volume that reverted
  * inside the batch leaves no event, the same as a volume that needed nothing.
@@ -78,15 +71,12 @@ export async function trigger<
     volumeIds,
     account = client.account,
     chain = client.chain,
-    gasPerVolume = GAS_PER_VOLUME,
+    gas = TRIGGER_GAS,
   } = parameters;
 
   if (volumeIds.length === 0) throw new Error("trigger needs at least one volume");
-  const gas = batchGas(volumeIds.length, gasPerVolume);
   if (gas > TX_GAS_LIMIT_CAP) {
-    throw new Error(
-      `${volumeIds.length} volumes need ${gas} gas, above the ${TX_GAS_LIMIT_CAP} transaction cap: send at most ${maxBatchSize(gasPerVolume)}`,
-    );
+    throw new Error(`gas ${gas} is above the ${TX_GAS_LIMIT_CAP} transaction cap`);
   }
 
   // With chainId, gas, nonce and fees all supplied, viem has nothing left to

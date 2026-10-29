@@ -2,7 +2,6 @@ import type { Account, Address, Chain, Client, Hex, Transport } from "viem";
 import { hexToBigInt, keccak256, numberToHex } from "viem";
 import {
   estimateMaxPriorityFeePerGas,
-  getBalance,
   getBlock,
   getBlockNumber,
   getTransactionCount,
@@ -22,12 +21,7 @@ import type {
   VolumeView,
 } from "../types.js";
 import { collectActiveVolumes } from "./collectActiveVolumes.js";
-import {
-  BATCH_OVERHEAD_GAS,
-  GAS_PER_VOLUME,
-  maxBatchSize,
-  trigger,
-} from "./trigger.js";
+import { BATCH_SIZE, TRIGGER_GAS, trigger } from "./trigger.js";
 
 export type RunKeeperCycleParameters = {
   registry: Address;
@@ -37,14 +31,10 @@ export type RunKeeperCycleParameters = {
   pageSize?: number;
   /** Volumes attempted per cycle. Default 50; the rest defers to the next. */
   maxVolumesPerCycle?: number;
-  /**
-   * Volumes per transaction. Default, and at most, as many as fit under the
-   * transaction gas cap at `gasPerVolume` each — see {@link trigger}. A wallet
-   * that cannot reserve that much gas sends fewer.
-   */
+  /** Volumes per transaction. Default {@link BATCH_SIZE}. */
   batchSize?: number;
-  /** Gas set aside per volume. Default 2_000_000 — see {@link trigger}. */
-  gasPerVolume?: bigint;
+  /** Each transaction's gas limit. Default {@link TRIGGER_GAS} — see {@link trigger}. */
+  gas?: bigint;
   /** Default 1. */
   confirmations?: number;
   /** Per-transaction receipt wait, in ms. Default 60_000. */
@@ -96,13 +86,7 @@ const message = (err: unknown): string =>
   err instanceof Error ? err.message : String(err);
 
 /** What every transaction in a cycle shares, read once — see {@link runKeeperCycle}. */
-type Sending = {
-  nonce: number;
-  maxFeePerGas: bigint;
-  maxPriorityFeePerGas: bigint;
-  /** The wallet's balance, less what this cycle's receipts have spent. */
-  balance: bigint;
-};
+type Sending = { nonce: number; maxFeePerGas: bigint; maxPriorityFeePerGas: bigint };
 
 /** What checking a silent volume needs from the registry, read once a cycle. */
 type Target = { postage: Address; graceBlocks: bigint };
@@ -136,7 +120,8 @@ export function rotateVolumes<T>(ids: readonly T[], blockNumber: bigint): T[] {
  *
  * **Batched**, through `trigger(bytes32[])`: one transaction, nonce and receipt
  * wait per batch rather than per volume, so a cycle reaches several times as
- * many volumes in the same time. {@link trigger} explains the gas limit. The
+ * many volumes in the same time. Every batch carries the same fixed gas
+ * limit; {@link trigger} explains why. The
  * cost is that the contract runs each volume in its own try/catch. A volume
  * that reverts there, whether out of gas, on a PostageStamp revert, or retired
  * since enumeration, leaves no event, the same as a volume that needed nothing.
@@ -161,15 +146,12 @@ export function rotateVolumes<T>(ids: readonly T[], blockNumber: bigint): T[] {
  * and picked up next cycle. Each cycle starts somewhere different in the list
  * ({@link rotateVolumes}), so what one cycle defers, a later one reaches.
  *
- * **Nonce, fees and balance are read once per cycle**, not once per
- * transaction: every RPC request is a subrequest, and a platform's
- * per-invocation cap on those bounds a cycle as surely as `cycleTimeout` does.
- * The nonce is counted up locally, and each receipt's cost is taken off the
- * balance. That is safe for the same reason sequential sending is: nothing else
- * spends from this wallet mid-cycle. Any failure discards all three, and the
- * next send reads them fresh. A batch's whole gas limit, priced at the cycle's
- * fee cap, must be covered by the balance before the node accepts it, so a
- * low balance means smaller batches, and a warning saying so.
+ * **Nonce and fees are read once per cycle**, not once per transaction: every
+ * RPC request is a subrequest, and a platform's per-invocation cap on those
+ * bounds a cycle as surely as `cycleTimeout` does. The nonce is counted up
+ * locally, which is safe for the same reason sequential sending is: nothing
+ * else spends from this wallet mid-cycle. Any failure discards both, and the
+ * next send reads them fresh.
  *
  * **Never throws.** Every failure is folded into the returned result, because
  * one batch failing must not stop the rest from being attempted, and a run
@@ -199,8 +181,7 @@ export async function runKeeperCycle<
     registry,
     mode = { type: "all" },
     maxVolumesPerCycle = 50,
-    gasPerVolume = GAS_PER_VOLUME,
-    batchSize = maxBatchSize(gasPerVolume),
+    batchSize = BATCH_SIZE,
     confirmations = 1,
     receiptTimeout = 60_000,
     cycleTimeout = 120_000,
@@ -210,7 +191,6 @@ export async function runKeeperCycle<
   const startedAt = Date.now();
   let sending: Sending | undefined;
   let target: Target | undefined;
-  let warnedBalance = false;
   const result: RunKeeperCycleReturnType = {
     ok: true,
     mode: mode.type,
@@ -227,10 +207,8 @@ export async function runKeeperCycle<
   };
 
   try {
-    if (batchSize < 1 || batchSize > maxBatchSize(gasPerVolume)) {
-      throw new Error(
-        `batchSize must be between 1 and ${maxBatchSize(gasPerVolume)} at ${gasPerVolume} gas per volume, got ${batchSize}`,
-      );
+    if (!Number.isSafeInteger(batchSize) || batchSize < 1) {
+      throw new Error(`batchSize must be a positive integer, got ${batchSize}`);
     }
 
     // Pin the enumeration to one block: the active index is a swap-and-pop
@@ -339,7 +317,7 @@ export async function runKeeperCycle<
    */
   async function readSending(): Promise<Sending> {
     const address = client.account!.address;
-    const [nonce, block, maxPriorityFeePerGas, balance] = await Promise.all([
+    const [nonce, block, maxPriorityFeePerGas] = await Promise.all([
       getAction(client, getTransactionCount, "getTransactionCount")({
         address,
         blockTag: "pending",
@@ -350,38 +328,14 @@ export async function runKeeperCycle<
         estimateMaxPriorityFeePerGas,
         "estimateMaxPriorityFeePerGas",
       )({ chain: client.chain }),
-      getAction(client, getBalance, "getBalance")({ address }),
     ]);
     const baseFee = block.baseFeePerGas ?? 0n;
-    return {
-      nonce,
-      maxFeePerGas: baseFee * 2n + maxPriorityFeePerGas,
-      maxPriorityFeePerGas,
-      balance,
-    };
-  }
-
-  /**
-   * How many volumes the next transaction carries: `batchSize`, or as many as
-   * the balance can reserve gas for. At least one, so an empty wallet fails
-   * on a send and says why.
-   */
-  function sizeBatch({ balance, maxFeePerGas }: Sending): number {
-    const gas = maxFeePerGas > 0n ? balance / maxFeePerGas : BigInt(Number.MAX_SAFE_INTEGER);
-    const fits = gas > BATCH_OVERHEAD_GAS ? Number((gas - BATCH_OVERHEAD_GAS) / gasPerVolume) : 0;
-    if (fits >= batchSize) return batchSize;
-    if (!warnedBalance) {
-      warnedBalance = true;
-      result.warnings.push({
-        message: `keeper balance covers the gas for ${fits} volume(s) per transaction at the current fee cap, below the batch size of ${batchSize}`,
-      });
-    }
-    return Math.max(fits, 1);
+    return { nonce, maxFeePerGas: baseFee * 2n + maxPriorityFeePerGas, maxPriorityFeePerGas };
   }
 
   /** Trigger the head of `pending`, as many as one transaction takes. */
   async function sendBatch(pending: VolumeView[]): Promise<VolumeResult[]> {
-    let batch = pending.slice(0, batchSize);
+    const batch = pending.slice(0, batchSize);
     let hash: Hex | undefined;
     try {
       if (dryRun) {
@@ -403,11 +357,10 @@ export async function runKeeperCycle<
       }
 
       sending ??= await readSending();
-      batch = pending.slice(0, sizeBatch(sending));
       hash = await trigger(client, {
         registry,
         volumeIds: batch.map((v) => v.volumeId),
-        gasPerVolume,
+        gas: parameters.gas,
         nonce: sending.nonce,
         maxFeePerGas: sending.maxFeePerGas,
         maxPriorityFeePerGas: sending.maxPriorityFeePerGas,
@@ -419,7 +372,6 @@ export async function runKeeperCycle<
         waitForTransactionReceipt,
         "waitForTransactionReceipt",
       )({ hash, confirmations, timeout: receiptTimeout });
-      sending.balance -= receipt.gasUsed * receipt.effectiveGasPrice;
 
       // gasUsed is the whole transaction's, shared by every volume in it.
       const mined = {

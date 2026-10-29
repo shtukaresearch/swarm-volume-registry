@@ -25,9 +25,9 @@ export type KeeperMode =
  *
  * `noop` is a real answer, not an absence of one: step 6 of `_triggerOne`
  * returns silently when the batch already holds at least `graceBlocks` of
- * runway. That is the healthy steady state. Because a volume that reverted
- * inside the batch is just as silent, `noop` is only reported once chain state
- * at the receipt's block confirms the runway.
+ * runway. Because a volume that reverted inside the batch is just as silent,
+ * `noop` is only reported once simulating its `trigger(bytes32)` at the
+ * receipt's block does not revert.
  */
 export type VolumeSummary =
   | { outcome: "toppedUp"; amount: bigint }
@@ -45,8 +45,8 @@ export interface VolumeResult {
    * - `success` / `reverted` — mined, per the receipt.
    * - `simulated` — dry run; nothing was sent.
    * - `failed` — never mined (the send failed, or the receipt wait timed
-   *   out), or mined but the batch skipped this volume: no event, and its
-   *   postage batch still short of the top-up target.
+   *   out), or mined but this volume reverted inside the batch: no event, and
+   *   its simulated `trigger(bytes32)` reverts.
    */
   status: "success" | "reverted" | "simulated" | "failed";
   /** What the contract did. Present only when `status` is `success`. */

@@ -1,20 +1,17 @@
 // The VolumeRegistry surface a keeper cycle touches, and nothing more.
 // Kept `as const` so viem can infer per-function argument and return types.
 //
-// Deliberately partial on the call side: enumeration, the batched write, the
-// events that explain what the write did, and the two immutables that check a
-// volume the write was silent about. The contract's full error set is here
-// regardless, because decoding a failure costs nothing and is worth having when
-// there is one.
+// Deliberately partial on the call side: enumeration, the two trigger
+// overloads, and the events that explain what a trigger did. The contract's
+// full error set is here regardless, because decoding a failure costs nothing
+// and is worth having when there is one.
 //
-// `trigger(bytes32)` is absent: the keeper sends `trigger(bytes32[])` only.
-// That overload runs every id as `try this._triggerExt(id) {} catch {}`, so
-// a volume that reverts inside it, out of gas or otherwise, leaves no trace in
-// the receipt. The receipt alone cannot tell such a volume from one that
-// needed nothing. `runKeeperCycle` checks every volume the receipt is silent
-// about against PostageStamp state, through `postage()` and `graceBlocks()`
-// below and `postageAbi`. Leaving the single-volume overload out also keeps
-// viem's overload inference simple.
+// The keeper sends `trigger(bytes32[])`, which runs every id as
+// `try this._triggerExt(id) {} catch {}`: a volume that reverts inside it leaves
+// no trace in the receipt. `trigger(bytes32)` is never sent. `runKeeperCycle`
+// only simulates it, for a volume the batch receipt is silent about, to
+// reproduce that volume's revert and its reason. viem tells the overloads
+// apart by their arguments: an array of ids, or one id.
 
 export const registryAbi = [
   {
@@ -84,20 +81,12 @@ export const registryAbi = [
     inputs: [{ type: "bytes32[]", name: "volumeIds" }],
     outputs: [],
   },
-  // Immutables, read once a cycle to check volumes a receipt is silent about.
   {
     type: "function",
-    name: "postage",
-    stateMutability: "view",
-    inputs: [],
-    outputs: [{ type: "address" }],
-  },
-  {
-    type: "function",
-    name: "graceBlocks",
-    stateMutability: "view",
-    inputs: [],
-    outputs: [{ type: "uint64" }],
+    name: "trigger",
+    stateMutability: "nonpayable",
+    inputs: [{ type: "bytes32", name: "volumeId" }],
+    outputs: [],
   },
   // Events decoded off the trigger receipt to explain per-volume outcomes.
   {
@@ -128,10 +117,12 @@ export const registryAbi = [
   // Custom errors, so a revert prints a name instead of a 4-byte blob. These
   // are a decode table like RETIRE_REASONS below, not call surface: viem
   // matches revert data against them by selector, and they add no way to drive
-  // the registry. The batched trigger swallows every per-volume revert, so
-  // these earn their place when the configured address is not the registry you
-  // think it is — a stale deployment, a wrong chain — which is exactly when a
-  // keeper's logs are all you have.
+  // the registry. A simulated `trigger(bytes32)` reverts with them, which is
+  // how a volume the batch swallowed gets a named reason; `VolumeNotActive`
+  // there means it retired before the batch reached it. The rest earn their
+  // place when the configured address is not the registry you think it is — a
+  // stale deployment, a wrong chain — which is exactly when a keeper's logs are
+  // all you have.
   { type: "error", name: "AccountNotActive", inputs: [] },
   { type: "error", name: "BatchNotLive", inputs: [] },
   { type: "error", name: "DesignationClearedOnActivate", inputs: [] },
@@ -169,38 +160,3 @@ export const SKIP_REASONS: Record<number, string> = {
   2: "PaymentFailed",
 };
 
-/**
- * The PostageStamp reads that check a volume the batch receipt says nothing
- * about: its batch's balance against the registry's top-up target, computed
- * the way step 6 of `_triggerOne` computes it.
- */
-export const postageAbi = [
-  {
-    type: "function",
-    name: "batches",
-    stateMutability: "view",
-    inputs: [{ type: "bytes32", name: "id" }],
-    outputs: [
-      { type: "address", name: "owner" },
-      { type: "uint8", name: "depth" },
-      { type: "uint8", name: "bucketDepth" },
-      { type: "bool", name: "immutableFlag" },
-      { type: "uint256", name: "normalisedBalance" },
-      { type: "uint256", name: "lastUpdatedBlockNumber" },
-    ],
-  },
-  {
-    type: "function",
-    name: "currentTotalOutPayment",
-    stateMutability: "view",
-    inputs: [],
-    outputs: [{ type: "uint256" }],
-  },
-  {
-    type: "function",
-    name: "lastPrice",
-    stateMutability: "view",
-    inputs: [],
-    outputs: [{ type: "uint64" }],
-  },
-] as const;

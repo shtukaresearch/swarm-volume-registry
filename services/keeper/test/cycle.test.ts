@@ -14,9 +14,9 @@ const TARGET = GRACE * PRICE;
 const BLOCK = 8_000_000n;
 const inCycleOrder = (ns: number[]) => rotateVolumes(ns.map(volumeId), BLOCK);
 
-// The mock serves real PostageStamp state for these fixtures. The keeper sends
-// both alike, and reads that state only to check a volume the receipt is silent
-// about.
+// The mock serves real PostageStamp state for these fixtures. The keeper never
+// reads it — that is the point of `funded` and `due` looking different here and
+// producing identical transactions below.
 const funded = (n: number): MockVolume => ({
   volumeId: volumeId(n),
   batch: { normalisedBalance: OUT + TARGET * 2n },
@@ -164,17 +164,24 @@ describe("runKeeperCycle", () => {
     ]);
   });
 
-  // PostageStamp state checks what a mined batch did; it never picks what to
-  // send. A receipt with an event for every volume leaves nothing to check.
-  test("reads PostageStamp state only for volumes the receipt is silent about", async () => {
+  // Nothing on the cycle path forms a second opinion about what a volume
+  // needs. A volume the receipt is silent about is replayed against the
+  // registry itself, never checked against PostageStamp state.
+  test("reads no PostageStamp state — the contract does that itself", async () => {
+    const chain = mockChain({ volumes: [funded(1), due(2)] });
+    await runKeeperCycle(chain.client, { registry: REGISTRY });
+    expect(chain.postageReads).toBe(0);
+  });
+
+  test("replays only volumes the receipt is silent about", async () => {
     const busy = mockChain({ volumes: [due(1), due(2)] });
     await runKeeperCycle(busy.client, { registry: REGISTRY });
-    expect(busy.postageReads).toBe(0);
+    // Enumeration only.
+    expect(busy.multicallCount).toBe(1);
 
     const quiet = mockChain({ volumes: [funded(1), due(2)] });
     await runKeeperCycle(quiet.client, { registry: REGISTRY });
-    // currentTotalOutPayment, lastPrice, and volume 1's batch.
-    expect(quiet.postageReads).toBe(3);
+    expect(quiet.multicallCount).toBe(2);
   });
 
   test("splits the attempted volumes into transactions of batchSize", async () => {
@@ -315,32 +322,39 @@ describe("per-volume outcomes", () => {
     expect(new Set(result.volumes.map((v) => v.hash)).size).toBe(1);
   });
 
-  // The failure the batch hides: the transaction succeeds, the volume's inner
-  // call ran out of gas and was swallowed, and it is still due.
-  test("a volume the batch skipped fails, though its transaction succeeded", async () => {
-    const chain = mockChain({ volumes: [due(1), { ...due(2), starve: true }, funded(3)] });
+  // The failure the batch hides: the transaction succeeds, and the volume's
+  // inner call reverted and was swallowed. Replaying it names the reason.
+  test("a volume that reverted inside the batch fails, with its reason", async () => {
+    const chain = mockChain({
+      volumes: [due(1), { ...due(2), revert: "Pausable: paused" }, funded(3)],
+    });
     const result = await runKeeperCycle(chain.client, { registry: REGISTRY });
 
     expect(result.ok).toBe(false);
     expect(result.failed).toEqual([volumeId(2)]);
     const byId = Object.fromEntries(result.volumes.map((v) => [v.volumeId, v]));
-    expect(byId[volumeId(2)]).toMatchObject({ status: "failed", hash: byId[volumeId(1)]!.hash });
-    expect(byId[volumeId(2)]?.error).toContain("reverted inside the batch");
+    expect(byId[volumeId(2)]).toMatchObject({
+      status: "failed",
+      hash: byId[volumeId(1)]!.hash,
+      error: "reverted inside the batch: Pausable: paused",
+    });
     expect(byId[volumeId(1)]).toMatchObject({ status: "success", outcome: "toppedUp" });
     expect(byId[volumeId(3)]).toMatchObject({ status: "success", outcome: "noop" });
   });
 
-  // Swallowed or not, a volume with its full runway is what a keeper is for.
-  test("a skipped volume that needed nothing is still a noop", async () => {
-    const chain = mockChain({ volumes: [{ ...funded(1), starve: true }] });
+  // Out of gas is not a revert worth reporting: the replay has gas to spare,
+  // and the next cycle tops the volume up.
+  test("a volume starved of gas inside the batch is not reported", async () => {
+    const chain = mockChain({ volumes: [{ ...due(1), starve: true }] });
     const result = await runKeeperCycle(chain.client, { registry: REGISTRY });
 
     expect(result.ok).toBe(true);
     expect(result.noop).toEqual([volumeId(1)]);
+    expect(result.warnings).toEqual([]);
   });
 
   // The race a keeper hits when a volume retires between the pinned block and
-  // the batch: its `VolumeNotActive` is swallowed, and the check finds it gone.
+  // the batch: its `VolumeNotActive` is swallowed, and the replay names it.
   test("a volume retired before the batch reached it is reported retired", async () => {
     // The mock's active index still lists it; getVolume says Retired.
     const chain = mockChain({ volumes: [due(1), { ...due(2), status: 2 }] });
@@ -464,14 +478,13 @@ describe("RPC budget", () => {
     expect(count(chain.calls, "eth_fillTransaction")).toBe(0);
   });
 
-  // Enumeration, then the registry's immutables once, then one check per
-  // batch with a silent volume in it.
-  test("one multicall a batch checks its silent volumes", async () => {
+  // Enumeration, then one replay per batch with a silent volume in it.
+  test("one multicall a batch replays its silent volumes", async () => {
     const volumes = Array.from({ length: 5 }, (_, i) => funded(i + 1));
     const chain = mockChain({ volumes });
     await runKeeperCycle(chain.client, { registry: REGISTRY, batchSize: 2 });
 
-    expect(chain.multicallCount).toBe(1 + 1 + 3);
+    expect(chain.multicallCount).toBe(1 + 3);
   });
 
   test("consecutive sends carry consecutive nonces", async () => {
@@ -490,11 +503,11 @@ describe("RPC budget", () => {
     expect(count(chain.calls, "eth_getTransactionCount")).toBe(2);
   });
 
-  // The batch's own `trigger` is spent on chain; a silent volume is not a
-  // reason to re-read anything.
-  test("a volume the batch skipped does not reset nonce and fees", async () => {
+  // The batch's nonce is spent on chain whatever its volumes did, so a revert
+  // inside it is not a reason to re-read anything.
+  test("a volume that reverted inside a batch does not reset nonce and fees", async () => {
     const chain = mockChain({
-      volumes: [due(1), { ...due(2), starve: true }, due(3)],
+      volumes: [due(1), { ...due(2), revert: "Pausable: paused" }, due(3)],
     });
     await runKeeperCycle(chain.client, { registry: REGISTRY, batchSize: 1 });
 

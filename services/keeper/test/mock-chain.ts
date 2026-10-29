@@ -10,12 +10,11 @@
  * The trigger path mirrors `_triggerOne`'s check order (DESIGN §8) closely
  * enough to emit the event the real contract would: retire edges first, then
  * auth, then the deficit — and *no* event when the volume needs nothing. Like
- * the batched overload, it swallows a volume that reverts — one not Active, or
- * one listed in `starve` — leaving no event for it either, so the keeper has
- * to tell the two silences apart.
- *
- * PostageStamp state is fixed: a top-up does not change it. The keeper reads it
- * only for volumes a receipt is silent about, which a top-up never is.
+ * the batched overload, it swallows a volume that reverts — one not Active,
+ * one with a `revert` reason, or one that is starved — leaving no event for it
+ * either, so the keeper has to tell the silences apart. A simulated
+ * `trigger(bytes32)` reverts with the same revert data the contract would, and
+ * a starved volume simulates cleanly, as it would with gas to spare.
  */
 import {
   createWalletClient,
@@ -23,6 +22,7 @@ import {
   decodeFunctionData,
   publicActions,
   encodeAbiParameters,
+  encodeErrorResult,
   encodeEventTopics,
   encodeFunctionResult,
   keccak256,
@@ -37,7 +37,56 @@ import {
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { sepolia } from "viem/chains";
-import { postageAbi, registryAbi } from "../src/keeper/abi.js";
+import { registryAbi } from "../src/keeper/abi.js";
+
+/**
+ * PostageStamp lives only here. The keeper carries no PostageStamp ABI — the
+ * contract decides what a volume needs — so the mock serves this surface purely
+ * so that `postageReads` stays a live assertion: re-introduce a client-side
+ * read and the cycle tests fail rather than quietly passing.
+ */
+const postageAbi = [
+  {
+    type: "function",
+    name: "batches",
+    stateMutability: "view",
+    inputs: [{ type: "bytes32", name: "id" }],
+    outputs: [
+      { type: "address", name: "owner" },
+      { type: "uint8", name: "depth" },
+      { type: "uint8", name: "bucketDepth" },
+      { type: "bool", name: "immutableFlag" },
+      { type: "uint256", name: "normalisedBalance" },
+      { type: "uint256", name: "lastUpdatedBlockNumber" },
+    ],
+  },
+  {
+    type: "function",
+    name: "currentTotalOutPayment",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "lastPrice",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ type: "uint64" }],
+  },
+] as const;
+
+/** Solidity's `require(…, reason)` revert. */
+const solidityError = [
+  { type: "error", name: "Error", inputs: [{ type: "string", name: "message" }] },
+] as const;
+
+/** A revert, with the data a node returns for it. */
+class Revert extends Error {
+  constructor(readonly data: Hex) {
+    super("execution reverted");
+  }
+}
 
 const MULTICALL3 = sepolia.contracts.multicall3.address;
 export const REGISTRY = "0x1111111111111111111111111111111111111111" as const;
@@ -76,6 +125,8 @@ export interface MockVolume {
   payerBroke?: boolean;
   /** Model an inner call that runs out of gas: swallowed, no event, no change. */
   starve?: boolean;
+  /** Model `_triggerOne` reverting with this `require` reason, e.g. Postage paused. */
+  revert?: string;
 }
 
 export interface MockChainOptions {
@@ -228,13 +279,21 @@ export function mockChain(options: MockChainOptions = {}) {
             };
         return encodeFunctionResult({ abi: registryAbi, functionName, result: view });
       }
-      // Each id runs in its own try/catch, so the batch itself never reverts.
-      case "trigger":
+      case "trigger": {
+        // The batch runs each id in its own try/catch, so it never reverts.
+        const [arg] = args as readonly [Hex | readonly Hex[]];
+        if (Array.isArray(arg)) return "0x";
+        const volume = find(arg as Hex);
+        if (!isActive(volume)) {
+          throw new Revert(encodeErrorResult({ abi: registryAbi, errorName: "VolumeNotActive" }));
+        }
+        if (volume!.revert) {
+          throw new Revert(
+            encodeErrorResult({ abi: solidityError, errorName: "Error", args: [volume!.revert] }),
+          );
+        }
         return "0x";
-      case "postage":
-        return encodeFunctionResult({ abi: registryAbi, functionName, result: POSTAGE });
-      case "graceBlocks":
-        return encodeFunctionResult({ abi: registryAbi, functionName, result: graceBlocks });
+      }
       default:
         throw new Error(`mock registry: unhandled ${functionName}`);
     }
@@ -290,8 +349,8 @@ export function mockChain(options: MockChainOptions = {}) {
     const results = batch.map((call) => {
       try {
         return { success: true, returnData: dispatch(call.target, call.callData) };
-      } catch {
-        return { success: false, returnData: "0x" as Hex };
+      } catch (err) {
+        return { success: false, returnData: err instanceof Revert ? err.data : ("0x" as Hex) };
       }
     });
     return encodeFunctionResult({
@@ -309,7 +368,7 @@ export function mockChain(options: MockChainOptions = {}) {
   function receiptLogs(volumeIds: readonly Hex[]) {
     return volumeIds.flatMap((volumeId) => {
       const volume = find(volumeId);
-      if (!volume || !isActive(volume) || volume.starve) return [];
+      if (!volume || !isActive(volume) || volume.starve || volume.revert) return [];
       const emission = outcomeFor(volume);
       return emission ? [{ volumeId, emission }] : [];
     }).map(({ volumeId, emission }, i) => eventLog(volumeId, emission!, i));

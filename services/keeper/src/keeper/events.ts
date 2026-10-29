@@ -62,7 +62,7 @@ export function decodeCycleEvents(
  * Every branch of `_triggerOne` returns as soon as it emits, so a volume has
  * at most one event. No event is ambiguous in a batch: either the deficit was
  * zero and the contract did nothing, or the volume reverted inside the batch's
- * try/catch. `runKeeperCycle` settles which one from chain state.
+ * try/catch. `runKeeperCycle` settles which one by simulating it again.
  *
  * The receipt holds every volume in the batch, so the `volumeId` filter is what
  * keeps one volume's event from being attributed to another.

@@ -1,5 +1,11 @@
 import type { Account, Address, Chain, Client, Hex, Transport } from "viem";
-import { hexToBigInt, keccak256, numberToHex } from "viem";
+import {
+  BaseError,
+  ContractFunctionRevertedError,
+  hexToBigInt,
+  keccak256,
+  numberToHex,
+} from "viem";
 import {
   estimateMaxPriorityFeePerGas,
   getBlock,
@@ -10,7 +16,7 @@ import {
   waitForTransactionReceipt,
 } from "viem/actions";
 import { getAction } from "viem/utils";
-import { VOLUME_STATUS, postageAbi, registryAbi } from "../abi.js";
+import { VOLUME_STATUS, registryAbi } from "../abi.js";
 import { decodeCycleEvents, summarizeVolume } from "../events.js";
 import type {
   KeeperIssue,
@@ -66,8 +72,7 @@ export type RunKeeperCycleReturnType = {
   noop: Hex[];
   /**
    * Volumes whose transaction reverted, was never mined, or never confirmed,
-   * and volumes a mined batch skipped: no event, and still short of the top-up
-   * target.
+   * and volumes that reverted inside a mined batch.
    */
   failed: Hex[];
   /** `selected` mode: requested ids that are not Active volumes. */
@@ -88,8 +93,6 @@ const message = (err: unknown): string =>
 /** What every transaction in a cycle shares, read once — see {@link runKeeperCycle}. */
 type Sending = { nonce: number; maxFeePerGas: bigint; maxPriorityFeePerGas: bigint };
 
-/** What checking a silent volume needs from the registry, read once a cycle. */
-type Target = { postage: Address; graceBlocks: bigint };
 
 /**
  * `ids`, rotated to start at a position derived from `blockNumber`.
@@ -125,18 +128,19 @@ export function rotateVolumes<T>(ids: readonly T[], blockNumber: bigint): T[] {
  * cost is that the contract runs each volume in its own try/catch. A volume
  * that reverts there, whether out of gas, on a PostageStamp revert, or retired
  * since enumeration, leaves no event, the same as a volume that needed nothing.
- * So every volume the receipt is silent about is checked, in one multicall at
- * the receipt's block, the way step 6 of `_triggerOne` decides: if its batch
- * holds at least `lastPrice × graceBlocks` of runway, it needed nothing (a
- * `noop`). If it is still Active and short of that, the batch skipped it, and it
- * is `failed`. If it is no longer Active, it is reported as retired.
+ * So every volume the receipt is silent about is replayed: `trigger(bytes32)`
+ * is simulated for it at the receipt's block, in one multicall. A revert there
+ * is the volume's revert in the batch, and it is `failed`, with its reason;
+ * `VolumeNotActive` means it retired first, and is reported as retired. No
+ * revert is a `noop`. That covers a volume starved of gas inside the batch too,
+ * which goes unreported: the next cycle tops it up. Every trigger after the
+ * first tops up the deficit since, so a healthy volume almost always has an
+ * event, and the replay runs mainly when something reverted.
  *
  * **No client-side filtering.** Every Active volume is triggered and the
  * contract decides what each one needs. `_triggerOne` tops up only a real
  * deficit, retires a dead batch, and answers `TopupSkipped` when the payer
- * can't or won't pay. A volume that needs nothing costs about 30k gas. The
- * PostageStamp reads above only check what a mined batch did. They never pick
- * which volumes to send.
+ * can't or won't pay. A volume that needs nothing costs about 30k gas.
  *
  * **Batches are sent sequentially**, and every one is attempted even after an
  * earlier one fails; `ok` then reports the run as failed and `failed` names the
@@ -190,7 +194,6 @@ export async function runKeeperCycle<
 
   const startedAt = Date.now();
   let sending: Sending | undefined;
-  let target: Target | undefined;
   const result: RunKeeperCycleReturnType = {
     ok: true,
     mode: mode.type,
@@ -386,19 +389,10 @@ export async function runKeeperCycle<
       const decoded = decodeCycleEvents(receipt.logs, registry);
       const summaries = batch.map((v) => summarizeVolume(decoded, v.volumeId));
       const silent = batch.filter((_, i) => !summaries[i]);
-      const checked = await checkSilent(silent, receipt.blockNumber);
+      const replayed = await replaySilent(silent, receipt.blockNumber);
 
       return batch.map((v, i) => {
-        const summary = summaries[i] ?? checked.get(v.volumeId);
-        if (!summary) {
-          return {
-            volumeId: v.volumeId,
-            ...mined,
-            status: "failed" as const,
-            error:
-              "the batch emitted nothing for this volume and its postage batch is still short of the top-up target: its trigger reverted inside the batch",
-          };
-        }
+        const summary = summaries[i] ?? replayed.get(v.volumeId)!;
         if (summary instanceof Error) {
           return { volumeId: v.volumeId, ...mined, status: "failed" as const, error: summary.message };
         }
@@ -421,73 +415,58 @@ export async function runKeeperCycle<
   }
 
   /**
-   * What happened to each volume a mined batch emitted nothing for, from chain
-   * state at its block: `noop` when its postage batch holds the full top-up
-   * target, retired when it is no longer Active, and absent when the batch
-   * skipped it. An error in place of an answer when the check itself failed.
+   * What happened to each volume a mined batch emitted nothing for, found by
+   * simulating `trigger(bytes32)` for it at the batch's block, all in one
+   * multicall. A volume that reverted inside the batch reverts the same way
+   * here, with its reason: an Error carrying it, or a retirement when the
+   * reason is `VolumeNotActive`. One that does not revert is a `noop`: it
+   * needed nothing, or it ran out of gas inside the batch, which the next cycle
+   * makes up for. An Error for every volume when the simulation itself failed.
    */
-  async function checkSilent(
+  async function replaySilent(
     silent: VolumeView[],
     blockNumber: bigint,
   ): Promise<Map<Hex, VolumeSummary | Error>> {
-    const checked = new Map<Hex, VolumeSummary | Error>();
-    if (silent.length === 0) return checked;
+    const replayed = new Map<Hex, VolumeSummary | Error>();
+    if (silent.length === 0) return replayed;
 
     try {
-      target ??= await readTarget();
-      const { postage, graceBlocks } = target;
-      const reads = await getAction(
+      const results = await getAction(
         client,
         multicall,
         "multicall",
       )({
-        allowFailure: false,
+        allowFailure: true,
         blockNumber,
-        contracts: [
-          { address: postage, abi: postageAbi, functionName: "currentTotalOutPayment" },
-          { address: postage, abi: postageAbi, functionName: "lastPrice" },
-          ...silent.flatMap((v) => [
-            { address: registry, abi: registryAbi, functionName: "getVolume", args: [v.volumeId] },
-            { address: postage, abi: postageAbi, functionName: "batches", args: [v.batchId] },
-          ]),
-        ],
-      } as never);
+        contracts: silent.map((v) => ({
+          address: registry,
+          abi: registryAbi,
+          functionName: "trigger" as const,
+          args: [v.volumeId] as const,
+        })),
+      });
 
-      const [outPayment, lastPrice, ...rest] = reads as unknown as [bigint, bigint, ...unknown[]];
-      const needed = lastPrice * graceBlocks;
-      silent.forEach((v, i) => {
-        const view = rest[2 * i] as VolumeView;
-        const [, , , , normalisedBalance] = rest[2 * i + 1] as readonly [
-          Address, number, number, boolean, bigint, bigint,
-        ];
-        if (view.status !== VOLUME_STATUS.active) {
-          checked.set(v.volumeId, { outcome: "retired", reason: "before this batch reached it" });
-        } else if (normalisedBalance > outPayment && normalisedBalance - outPayment >= needed) {
-          checked.set(v.volumeId, { outcome: "noop" });
+      results.forEach((outcome, i) => {
+        const { volumeId } = silent[i]!;
+        if (outcome.status === "success") {
+          replayed.set(volumeId, { outcome: "noop" });
+          return;
         }
+        const reason = revertReason(outcome.error);
+        replayed.set(
+          volumeId,
+          reason === "VolumeNotActive"
+            ? { outcome: "retired", reason: "before this batch reached it" }
+            : new Error(`reverted inside the batch: ${reason}`),
+        );
       });
     } catch (err) {
       const error = new Error(
-        `the batch emitted nothing for this volume, and checking why failed: ${message(err)}`,
+        `the batch emitted nothing for this volume, and simulating it failed: ${message(err)}`,
       );
-      for (const v of silent) checked.set(v.volumeId, error);
+      for (const v of silent) replayed.set(v.volumeId, error);
     }
-    return checked;
-  }
-
-  async function readTarget(): Promise<Target> {
-    const [postage, graceBlocks] = await getAction(
-      client,
-      multicall,
-      "multicall",
-    )({
-      allowFailure: false,
-      contracts: [
-        { address: registry, abi: registryAbi, functionName: "postage" },
-        { address: registry, abi: registryAbi, functionName: "graceBlocks" },
-      ],
-    });
-    return { postage, graceBlocks };
+    return replayed;
   }
 
   /** File a volume's outcome under the result's lists, and warn where it warrants. */
@@ -509,4 +488,21 @@ export async function runKeeperCycle<
         break;
     }
   }
+}
+
+/**
+ * A simulated call's revert, as its reason: the registry's error name, a
+ * PostageStamp `require` message, or the first line of viem's message when
+ * there is no revert data to decode.
+ */
+function revertReason(err: Error): string {
+  const reverted =
+    err instanceof BaseError
+      ? err.walk((e) => e instanceof ContractFunctionRevertedError)
+      : null;
+  if (reverted instanceof ContractFunctionRevertedError) {
+    if (reverted.data && reverted.data.errorName !== "Error") return reverted.data.errorName;
+    if (reverted.reason) return reverted.reason;
+  }
+  return err instanceof BaseError ? err.shortMessage : message(err);
 }

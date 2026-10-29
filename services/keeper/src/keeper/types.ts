@@ -19,15 +19,15 @@ export type KeeperMode =
   | { type: "selected"; volumeIds: readonly Hex[] };
 
 /**
- * What the contract did to a volume, decoded from that volume's own receipt.
- * Discriminated on `outcome`, so `amount` and `reason` are present exactly
- * where they apply.
+ * What the contract did to a volume, decoded from its event in the batch
+ * receipt. Discriminated on `outcome`, so `amount` and `reason` are present
+ * exactly where they apply.
  *
  * `noop` is a real answer, not an absence of one: step 6 of `_triggerOne`
  * returns silently when the batch already holds at least `graceBlocks` of
- * runway. That is the healthy steady state, and one volume per transaction is
- * what makes it legible — a batched receipt could not tell it apart from a
- * volume whose inner call ran out of gas.
+ * runway. That is the healthy steady state. Because a volume that reverted
+ * inside the batch is just as silent, `noop` is only reported once chain state
+ * at the receipt's block confirms the runway.
  */
 export type VolumeSummary =
   | { outcome: "toppedUp"; amount: bigint }
@@ -44,8 +44,9 @@ export interface VolumeResult {
    *
    * - `success` / `reverted` — mined, per the receipt.
    * - `simulated` — dry run; nothing was sent.
-   * - `failed` — never mined: estimation reverted, the send failed, or the
-   *   receipt wait timed out.
+   * - `failed` — never mined (the send failed, or the receipt wait timed
+   *   out), or mined but the batch skipped this volume: no event, and its
+   *   postage batch still short of the top-up target.
    */
   status: "success" | "reverted" | "simulated" | "failed";
   /** What the contract did. Present only when `status` is `success`. */
@@ -56,6 +57,7 @@ export interface VolumeResult {
   reason?: string;
   hash?: Hex;
   blockNumber?: bigint;
+  /** The whole batch transaction's, shared by every volume in it. */
   gasUsed?: bigint;
   error?: string;
 }

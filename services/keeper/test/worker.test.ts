@@ -244,7 +244,7 @@ describe("scheduled", () => {
   // per-volume log detail, so only the scrubber stands between it and the log.
   test("a mid-cycle RPC failure is logged in full, with the key scrubbed", async () => {
     const chain = mockChain({ volumes: [due(1)] });
-    rpc.set(LIVE, { chain, httpErrorOn: ["eth_estimateGas"] });
+    rpc.set(LIVE, { chain, httpErrorOn: ["eth_sendRawTransaction"] });
 
     const { outcome } = await scheduled(env());
 

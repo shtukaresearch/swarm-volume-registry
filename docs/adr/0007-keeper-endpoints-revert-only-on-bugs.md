@@ -18,11 +18,11 @@ The keeper-facing endpoints are `trigger(bytes32)`, `trigger(bytes32[])` and `re
 - a paused PostageStamp;
 - a condition that indicates a bug in VolumeRegistry or PostageStamp.
 
-Account-specific conditions are detected by reading state before acting, not by catching a revert. No keeper-facing path contains a `try/catch`. Endpoints for owners and payers are unaffected and keep reverting with named errors. A contract-facing variant of `trigger` that reverts on non-success outcomes may be added later, on the pattern of `importVolume` ([ADR-0004](./0004-register-and-import-entry-points.md)).
+Account-specific conditions — including account state in the VolumeRegistry itself and in the token contract — are detected by reading state before acting, not by catching a revert. This implies that no keeper-facing path need contain a `try/catch`. Endpoints for owners and payers are unaffected and keep reverting with named errors. A contract-facing variant of `trigger` that reverts on non-success outcomes may be added later, on the pattern of `importVolume` ([ADR-0004](./0004-register-and-import-entry-points.md)).
 
 Concretely:
 
-- `trigger(bytes32)` on a volume that is not Active emits `TopupSkipped(NotActive)` and returns, instead of reverting `VolumeNotActive`. `SkipReason` gains `NotActive` as its next value.
+- `trigger(bytes32)` on an id with no volume record (status `None`) emits `TopupSkipped(NotFound)`, and on a Retired volume emits `TopupSkipped(NotActive)`, and returns, instead of reverting `VolumeNotActive`. `SkipReason` gains `NotFound` and `NotActive` as its next values. The two are distinguished because an id that never existed points to a fault in the keeper's input, whereas a retired id is an ordinary race with retirement.
 - `trigger(bytes32[])` calls the trigger logic directly for each id. `_triggerExt` is removed.
 - Before `transferFrom`, the trigger logic checks `bzz.balanceOf(payer) >= amount` and `bzz.allowance(payer, this) >= amount`, and, when `bzzPermitExpiry` is set and the allowance is `type(uint256).max`, `expirations(payer, this) == 0 || expirations(payer, this) >= block.timestamp`. If any check fails it emits `TopupSkipped(PaymentFailed)` and returns. Otherwise it calls `transferFrom` uncaught.
 - `bzzPermitExpiry` is an immutable constructor argument, set per deployment: `true` for Gnosis BZZ, `false` for Sepolia. When `true`, the constructor calls `expirations(address(0), address(0))` uncaught, so a deployment against a token without it fails at deploy time.
@@ -34,7 +34,8 @@ Enumerated against PostageStamp at `0x45a1502382541Cd610CC9068e88727426b696293` 
 
 | Source | Condition | Class | Handling |
 |---|---|---|---|
-| Registry | Volume not Active (unknown, retired, or retired earlier in the same batch) | account state | `TopupSkipped(NotActive)` |
+| Registry | Volume id never registered | keeper input | `TopupSkipped(NotFound)` |
+| Registry | Volume Retired, including earlier in the same batch | account state | `TopupSkipped(NotActive)` |
 | Registry | Batch dead, owner mismatch, depth changed, TTL passed | account state | `VolumeRetired` (unchanged) |
 | Registry | Account not active | account state | `TopupSkipped(NoAuth)` (unchanged) |
 | Registry | Zero deficit | account state | silent no-op (unchanged) |
@@ -55,8 +56,8 @@ Enumerated against PostageStamp at `0x45a1502382541Cd610CC9068e88727426b696293` 
 
 ## Consequences
 
-- A reverted keeper transaction means out-of-gas, a paused PostageStamp (or paused Sepolia BZZ), or a bug. `eth_call` replay distinguishes them. A paused PostageStamp makes `eth_estimateGas` fail, so a keeper that estimates sends nothing while the pause lasts.
-- `trigger(bytes32[])` either processes every id or reverts as a whole. `eth_estimateGas` measures the cost of the work, and a safety multiplier over it is meaningful. A batch that runs short of gas loses the top-ups it had already performed.
+- A reverted keeper transaction means out-of-gas, a paused PostageStamp (or paused Sepolia BZZ), or a bug. A paused PostageStamp is easily detected through other channels, and we do not expect bugs to be easy to handle; only OOG is routine.
+- `eth_estimateGas` can meaningfully estimate the gas cost of batch trigger. A single failed BZZ transfer cannot consume the entire gas balance.
 - In a successful transaction every id emits exactly one of `Toppedup`, `TopupSkipped` or `VolumeRetired`, except a zero-deficit id, which emits nothing.
 - `trigger(bytes32)` no longer reverts on an inactive volume. DESIGN §8 step 1 and the step 8 `try` change accordingly.
 - The precheck duplicates the token's own conditions. It is correct only for the token implementations enumerated above. The Gnosis token is upgradeable by the bridge; a new account-specific revert path in a future implementation would revert whole batches until the precheck is extended.

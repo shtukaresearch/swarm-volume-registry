@@ -25,7 +25,6 @@ from export_deployment import (
     versioned_name,
 )
 
-
 CONTRACT = "src/VolumeRegistry.sol:VolumeRegistry"
 ENCODED_CONSTRUCTOR = re.compile(r"0x[0-9a-f]{256}\Z")
 SUPPORTED_VERIFIERS = {"etherscan", "blockscout"}

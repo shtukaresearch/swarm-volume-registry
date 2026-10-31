@@ -5,12 +5,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-
 SCRIPT_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
-import export_deployment  # noqa: E402
-
+import export_deployment
 
 PROFILE_NAME = "sepolia-postage-v0.9.4"
 VERSION = "v2-rc1"
@@ -445,6 +443,7 @@ class CommittedRecordTests(unittest.TestCase):
                     and transaction.get("hash", "").lower() == record["transactionHash"].lower()
                 ]
                 self.assertEqual(len(deployments), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

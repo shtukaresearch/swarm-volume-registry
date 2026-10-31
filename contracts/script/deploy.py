@@ -12,11 +12,9 @@ import argparse
 import os
 import re
 import subprocess
-import sys
 import tomllib
 from pathlib import Path
 from typing import Any, NoReturn
-
 
 CONTRACTS = Path(__file__).resolve().parent.parent
 CONFIG = CONTRACTS / "deployments.toml"

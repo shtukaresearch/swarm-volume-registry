@@ -27,7 +27,6 @@ from typing import Any, NoReturn
 
 from deploy import CONTRACTS, CREATE2_FACTORY, VERSION_NAME, load_profile, release_salt
 
-
 DEFAULT_SCRIPT = "DeployVolumeRegistry.s.sol"
 DEFAULT_CONTRACT = "VolumeRegistry"
 DEFAULT_ARTIFACT = Path("out/VolumeRegistry.sol/VolumeRegistry.json")

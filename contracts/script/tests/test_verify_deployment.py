@@ -8,12 +8,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-
 SCRIPT_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
-import verify_deployment  # noqa: E402
-
+import verify_deployment
 
 SEPOLIA_PROFILE = {
     "chain_id": 11155111,
@@ -38,9 +36,11 @@ class VerificationSettingsTests(unittest.TestCase):
         self.assertEqual(settings["api_key_env"], "ETHERSCAN_API_KEY")
 
     def test_requires_configured_api_key_environment_variable(self) -> None:
-        with patch.dict(os.environ, {}, clear=True):
-            with self.assertRaisesRegex(SystemExit, "ETHERSCAN_API_KEY must be set"):
-                verify_deployment.verification_settings("sepolia", SEPOLIA_PROFILE)
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            self.assertRaisesRegex(SystemExit, "ETHERSCAN_API_KEY must be set"),
+        ):
+            verify_deployment.verification_settings("sepolia", SEPOLIA_PROFILE)
 
     def test_requires_blockscout_url(self) -> None:
         profile = dict(SEPOLIA_PROFILE)

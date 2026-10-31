@@ -8,6 +8,8 @@ import {IVolumeRegistryViews} from "../src/interfaces/IVolumeRegistryViews.sol";
 /// @notice Payer-bounded exposure (I3). Example witnesses;
 ///         the fuzz invariant lives in invariants/TransferOnlyIfGuarded.t.sol.
 contract PayerBoundedExposureTest is RegistryFixture {
+    event TopupSkipped(bytes32 indexed volumeId, uint8 reason);
+
     uint64 internal constant FUND_MULT = 20;
 
     function test_transferNeverUnderInactiveAccount() public {
@@ -31,7 +33,8 @@ contract PayerBoundedExposureTest is RegistryFixture {
         registry.deleteVolume(id);
 
         uint256 before = bzz.balanceOf(PAYER);
-        vm.expectRevert(IVolumeRegistryViews.VolumeNotActive.selector);
+        vm.expectEmit(true, true, true, true);
+        emit TopupSkipped(id, uint8(IVolumeRegistryViews.SkipReason.NotActive));
         registry.trigger(id);
         assertEq(bzz.balanceOf(PAYER), before);
     }

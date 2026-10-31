@@ -45,8 +45,8 @@ A single contract, `VolumeRegistry`, organised into two logical components:
 They share storage in one contract to avoid cross-contract calls on the hot path.
 
 External dependencies (unmodified):
-- `PostageStamp` — Swarm's existing stamp contract. Used through: `createBatch`, `topUp`, `batches`, `currentTotalOutPayment`, price oracle view.
-- `BZZ` — ERC20 token. Used through: `transferFrom`, `approve`.
+- `PostageStamp` — Swarm's existing stamp contract. Used through: `createBatch`, `topUp`, `batches`, `currentTotalOutPayment`, `minimumBucketDepth`, `minimumValidityBlocks`, price oracle view.
+- `BZZ` — ERC20 token. Used through: `balanceOf`, `allowance`, `transferFrom`, `approve`, and `expirations` when `bzzPermitExpiry` is set (§10).
 
 ## 4. Data model
 
@@ -77,7 +77,7 @@ uint256   nextNonce;                            // monotonic counter passed to P
 
 enum Status       { None, Active, Retired }
 enum RetireReason { None, OwnerDeleted, VolumeExpired, BatchDied, DepthChanged, BatchOwnerMismatch }
-enum SkipReason   { None, NoAuth, PaymentFailed }
+enum SkipReason   { None, NoAuth, PaymentFailed, NotFound, NotActive }
 ```
 
 Status and reason codes are enums ([ADR-0005](./adr/0005-codes-as-enums.md)). Each leading `None` is the zero value: `Status.None` is what an unknown volume ID reads as, and the two reason `None`s are never emitted. They keep every other code at its pre-enum value; on the wire all three are `uint8`.
@@ -177,7 +177,7 @@ does not clear its designation.
 
 Signatures only. No implementation.
 
-The surface is declared per actor in `contracts/src/interfaces/`: `IVolumeRegistryOwner` (§7.1), `IVolumeRegistryPayer` (§7.2) and `IVolumeRegistryKeeper` (§7.3) carry only write functions; `IVolumeRegistryViews` carries the public types, the status and reason enums (§4), every event and error (§9), the wiring getters (§10) and the views (§7.4). `IVolumeRegistry` aggregates them and `VolumeRegistry` implements it. An integration for one actor needs that actor's interface plus `IVolumeRegistryViews`, and its client ABI can be generated from those two artifacts. `revoke` appears in both the owner and payer interfaces. `_triggerExt` is external only to give the batched `trigger` a try/catch frame and belongs to no interface.
+The surface is declared per actor in `contracts/src/interfaces/`: `IVolumeRegistryOwner` (§7.1), `IVolumeRegistryPayer` (§7.2) and `IVolumeRegistryKeeper` (§7.3) carry only write functions; `IVolumeRegistryViews` carries the public types, the status and reason enums (§4), every event and error (§9), the wiring getters (§10) and the views (§7.4). `IVolumeRegistry` aggregates them and `VolumeRegistry` implements it. An integration for one actor needs that actor's interface plus `IVolumeRegistryViews`, and its client ABI can be generated from those two artifacts. `revoke` appears in both the owner and payer interfaces.
 
 ### 7.1 Owner API
 
@@ -206,7 +206,7 @@ function designateFundingWallet(address payer) external;  // payer = 0 to clear
 ```
 
 - `createVolume` requires `accounts[msg.sender].active == true`. Initial per-chunk balance is not user-chosen: the registry computes `perChunk = currentPrice × graceBlocks` so the volume is born with exactly the runway described in §10.1. Total BZZ charge `= perChunk × (1 << depth)` is pulled from `accounts[msg.sender].payer` via ERC20 `transferFrom` (payer must have approved at least this amount). Registry then calls `PostageStamp.createBatch(chunkSigner, perChunk, depth, bucketDepth, nonce, immutableBatch)`, passing the internally-managed `nextNonce` (§4) and incrementing. It records the returned `batchId = keccak256(abi.encode(address(this), nonce))`, derives `volumeId` from the owner's account nonce and increments it (§4), and inserts into `activeVolumeIds`. Callers discover `volumeId` via the return value or the `VolumeCreated` event. Postage's `minimumInitialBalancePerChunk` floor is guaranteed by the constructor check in §10.
-- `registerVolume` brings an existing batch under management without moving BZZ. Preconditions, checked in order: `accounts[msg.sender].active == true`, else `AccountNotActive`; the batch exists and `normalisedBalance > currentTotalOutPayment()`, else `BatchNotLive`. No relation between the caller and the batch owner is required ([ADR-0001](./adr/0001-permissionless-batch-import.md)). Effects: `chunkSigner` and `depth` are read from `PostageStamp.batches(batchId)`, never supplied by the caller; `owner = msg.sender`; `createdAt = block.timestamp`, which for an imported batch is the start of tracking rather than the batch's age; `volumeId` is derived from the owner's account nonce, which is incremented; the volume is inserted into `activeVolumeIds`; `VolumeImported` is emitted with the batch's `normalisedBalance` as read. A `ttlExpiry` already in the past is accepted, as in `createVolume`; the volume retires `VolumeExpired` on its first trigger.
+- `registerVolume` brings an existing batch under management without moving BZZ. Preconditions, checked in order: `accounts[msg.sender].active == true`, else `AccountNotActive`; the batch exists and `normalisedBalance > currentTotalOutPayment()`, else `BatchNotLive`; the batch's depth exceeds `PostageStamp.minimumBucketDepth()`, else `BatchDepthTooSmall` (§14). No relation between the caller and the batch owner is required ([ADR-0001](./adr/0001-permissionless-batch-import.md)). Effects: `chunkSigner` and `depth` are read from `PostageStamp.batches(batchId)`, never supplied by the caller; `owner = msg.sender`; `createdAt = block.timestamp`, which for an imported batch is the start of tracking rather than the batch's age; `volumeId` is derived from the owner's account nonce, which is incremented; the volume is inserted into `activeVolumeIds`; `VolumeImported` is emitted with the batch's `normalisedBalance` as read. A `ttlExpiry` already in the past is accepted, as in `createVolume`; the volume retires `VolumeExpired` on its first trigger.
 - `importVolume` performs `registerVolume` and then runs §8 on the new volume in the same transaction. It succeeds only if §8 ends in a topup (step 9) or the zero-deficit no-op (step 7). Any other outcome reverts the whole call with `ImportTopupFailed`: in practice `TopupSkipped(PaymentFailed)`, or a retirement edge, of which only `VolumeExpired` (a past `ttlExpiry`) is reachable on a batch that was live a moment earlier. A revert in `PostageStamp.topUp` propagates. `NoAuth` is unreachable because the account check has already passed in the same transaction. On revert nothing persists (I13). Rationale: [ADR-0004](./adr/0004-register-and-import-entry-points.md).
 - `deleteVolume` requires `msg.sender == volume.owner && volume.status == Active`. Transitions to `Retired.OwnerDeleted`, swap-and-pop from active list. No on-chain refund (Postage has no reclaim).
 - `designateFundingWallet` is unilateral owner action. Does not require any account state.
@@ -231,8 +231,10 @@ function reap(bytes32 volumeId) external;
 ```
 
 - `trigger(id)` — see §8.
-- `trigger(ids[])` — loops with per-item `try/catch`; one failure never aborts the batch.
+- `trigger(ids[])` — runs §8 on each id in order. It reverts wherever §8 would, so it either processes every id or changes nothing.
 - `reap(id)` — retires an `Active` volume whose TTL has passed and otherwise does nothing. It does not inspect Postage batch death, owner, or depth; `trigger` handles those edges.
+
+No state of a volume, account or payer makes a keeper function revert; each ends in an event or a no-op. They revert only on out-of-gas, a paused PostageStamp, or a fault in the registry or Postage. Payer state is read before acting rather than detected by catching a revert, and no keeper path contains a `try/catch`. Rationale and the enumerated conditions: [ADR-0007](./adr/0007-keeper-endpoints-revert-only-on-bugs.md).
 
 ### 7.4 Views
 
@@ -268,7 +270,7 @@ function getAccount(address owner) external view returns (Account memory);
 
 `trigger(volumeId)`:
 
-1. Load `v = volumes[volumeId]`. Revert if `v.status != Active`.
+1. Load `v = volumes[volumeId]`. If `v.status == None` → emit `TopupSkipped(NotFound)`, return. If `v.status == Retired` → emit `TopupSkipped(NotActive)`, return.
 2. Load Postage batch `b = PostageStamp.batches[v.batchId]`. If `b` does not exist or is expired → retire `BatchDied`, emit `VolumeRetired`, return.
 3. If `b.owner != v.chunkSigner` → retire `BatchOwnerMismatch`, emit, return.
 4. If `b.depth != v.depth` → retire `DepthChanged`, emit, return.
@@ -279,12 +281,13 @@ function getAccount(address owner) external view returns (Account memory);
    Compute `deficit = target > remaining ? target - remaining : 0`.
    If `deficit == 0` → return (idempotent no-op).
 8. `amount = deficit × (1 << v.depth)`.
-   Try `BZZ.transferFrom(acct.payer, this, amount)`. On revert (insufficient balance, revoked approval, spending-limit hit, Safe module config) → emit `TopupSkipped(PaymentFailed)`, return. **No retire.**
+   Unless `BZZ.balanceOf(acct.payer) ≥ amount`, `BZZ.allowance(acct.payer, this) ≥ amount`, and, when `bzzPermitExpiry` is set and the allowance is `type(uint256).max`, `BZZ.expirations(acct.payer, this)` is 0 or at least `block.timestamp` → emit `TopupSkipped(PaymentFailed)`, return. **No retire.**
+   `BZZ.transferFrom(acct.payer, this, amount)`.
 9. `BZZ.approve(postage, amount); PostageStamp.topUp(v.batchId, deficit);` emit `Toppedup`.
 
 The check order matters: batch/depth/TTL retire-edges are evaluated before auth/payment, so a lapsed auth does not mask an expired batch.
 
-Every run of these steps ends in one of four outcomes: Retired (steps 2–5), Skipped (steps 6, 8), NoDeficit (step 7) or ToppedUp (step 9). `trigger` treats all four as success, with the events above. `importVolume` accepts only NoDeficit and ToppedUp (§7.1).
+Every run of these steps ends in one of four outcomes: Retired (steps 2–5), Skipped (steps 1, 6, 8), NoDeficit (step 7) or ToppedUp (step 9). `trigger` treats all four as success, with the events above. `importVolume` accepts only NoDeficit and ToppedUp (§7.1).
 
 ## 9. Events
 
@@ -303,17 +306,19 @@ event TopupSkipped(bytes32 indexed volumeId, SkipReason reason);
 
 ## 10. Deployment parameters
 
-Set once at construction; all three are immutable thereafter:
+Set once at construction; all four are immutable thereafter:
 
 | Param | Type | Description |
 |---|---|---|
 | `postage` | address | PostageStamp contract |
 | `bzz` | address | BZZ ERC20 |
 | `graceBlocks` | uint64 | Target runway per topup cycle, in blocks. Drives both the initial charge at `createVolume` and the topup target in `trigger`. Set per deployment: **17280** (≈ 24 h on Gnosis Chain's 5 s blocks) for Gnosis v1, **120960** (7 d) planned for Gnosis v2, **300** (≈ 1 h at 12 s) for Sepolia `v2-rc2`. See §10.1 for the bound each implies. |
+| `bzzPermitExpiry` | bool | Whether `bzz` is the OmniBridge `PermittableToken`, whose legacy `permit` can give an unlimited allowance an expiry that only `expirations(owner, spender)` reveals. Enables that check in §8 step 8. `true` for Gnosis BZZ, `false` for Sepolia BZZ. |
 
 **Constructor checks.**
 - `graceBlocks ≥ PostageStamp(postage).minimumValidityBlocks()`. Otherwise `createBatch` would revert with `InsufficientBalance` on every `createVolume` (Postage's own floor is `minimumValidityBlocks × lastPrice` per chunk). Verified at deploy; contract refuses to instantiate if violated.
 - `postage` and `bzz` are non-zero.
+- If `bzzPermitExpiry` is set, `bzz.expirations(address(0), address(0))` succeeds, so a deployment against a token without it fails here rather than in every topup.
 
 The first check is deployment-time only. `PostageStamp.minimumValidityBlocks()` is
 mutable while this registry's `graceBlocks` is immutable. If the Postage administrator
@@ -408,6 +413,7 @@ Properties of `PostageStamp` (source: `ethersphere/storage-incentives`) that thi
 
 - **Batch ownership is immutable.** There is no `transferBatchOwnership` function and there never has been. The only owner-related admin is `copyBatch` (DEFAULT_ADMIN_ROLE, migration-only, cannot overwrite an existing batch). A batch copied into a new Postage deployment is reached by a registry deployed against that Postage, through `registerVolume` / `importVolume`.
 - **`batches(id)`** — returns `(owner, depth, bucketDepth, immutableFlag, normalisedBalance, lastUpdatedBlockNumber)`; a non-existent batch has `owner == address(0)`. Registration records `owner` and `depth` from this tuple, so its layout is part of the registry's dependency surface. Consequently, a volume's `chunkSigner`, which the registry asserts equals `batches(id).owner` at creation, cannot rotate during the volume's lifetime — `chunkSigner` is recorded immutably and signer rotation is in §13.
+- **`topUp` refuses shallow batches.** It reverts `BatchTooSmall` on a batch with `depth ≤ minimumBucketDepth`. `createBatch` cannot produce one; `copyBatch` can, which is why `registerVolume` rejects them (§7.1).
 - **No reclaim or refund.** A batch cannot be destroyed by its owner; funds can only be spent on storage. This is why `deleteVolume` is registry-local bookkeeping only (§7.1) — there is no on-chain refund path to wire up.
 - **`createBatch(owner, …)`** — caller pays; the `owner` parameter becomes the batch's owner (and the chunk-signing identity that Bee will recognise). `batchId = keccak256(abi.encode(msg.sender, nonce))`, salted by the caller — hence minted batches have `batchId = keccak256(abi.encode(address(this), nonce))` (§4).
 - **`topUp(batchId, increaseInBalancePerChunk)`** — anyone can call; pulls `increaseInBalancePerChunk × (1 << depth)` BZZ from `msg.sender`. The paymaster's trigger path approves PostageStamp for exactly the topup amount and calls this; nothing else can transfer BZZ on the registry's behalf.

@@ -197,6 +197,20 @@ _V2_RC3_EVENT_ABIS: list[dict[str, Any]] = [
     },
 ]
 
+#: The release after v2-rc3 (ADR-0007): ``trigger`` skips an unknown or retired volume with
+#: ``TopupSkipped`` instead of reverting, so the skip reasons gain ``NotFound`` and
+#: ``NotActive``. The events ABIs are v2-rc3's. Registered in ``_VERSIONS`` once the
+#: release's deployment record exists (``docs/RELEASING.md`` B1).
+_V2_RC4_SKIP_REASONS: dict[int, str] = {
+    **_V1_SKIP_REASONS,
+    3: "NotFound",
+    4: "NotActive",
+}
+_V2_RC4_ENUMS: dict[tuple[str, str], dict[int, str]] = {
+    **_V1_ENUMS,
+    ("TopupSkipped", "reason"): _V2_RC4_SKIP_REASONS,
+}
+
 #: All version-specific reference data, keyed by ``registry_version``. Adding a key here
 #: is the act that makes a contract version *supported* — the single claim site gating
 #: registration (ADR-0011). A release with an unchanged indexer surface aliases its

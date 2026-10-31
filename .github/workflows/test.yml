@@ -36,6 +36,14 @@ jobs:
       - name: Run Forge build
         run: forge build --sizes
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Lint deploy tooling
+        run: |
+          uvx ruff@0.15.8 check script
+          uvx ruff@0.15.8 format --check script
+
       - name: Test deployment manifest exporter
         run: python3 -m unittest discover -s script/tests -v
 

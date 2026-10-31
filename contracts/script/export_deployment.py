@@ -27,7 +27,6 @@ from typing import Any, NoReturn
 
 from deploy import CONTRACTS, CREATE2_FACTORY, VERSION_NAME, load_profile, release_salt
 
-
 DEFAULT_SCRIPT = "DeployVolumeRegistry.s.sol"
 DEFAULT_CONTRACT = "VolumeRegistry"
 DEFAULT_ARTIFACT = Path("out/VolumeRegistry.sol/VolumeRegistry.json")
@@ -37,6 +36,10 @@ SAFE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 ADDRESS = re.compile(r"0x[0-9a-fA-F]{40}\Z")
 TRANSACTION_HASH = re.compile(r"0x[0-9a-fA-F]{64}\Z")
 DEPLOYMENT_TYPES = ("CREATE", "CREATE2")
+# VolumeRegistry's constructor parameters, in order, as named in error messages. Records of
+# releases up to v2-rc3 carry only the first three and were exported and verified by the
+# tooling at their own commit.
+CONSTRUCTOR_ARGS = ("PostageStamp", "BZZ", "graceBlocks", "bzzPermitExpiry")
 
 
 def fail(message: str) -> NoReturn:
@@ -206,19 +209,11 @@ def validate_profile(
         )
 
     arguments = transaction.get("arguments")
-    if not isinstance(arguments, list) or len(arguments) != 3:
-        fail("deployment must record its three constructor arguments")
-
-    postage_matches = (
-        isinstance(arguments[0], str)
-        and arguments[0].lower() == profile["postage_stamp"].lower()
-    )
-    if not postage_matches:
-        fail("broadcast PostageStamp constructor argument does not match the selected profile")
-    if not isinstance(arguments[1], str) or arguments[1].lower() != profile["bzz"].lower():
-        fail("broadcast BZZ constructor argument does not match the selected profile")
-    if quantity(arguments[2], "graceBlocks constructor argument") != profile["grace_blocks"]:
-        fail("broadcast graceBlocks constructor argument does not match the selected profile")
+    if not isinstance(arguments, list) or len(arguments) != len(CONSTRUCTOR_ARGS):
+        fail(f"deployment must record its {len(CONSTRUCTOR_ARGS)} constructor arguments")
+    mismatch = constructor_args_mismatch(arguments, profile)
+    if mismatch is not None:
+        fail(f"broadcast {mismatch} constructor argument does not match the selected profile")
 
 
 def normalized_receipt(receipt: dict[str, Any]) -> dict[str, Any]:
@@ -250,17 +245,49 @@ def normalized_receipt(receipt: dict[str, Any]) -> dict[str, Any]:
 
 
 def constructor_args(profile: dict[str, Any]) -> list[Any]:
-    """``VolumeRegistry(postageStamp, bzz, graceBlocks)``'s arguments, as the profile sets them."""
-    return [profile["postage_stamp"], profile["bzz"], profile["grace_blocks"]]
+    """``VolumeRegistry(postageStamp, bzz, graceBlocks, bzzPermitExpiry)``'s arguments, as the
+    profile sets them."""
+    return [
+        profile["postage_stamp"],
+        profile["bzz"],
+        profile["grace_blocks"],
+        profile["bzz_permit_expiry"],
+    ]
+
+
+def flag(value: Any, description: str) -> bool:
+    """A boolean as Forge records it in a broadcast (``"true"``/``"false"``) or JSON holds it."""
+    if isinstance(value, bool):
+        return value
+    if value in ("true", "false"):
+        return value == "true"
+    fail(f"{description} must be a boolean")
+
+
+def constructor_args_mismatch(arguments: list[Any], profile: dict[str, Any]) -> str | None:
+    """The name of the first recorded constructor argument that differs from the profile's,
+    or None. ``arguments`` holds one entry per name in ``CONSTRUCTOR_ARGS``."""
+    expected = constructor_args(profile)
+    for name, recorded, wanted in zip(CONSTRUCTOR_ARGS, arguments, expected):
+        if name in ("PostageStamp", "BZZ"):
+            matches = isinstance(recorded, str) and recorded.lower() == wanted.lower()
+        elif name == "graceBlocks":
+            matches = quantity(recorded, f"{name} constructor argument") == wanted
+        else:
+            matches = flag(recorded, f"{name} constructor argument") == wanted
+        if not matches:
+            return name
+    return None
 
 
 def encode_constructor_args(args: list[Any]) -> str:
-    """``abi.encode(address, address, uint64)`` of ``args``, as hex without a prefix."""
-    postage_stamp, bzz, grace_blocks = args
+    """``abi.encode(address, address, uint64, bool)`` of ``args``, as hex without a prefix."""
+    postage_stamp, bzz, grace_blocks, bzz_permit_expiry = args
     return (
         postage_stamp.lower().removeprefix("0x").rjust(64, "0")
         + bzz.lower().removeprefix("0x").rjust(64, "0")
         + format(grace_blocks, "064x")
+        + format(int(bzz_permit_expiry), "064x")
     )
 
 

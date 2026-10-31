@@ -406,6 +406,12 @@ def oracle(chain: Chain, as_of_ts: int) -> Oracle:
     return out
 
 
+def _constructor_arity(name: str, version: str) -> int:
+    """Number of constructor parameters of ``version``'s ``name`` artifact."""
+    abi, _ = load_artifact(name, version)
+    return next((len(e["inputs"]) for e in abi if e["type"] == "constructor"), 0)
+
+
 def deploy_stack(w3: Web3, version: str) -> Stack:
     """Deploy ``version``'s pinned stack, mirroring ``RegistryFixture.setUp`` (deployer ==
     accounts[0])."""
@@ -428,5 +434,9 @@ def deploy_stack(w3: Web3, version: str) -> Stack:
     role = stamp.functions.PRICE_ORACLE_ROLE().call()
     _tx(stamp.functions.grantRole(role, deployer))
     _tx(stamp.functions.setPrice(INITIAL_PRICE))
-    registry = _deploy("VolumeRegistry", stamp.address, bzz.address, GRACE_BLOCKS)
+    registry_args = [stamp.address, bzz.address, GRACE_BLOCKS]
+    if _constructor_arity("VolumeRegistry", version) == 4:
+        # bzzPermitExpiry (ADR-0007): the TestToken has no legacy-permit expirations.
+        registry_args.append(False)
+    registry = _deploy("VolumeRegistry", *registry_args)
     return Stack(bzz, stamp, oracle, registry, genesis_block=w3.eth.block_number, version=version)

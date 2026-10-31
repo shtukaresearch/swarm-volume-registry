@@ -5,12 +5,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-
 SCRIPT_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
 import export_deployment  # noqa: E402
-
 
 PROFILE_NAME = "sepolia-postage-v0.9.4"
 VERSION = "v2-rc1"
@@ -19,14 +17,16 @@ PROFILE = {
     "postage_stamp": "0xcdfdC3752caaA826fE62531E0000C40546eC56A6",
     "bzz": "0x543dDb01Ba47acB11de34891cD86B675F04840db",
     "grace_blocks": 12,
+    "bzz_permit_expiry": False,
 }
 ADDRESS = "0x33a53c79a08ed1f863905cd4c6ce036a4c493729"
 TX_HASH = "0x59dd245cd9d30e53175a38930b437f9048c5ce47ff20588ec46fd4359d225924"
-# abi.encode(postage_stamp, bzz, grace_blocks) of PROFILE.
+# abi.encode(postage_stamp, bzz, grace_blocks, bzz_permit_expiry) of PROFILE.
 ENCODED_ARGS = (
     "000000000000000000000000cdfdc3752caaa826fe62531e0000c40546ec56a6"
     "000000000000000000000000543ddb01ba47acb11de34891cd86b675f04840db"
     "000000000000000000000000000000000000000000000000000000000000000c"
+    "0000000000000000000000000000000000000000000000000000000000000000"
 )
 BROADCAST_PATH = export_deployment.CONTRACTS / "broadcast/example/run-1787275286220.json"
 
@@ -39,7 +39,7 @@ def broadcast_fixture() -> dict:
                 "transactionType": "CREATE",
                 "contractName": "VolumeRegistry",
                 "contractAddress": ADDRESS,
-                "arguments": [PROFILE["postage_stamp"], PROFILE["bzz"], "12"],
+                "arguments": [PROFILE["postage_stamp"], PROFILE["bzz"], "12", "false"],
                 "transaction": {"input": "0x6000" + ENCODED_ARGS},
             }
         ],
@@ -95,7 +95,7 @@ class BuildManifestTests(unittest.TestCase):
         self.assertEqual(manifest["bytecode"], "0x6000")
         self.assertEqual(
             manifest["args"],
-            [PROFILE["postage_stamp"], PROFILE["bzz"], PROFILE["grace_blocks"]],
+            [PROFILE["postage_stamp"], PROFILE["bzz"], PROFILE["grace_blocks"], False],
         )
 
     def test_rejects_initcode_without_the_profiles_args(self) -> None:
@@ -145,6 +145,24 @@ class BuildManifestTests(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, "graceBlocks"):
             self.build(broadcast)
 
+    def test_rejects_permit_expiry_mismatch(self) -> None:
+        broadcast = broadcast_fixture()
+        broadcast["transactions"][0]["arguments"][3] = "true"
+
+        with self.assertRaisesRegex(SystemExit, "bzzPermitExpiry"):
+            self.build(broadcast)
+
+    def test_rejects_a_three_argument_deployment(self) -> None:
+        broadcast = broadcast_fixture()
+        broadcast["transactions"][0]["arguments"].pop()
+
+        with self.assertRaisesRegex(SystemExit, "4 constructor arguments"):
+            self.build(broadcast)
+
+    def test_encodes_permit_expiry_as_the_last_word(self) -> None:
+        args = export_deployment.constructor_args({**PROFILE, "bzz_permit_expiry": True})
+        self.assertTrue(export_deployment.encode_constructor_args(args).endswith("0" * 63 + "1"))
+
     def test_rejects_artifact_from_another_build(self) -> None:
         with self.assertRaisesRegex(SystemExit, "artifact bytecode does not match"):
             export_deployment.build_manifest(
@@ -161,7 +179,7 @@ class BuildManifestTests(unittest.TestCase):
 # CREATE2 through the factory, salted with release_salt(VERSION). The address is
 # `cast compute-address <factory> --salt <salt> --init-code 0x6000<ENCODED_ARGS>`.
 CREATE2_SALT = "0x76322d7263310000000000000000000000000000000000000000000000000000"
-CREATE2_ADDRESS = "0x42d7ab7f5ec9687bf1d2ec74a74d257c05dc573a"
+CREATE2_ADDRESS = "0x19e52530ace4945e6928813a30b06a026a41513f"
 FACTORY = "0x4e59b44847b379578588920ca78fbf26c0b4956c"
 
 
@@ -425,6 +443,7 @@ class CommittedRecordTests(unittest.TestCase):
                     and transaction.get("hash", "").lower() == record["transactionHash"].lower()
                 ]
                 self.assertEqual(len(deployments), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

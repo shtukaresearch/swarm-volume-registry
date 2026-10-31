@@ -12,3 +12,4 @@ Format per record: **Context** → **Decision** → **Consequences**.
 | [0004](./0004-register-and-import-entry-points.md) | Two entry points: `registerVolume` (record only) and `importVolume` (record + topup, atomic) |
 | [0005](./0005-codes-as-enums.md) | Status and reason codes as enums, not public constants |
 | [0006](./0006-immutable-deployment-records.md) | Deployment records carry the deployed bytecode, cite an immutable run file, and never change once committed |
+| [0007](./0007-keeper-endpoints-revert-only-on-bugs.md) | Keeper endpoints revert only on out-of-gas, a paused Postage, or a bug; payer state is prechecked, not caught |

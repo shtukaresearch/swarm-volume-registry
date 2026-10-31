@@ -52,7 +52,7 @@ Separate chunk-signer addresses (owner ≠ signer) are supported but considered 
 - [`docs/usage.md`](./docs/usage.md) — deployed-v1 integration reference. Role profiles, setup commands, API reference, event catalogue, retirement and revocation semantics, cost estimation, Bee upload guide.
 - [`docs/DESIGN.md`](./docs/DESIGN.md) — v2 architecture. Data model, invariants, threat model, trigger semantics, survival-floor derivation, Postage constraints.
 - [`docs/adr/`](./docs/adr/README.md) — decision records for contract changes: the alternatives weighed and consequences accepted behind `DESIGN.md`.
-- [`contracts/test/README.md`](./contracts/test/README.md) — testing strategy, mapping from `DESIGN.md` sections and invariants to test files, fork-test setup, coverage notes.
+- [`contracts/test/README.md`](./contracts/test/README.md) — test files, mapping from `DESIGN.md` sections and invariants to tests, coverage gaps. The reasoning behind the suite is in [`docs/TEST-STRATEGY.md`](./docs/TEST-STRATEGY.md).
 - [`docs/KEEPERS.md`](./docs/KEEPERS.md) — keeper operations guide.
 - [`services/indexer/docs/`](./services/indexer/docs/README.md) — the `ethswarm-volumes` indexer and CLI: architecture, artifact schema, versioning, decision records.
 - [`RELEASING.md`](./RELEASING.md) — deploying a contract release and releasing the indexer package.

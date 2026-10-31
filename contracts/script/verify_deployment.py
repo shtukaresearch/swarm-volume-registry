@@ -13,8 +13,12 @@ from typing import Any
 from deploy import CONTRACTS, load_profile
 from export_deployment import (
     ADDRESS,
+    CONSTRUCTOR_ARGS,
     SAFE_NAME,
     VERSION_NAME,
+    constructor_args,
+    constructor_args_mismatch,
+    encode_constructor_args,
     fail,
     quantity,
     read_json,
@@ -23,8 +27,7 @@ from export_deployment import (
 
 
 CONTRACT = "src/VolumeRegistry.sol:VolumeRegistry"
-CONSTRUCTOR = "constructor(address,address,uint64)"
-ENCODED_CONSTRUCTOR = re.compile(r"0x[0-9a-fA-F]{192}\Z")
+ENCODED_CONSTRUCTOR = re.compile(r"0x[0-9a-f]{256}\Z")
 SUPPORTED_VERIFIERS = {"etherscan", "blockscout"}
 
 
@@ -97,38 +100,19 @@ def load_deployment(
         fail(f"deployment record version does not match {version!r}: {path}")
 
     arguments = deployment.get("args")
-    if not isinstance(arguments, list) or len(arguments) != 3:
+    if not isinstance(arguments, list) or len(arguments) != len(CONSTRUCTOR_ARGS):
         fail(f"deployment record is missing constructor arguments: {path}")
-    postage_matches = (
-        isinstance(arguments[0], str)
-        and arguments[0].lower() == profile["postage_stamp"].lower()
-    )
-    if not postage_matches:
-        fail(f"deployment record PostageStamp does not match profile {profile_name!r}: {path}")
-    if not isinstance(arguments[1], str) or arguments[1].lower() != profile["bzz"].lower():
-        fail(f"deployment record BZZ does not match profile {profile_name!r}: {path}")
-    if quantity(arguments[2], "deployment record graceBlocks") != profile["grace_blocks"]:
-        fail(f"deployment record graceBlocks does not match profile {profile_name!r}: {path}")
+    mismatch = constructor_args_mismatch(arguments, profile)
+    if mismatch is not None:
+        fail(f"deployment record {mismatch} does not match profile {profile_name!r}: {path}")
     return path, deployment
 
 
 def encode_constructor(profile: dict[str, Any]) -> str:
-    result = subprocess.run(
-        [
-            "cast",
-            "abi-encode",
-            CONSTRUCTOR,
-            profile["postage_stamp"],
-            profile["bzz"],
-            str(profile["grace_blocks"]),
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    encoded = result.stdout.strip()
+    """The profile's ABI-encoded constructor arguments, ``0x``-prefixed."""
+    encoded = "0x" + encode_constructor_args(constructor_args(profile))
     if not ENCODED_CONSTRUCTOR.fullmatch(encoded):
-        fail("cast returned invalid encoded constructor arguments")
+        fail("invalid encoded constructor arguments")
     return encoded
 
 

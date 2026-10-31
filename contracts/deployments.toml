@@ -10,12 +10,16 @@
 # These values originated in docs/usage.md. On 2026-08-21, each live
 # PostageStamp returned the configured BZZ address and grace_blocks value from
 # bzzToken() and minimumValidityBlocks(), respectively.
+# bzz_permit_expiry is true where bzz is the OmniBridge PermittableToken (Gnosis
+# BZZ; ADR-0007). On 2026-10-31, expirations(0, 0) returned 0 on Gnosis BZZ and
+# reverted on Sepolia BZZ.
 
 [profiles."gnosis-postage-v0.9.4"]
 chain_id = 100
 postage_stamp = "0x45a1502382541Cd610CC9068e88727426b696293"
 bzz = "0xdBF3Ea6F5beE45c02255B2c26a16F300502F68da"
 grace_blocks = 17280
+bzz_permit_expiry = true
 deployment_network = "gnosis"
 verifier = "blockscout"
 verifier_url = "https://gnosis.blockscout.com/api/"
@@ -26,6 +30,7 @@ chain_id = 11155111
 postage_stamp = "0xcdfdC3752caaA826fE62531E0000C40546eC56A6"
 bzz = "0x543dDb01Ba47acB11de34891cD86B675F04840db"
 grace_blocks = 12
+bzz_permit_expiry = false
 deployment_network = "sepolia"
 verifier = "etherscan"
 verifier_api_key_env = "ETHERSCAN_API_KEY"
@@ -38,6 +43,7 @@ chain_id = 11155111
 postage_stamp = "0xcdfdC3752caaA826fE62531E0000C40546eC56A6"
 bzz = "0x543dDb01Ba47acB11de34891cD86B675F04840db"
 grace_blocks = 300
+bzz_permit_expiry = false
 deployment_network = "sepolia"
 verifier = "etherscan"
 verifier_api_key_env = "ETHERSCAN_API_KEY"

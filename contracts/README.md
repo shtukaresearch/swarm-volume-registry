@@ -6,7 +6,7 @@ This directory is the Foundry project for `VolumeRegistry`.
 
 Deployments use an explicitly selected constructor-input profile from
 [`deployments.toml`](./deployments.toml). Each profile specifies the target chain ID,
-`PostageStamp` and BZZ addresses, and `grace_blocks`. The launcher checks that the RPC
+`PostageStamp` and BZZ addresses, `grace_blocks` and `bzz_permit_expiry`. The launcher checks that the RPC
 chain ID matches the selected profile before running the Foundry script.
 
 Prerequisites:

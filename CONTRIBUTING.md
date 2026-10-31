@@ -70,7 +70,8 @@ older versions that require a duplicate `--sender` argument.
 The configured `grace_blocks` must be at least
 `PostageStamp.minimumValidityBlocks()` on the target chain or the constructor reverts.
 See [`docs/DESIGN.md`](./docs/DESIGN.md) §10 for semantics and §10.1 for the survival
-bound the value implies.
+bound the value implies. `bzz_permit_expiry` must be `true` only for a BZZ token with
+`expirations` (Gnosis BZZ), or the constructor reverts (§10).
 
 Exporting the deployment record, explorer verification, tagging and the indexer release
 steps are in [`RELEASING.md`](./RELEASING.md).

@@ -2,6 +2,18 @@
 
 The Forge suite for `VolumeRegistry`. §-references point into [`docs/DESIGN.md`](../../docs/DESIGN.md); when a section changes, the tests in its row of [DESIGN.md ↔ tests](#designmd--tests) change with it.
 
+## Running
+
+```sh
+cd contracts
+forge test                                # all L1 (unit + invariant)
+forge test --no-match-path 'test/fork/*'  # L1 only, skip fork
+```
+
+A clean-cache L1 run takes about 5 minutes (compilation plus invariant fuzzing); later runs hit the cache. Fork runs are described in [`fork/README.md`](fork/README.md).
+
+## Files
+
 ```
 AccountStateMachine.t.sol       designate / confirmAuth / revoke handshake; nonce kept across account changes
 ActiveSetAndViews.t.sol         active-set swap-and-pop, pagination, getVolume / getAccount views
@@ -64,16 +76,6 @@ Hand-written example tests cover every named transition and precondition; fuzzin
 | **I12** — Non-interference | [`VolumeRegister.t.sol`](VolumeRegister.t.sol): deleting or retiring one volume on a shared batch leaves the other's record untouched | — |
 | **I13** — Import atomicity | [`VolumeImport.t.sol`](VolumeImport.t.sol): every revert case leaves no record, no nonce consumed, no active-set entry, no BZZ delta (events are discarded with the revert) | — |
 | **I14** — Nonce monotonicity | [`NonceAndVolumeId.t.sol`](NonceAndVolumeId.t.sol); preservation across account transitions in [`AccountStateMachine.t.sol`](AccountStateMachine.t.sol) | [`invariants/VolumeIdentity.t.sol`](invariants/VolumeIdentity.t.sol) |
-
-## Running
-
-```sh
-cd contracts
-forge test                                # all L1 (unit + invariant)
-forge test --no-match-path 'test/fork/*'  # L1 only, skip fork
-```
-
-A clean-cache L1 run takes about 5 minutes (compilation plus invariant fuzzing); later runs hit the cache. Fork runs are described in [`fork/README.md`](fork/README.md).
 
 ## Coverage gaps
 

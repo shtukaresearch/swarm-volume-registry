@@ -11,7 +11,7 @@ from unittest.mock import patch
 SCRIPT_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
-import verify_deployment
+import verify_deployment  # noqa: E402
 
 SEPOLIA_PROFILE = {
     "chain_id": 11155111,

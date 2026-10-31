@@ -12,7 +12,7 @@ from unittest import mock
 SCRIPT_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
-import deploy
+import deploy  # noqa: E402
 
 PROFILE_NAME = "sepolia-postage-v0.9.4-1h"
 PASSWORD = "correct horse battery staple"

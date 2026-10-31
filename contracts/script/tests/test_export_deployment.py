@@ -8,7 +8,7 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
-import export_deployment
+import export_deployment  # noqa: E402
 
 PROFILE_NAME = "sepolia-postage-v0.9.4"
 VERSION = "v2-rc1"

@@ -104,7 +104,7 @@ contract VolumeLifecycleTest is RegistryFixture {
                 IVolumeRegistryViews.GraceBlocksBelowFloor.selector, uint64(11), uint64(12)
             )
         );
-        new VolumeRegistry(address(stamp), address(bzz), 11);
+        new VolumeRegistry(address(stamp), address(bzz), 11, false);
     }
 
     // --- deleteVolume ---------------------------------------------------

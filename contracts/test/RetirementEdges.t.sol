@@ -12,6 +12,7 @@ contract RetirementEdgesTest is RegistryFixture {
     using stdStorage for StdStorage;
 
     event VolumeRetired(bytes32 indexed volumeId, uint8 reason);
+    event TopupSkipped(bytes32 indexed volumeId, uint8 reason);
 
     uint64 internal constant FUND_MULT = 20;
 
@@ -24,8 +25,10 @@ contract RetirementEdgesTest is RegistryFixture {
 
     function test_retired_cannotBeTriggered() public {
         bytes32 id = _retiredVolume();
-        vm.expectRevert(IVolumeRegistryViews.VolumeNotActive.selector);
+        vm.expectEmit(true, true, true, true);
+        emit TopupSkipped(id, uint8(IVolumeRegistryViews.SkipReason.NotActive));
         registry.trigger(id);
+        assertEq(uint8(registry.getVolume(id).status), uint8(IVolumeRegistryViews.Status.Retired));
     }
 
     function test_retired_notInActiveList() public {
@@ -64,12 +67,10 @@ contract RetirementEdgesTest is RegistryFixture {
 
         uint256 balBefore = bzz.balanceOf(PAYER);
 
-        // trigger reverts.
-        try registry.trigger(id) {
-            revert("trigger should have reverted");
-        } catch {}
+        // trigger skips with NotActive.
+        registry.trigger(id);
 
-        // batched trigger on [id] swallows the revert.
+        // So does the batched trigger.
         bytes32[] memory ids = new bytes32[](1);
         ids[0] = id;
         registry.trigger(ids);

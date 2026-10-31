@@ -69,7 +69,7 @@ abstract contract RegistryFixture is Test {
         stamp.setPrice(INITIAL_PRICE);
 
         // 6. VolumeRegistry itself.
-        registry = new VolumeRegistry(address(stamp), address(bzz), GRACE_BLOCKS);
+        registry = new VolumeRegistry(address(stamp), address(bzz), GRACE_BLOCKS, false);
     }
 
     // ------------------------------------------------------------------

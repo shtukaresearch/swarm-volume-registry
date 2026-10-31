@@ -126,18 +126,30 @@ contract TriggerPaymentGnosisBzzTest is Test {
     // ------------------------------------------------------------------
 
     /// @notice A payer without the balance is skipped without touching the
-    ///         token's `assert` path, so the trigger costs a normal amount of
-    ///         gas rather than nearly all of it.
-    function test_trigger_insufficientBalance_skipsCheaply() public {
-        bytes32 id = _drainingVolume();
+    ///         token's `assert` path: the gas the skip uses does not depend on
+    ///         the gas the call is given. Catching the token's revert instead
+    ///         would burn about 63/64 of whatever was forwarded.
+    function test_trigger_insufficientBalance_skipCostIndependentOfGasGiven() public {
+        // Two volumes with broke payers, so neither measurement runs between
+        // snapshot cheatcodes (which distort Forge's gas accounting). The second
+        // call finds some slots warm; the tolerance absorbs that and is still far
+        // below the millions of gas a caught revert would show.
+        bytes32 small = _drainingVolume();
+        address otherOwner = makeAddr("other_owner");
+        address otherPayer = makeAddr("other_payer");
+        _activate(otherOwner, otherPayer);
+        vm.prank(otherOwner);
+        bytes32 large = registry.createVolume(CHUNK_SIGNER, DEPTH, BUCKET, 0, false);
+        vm.roll(block.number + 5);
         deal(address(bzz), PAYER, 0);
+        deal(address(bzz), otherPayer, 0);
 
-        vm.expectEmit(true, true, true, true);
-        emit TopupSkipped(id, uint8(IVolumeRegistryViews.SkipReason.PaymentFailed));
-        uint256 g = gasleft();
-        registry.trigger(id);
-        assertLt(g - gasleft(), 200_000, "skip must not burn forwarded gas");
-        _assertActive(id);
+        uint256 usedSmall = _triggerGasUsed(small, 3_000_000);
+        uint256 usedLarge = _triggerGasUsed(large, 10_000_000);
+
+        assertApproxEqAbs(usedSmall, usedLarge, 50_000, "skip cost scales with gas given");
+        _assertActive(small);
+        _assertActive(large);
     }
 
     function test_trigger_finiteAllowanceShort_skips() public {
@@ -284,6 +296,18 @@ contract TriggerPaymentGnosisBzzTest is Test {
         bzz.permit(PAYER, spender, nonce, expiry, true, v, r, s);
         assertEq(bzz.allowance(PAYER, spender), type(uint256).max);
         assertEq(bzz.expirations(PAYER, spender), expiry);
+    }
+
+    /// @notice Gas used by `trigger(id)` given exactly `gas`, which must succeed
+    ///         and skip with `PaymentFailed`.
+    function _triggerGasUsed(bytes32 id, uint256 gas) internal returns (uint256 used) {
+        vm.expectEmit(true, true, true, true);
+        emit TopupSkipped(id, uint8(IVolumeRegistryViews.SkipReason.PaymentFailed));
+        uint256 g = gasleft();
+        (bool ok,) =
+            address(registry).call{gas: gas}(abi.encodeWithSignature("trigger(bytes32)", id));
+        used = g - gasleft();
+        assertTrue(ok, "trigger reverted");
     }
 
     function _assertActive(bytes32 id) internal view {

@@ -199,8 +199,7 @@ _V2_RC3_EVENT_ABIS: list[dict[str, Any]] = [
 
 #: The release after v2-rc3 (ADR-0007): ``trigger`` skips an unknown or retired volume with
 #: ``TopupSkipped`` instead of reverting, so the skip reasons gain ``NotFound`` and
-#: ``NotActive``. The events ABIs are v2-rc3's. Registered in ``_VERSIONS`` once the
-#: release's deployment record exists (``docs/RELEASING.md`` B1).
+#: ``NotActive``. The events ABIs are v2-rc3's.
 _V2_RC4_SKIP_REASONS: dict[int, str] = {
     **_V1_SKIP_REASONS,
     3: "NotFound",
@@ -221,6 +220,7 @@ _VERSIONS = {
     # Same source as v2-rc1; only the constructor's graceBlocks differs.
     "v2-rc2": {"abis": _V2_RC1_EVENT_ABIS, "enums": _V1_ENUMS},
     "v2-rc3": {"abis": _V2_RC3_EVENT_ABIS, "enums": _V1_ENUMS},
+    "v2-rc4": {"abis": _V2_RC3_EVENT_ABIS, "enums": _V2_RC4_ENUMS},
 }
 
 

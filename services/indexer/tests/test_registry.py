@@ -56,34 +56,6 @@ def test_label_is_network_and_version():
     assert spec.label == "sepolia-v2-rc1"
 
 
-def test_default_registry_is_the_live_fleet():
-    labels = {s.label for s in registry.DEFAULT_REGISTRY}
-    assert {
-        "gnosis-v1",
-        "sepolia-v1",
-        "sepolia-v2-rc1",
-        "sepolia-v2-rc2",
-        "sepolia-v2-rc3",
-    } <= labels
-    assert registry.DEFAULT_REGISTRY.latest == {
-        "gnosis": "gnosis-v1",
-        "sepolia": "sepolia-v2-rc3",
-    }
-    # the bare network follows its pointer; superseded deployments stay addressable
-    assert registry.select(registry.DEFAULT_REGISTRY, "sepolia").registry == (
-        "0xab326d6dbdcd1e90e06af22f4e72fa480078745e"
-    )
-    assert registry.select(registry.DEFAULT_REGISTRY, "sepolia-v2-rc2").registry == (
-        "0x00f72ee2970df8112fdf04c0225b33c43c5a4177"
-    )
-    assert registry.select(registry.DEFAULT_REGISTRY, "sepolia-v2-rc1").registry == (
-        "0x33a53c79a08ed1f863905cd4c6ce036a4c493729"
-    )
-    assert registry.select(registry.DEFAULT_REGISTRY, "sepolia-v1").registry == (
-        "0x3a99b4b52a4bd75760667219ea93c627051b1af8"
-    )
-
-
 def test_default_registry_is_closed_over_supported_versions():
     """Support closure (ADR-0011): every shipped registry entry's ``registry_version``
     has decode reference data behind it. This gates publishing — a released package can

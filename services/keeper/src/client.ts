@@ -27,8 +27,13 @@ export const CHAINS: Readonly<Record<number, Chain>> = {
  */
 export const PROBE_TIMEOUT_MS = 5_000;
 
-/** Per-request budget once the cycle is running. */
-const REQUEST_TIMEOUT_MS = 15_000;
+/**
+ * Per-request budget once the cycle is running. Short, because a provider can
+ * hang without failing: Chainstack's Sepolia endpoint answers in about 0.3 s,
+ * but about 1 request in 10 hangs for 20–40 s. Each hang costs this much
+ * before the fallback moves on, and a receipt wait makes many requests.
+ */
+const REQUEST_TIMEOUT_MS = 4_000;
 
 export interface EndpointHealth {
   url: string;

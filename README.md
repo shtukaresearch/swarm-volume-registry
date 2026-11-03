@@ -7,9 +7,10 @@ The contract does not custody BZZ, does not sign chunks, has no admin role, and 
 ## Deployments
 
 v2 — which removes unilateral volume ownership transfer — is deployed on Sepolia only, as
-release candidates `v2-rc2` and `v2-rc3`; `v2-rc3` adds import of existing Postage batches
-and changes the ABI (see its
-[release notes](https://github.com/shtukaresearch/swarm-volume-registry/releases/tag/v2-rc3)).
+release candidates `v2-rc2`, `v2-rc3` and `v2-rc4`; `v2-rc3` adds import of existing Postage
+batches, and `v2-rc4` limits keeper-endpoint reverts to out-of-gas, a paused Postage or a
+fault ([ADR-0007](./docs/adr/0007-keeper-endpoints-revert-only-on-bugs.md)). Both change the ABI (see the
+[release notes](https://github.com/shtukaresearch/swarm-volume-registry/releases)).
 Gnosis is still the early-alpha v1 contract; a v2 Gnosis address will be added after
 deployment, and until then [`docs/usage.md`](./docs/usage.md) documents the deployed v1 ABI
 and its mitigations.
@@ -19,6 +20,7 @@ and its mitigations.
 | Gnosis (chain 100) | `v1` | `0x9639ae4c7a8fa9efe585738d516a3915ddd02aad` | `17280` (≈ 24 h at 5-second blocks) |
 | Sepolia (chain 11155111) | `v2-rc2` | `0x00f72ee2970df8112fdf04c0225b33c43c5a4177` | `300` (≈ 1 h at 12-second blocks) |
 | Sepolia (chain 11155111) | `v2-rc3` | `0xab326d6dbdcd1e90e06af22f4e72fa480078745e` | `300` (≈ 1 h at 12-second blocks) |
+| Sepolia (chain 11155111) | `v2-rc4` | `0xe491308994af391a32191a8c380ca818dad332a4` | `300` (≈ 1 h at 12-second blocks) |
 
 Machine-readable records live in [`contracts/deployments/`](./contracts/deployments), one
 `VolumeRegistry-<release>.json` per deployment plus a `VolumeRegistry.json` copy of the

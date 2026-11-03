@@ -23,8 +23,8 @@ release twice to one network is not supported: records are named by release, a C
 deployment is salted with the release name, and the package labels a deployment
 `<network>-<release>` (`gnosis-v1`, `sepolia-v2-rc1`).
 
-The bare network name is a **latest pointer**, moved only by an explicit step (A4 on the
-contracts side, B3 in the package).
+The bare network name is a **latest pointer**. On the contracts side it moves to each new
+deployment when its record is exported (A3); the package follows in B3.
 
 ## Part A — Deploy a contract release
 
@@ -115,10 +115,11 @@ broadcast overwrites `run-latest.json` but never the timestamped file.
 
 The committed discovery format follows the widely used hardhat-deploy v1 layout: each
 network has a decimal `.chainId` file and one JSON file per named deployment. Generate the
-record from the successful broadcast and compiled Foundry artifact, naming the release:
+record from the successful broadcast and compiled Foundry artifact, naming the release
+and moving the network's latest pointer (A4) to it:
 
 ```sh
-python3 script/export_deployment.py sepolia-postage-v0.9.4-1h --version v2-rc3
+python3 script/export_deployment.py sepolia-postage-v0.9.4-1h --version v2-rc3 --latest
 ```
 
 This writes:
@@ -126,6 +127,7 @@ This writes:
 ```text
 deployments/sepolia/.chainId
 deployments/sepolia/VolumeRegistry-v2-rc3.json
+deployments/sepolia/VolumeRegistry.json
 ```
 
 Without `--broadcast`, the exporter exports the one `run-<ms>.json` beside
@@ -158,16 +160,13 @@ metadata. The exporter refuses to write a record when:
 - the receipt failed or its deployed address does not match; or
 - the network directory already belongs to another chain ID.
 
-### A4. Promote (optional): move the network's latest pointer
+### A4. The latest pointer
 
 `deployments/<network>/VolumeRegistry.json` is the network's latest pointer: a
 byte-identical copy of one versioned record, which tools that expect the plain
-hardhat-deploy filename read. It moves only on request. Promote the new deployment by
-re-running the export with `--latest`:
-
-```sh
-python3 script/export_deployment.py sepolia-postage-v0.9.4-1h --version v2-rc3 --latest
-```
+hardhat-deploy filename read. The export in A3 moves it to the new deployment, and it is
+committed with that deployment's record (A6). The indexer package ignores a pointer to a
+release it does not yet support, so moving it ahead of Part B is safe.
 
 To point it back at an earlier deployment, copy that record over it
 (`cp deployments/sepolia/VolumeRegistry-v2-rc2.json deployments/sepolia/VolumeRegistry.json`).
@@ -233,8 +232,8 @@ git diff -- \
 
 Verify the exported address and transaction hash against an independent RPC endpoint,
 and confirm the explorer source verification above. Then commit the timestamped
-broadcast, `run-latest.json`, `.chainId`, the versioned record and (if promoted) the
-latest pointer together.
+broadcast, `run-latest.json`, `.chainId`, the versioned record and the latest pointer
+together.
 
 Do not copy a Forge `run-latest.json` into `deployments/`. The broadcast is an
 execution journal; the deployment record is the stable discovery interface generated

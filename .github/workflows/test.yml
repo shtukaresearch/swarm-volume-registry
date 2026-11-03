@@ -54,7 +54,7 @@ jobs:
     # A deployment record and the broadcast it cites are facts: once committed they are
     # never changed or removed (RELEASING.md A3). Adding new ones is fine. Excluded:
     # run-latest.json, which Forge rewrites on every broadcast, and each network's latest
-    # pointer deployments/<network>/VolumeRegistry.json, which A4 moves by design.
+    # pointer deployments/<network>/VolumeRegistry.json, which A3 moves by design.
     name: Immutable deployment facts
     runs-on: ubuntu-latest
     permissions:

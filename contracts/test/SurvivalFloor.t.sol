@@ -139,7 +139,7 @@ contract SurvivalFloorTest is RegistryFixture {
     ///      and drive the worst-case price schedule until the batch dies.
     ///      Asserts T ≥ ⌊f × grace⌋ (I6) and returns T in blocks.
     function _worstCaseSurvival(uint64 grace) internal returns (uint256 T) {
-        VolumeRegistry reg = new VolumeRegistry(address(stamp), address(bzz), grace);
+        VolumeRegistry reg = new VolumeRegistry(address(stamp), address(bzz), grace, false);
 
         // Use a realistic price (24000, same order as Swarm's min upscaled
         // price) so K_max arithmetic does not truncate.
@@ -190,7 +190,7 @@ contract SurvivalFloorTest is RegistryFixture {
 
     function test_survival_worstCasePrice_shortGrace() public {
         uint64 grace = 12;
-        VolumeRegistry reg12 = new VolumeRegistry(address(stamp), address(bzz), grace);
+        VolumeRegistry reg12 = new VolumeRegistry(address(stamp), address(bzz), grace, false);
 
         _setLargePrice(24000);
 

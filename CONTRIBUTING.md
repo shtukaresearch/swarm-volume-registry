@@ -27,14 +27,9 @@ FORK_POSTAGE_STAMP=0x... FORK_BZZ=0x... \
     --match-path test/fork/ForkRegistry.t.sol
 ```
 
-See [`contracts/test/README.md`](./contracts/test/README.md#fork-tests)
-for the full env-var list (`FORK_MULTICALL3`, `FORK_GRACE_BLOCKS`) and
-[`docs/usage.md`](./docs/usage.md) §2 for current addresses per chain.
+See [`contracts/test/fork/README.md`](./contracts/test/fork/README.md) for the full env-var list and [`docs/usage.md`](./docs/usage.md) §2 for current addresses per chain.
 
-See [`contracts/test/README.md`](./contracts/test/README.md) for the
-testing strategy, how each section of `DESIGN.md` maps to test files,
-and the file-level breakdown of the example, invariant, and fork
-suites.
+See [`contracts/test/README.md`](./contracts/test/README.md) for the test files and how each section of `DESIGN.md` maps to them, and [`docs/TEST-STRATEGY.md`](./docs/TEST-STRATEGY.md) for the reasoning behind the suite.
 
 A change to the contract's design comes with a decision record in
 [`docs/adr/`](./docs/adr/README.md) (Context → Decision → Consequences),
@@ -70,7 +65,8 @@ older versions that require a duplicate `--sender` argument.
 The configured `grace_blocks` must be at least
 `PostageStamp.minimumValidityBlocks()` on the target chain or the constructor reverts.
 See [`docs/DESIGN.md`](./docs/DESIGN.md) §10 for semantics and §10.1 for the survival
-bound the value implies.
+bound the value implies. `bzz_permit_expiry` must be `true` only for a BZZ token with
+`expirations` (Gnosis BZZ), or the constructor reverts (§10).
 
 Exporting the deployment record, explorer verification, tagging and the indexer release
 steps are in [`RELEASING.md`](./RELEASING.md).

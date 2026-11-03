@@ -1,0 +1,2 @@
+# Lint and format settings for the deploy tooling in script/, matching services/indexer.
+line-length = 100

@@ -4,16 +4,15 @@ import os
 import stat
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
-
 
 SCRIPT_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
 import deploy  # noqa: E402
-
 
 PROFILE_NAME = "sepolia-postage-v0.9.4-1h"
 PASSWORD = "correct horse battery staple"
@@ -85,12 +84,34 @@ class Create2Tests(unittest.TestCase):
         with mock.patch.object(deploy.subprocess, "run", fake):
             deploy.main(BASE_ARGS + ["--broadcast"])
         ((command, _),) = fake.script_calls
-        self.assertIn("run(address,address,uint64,bytes32)", command)
-        sig = command.index("run(address,address,uint64,bytes32)")
-        self.assertEqual(command[sig + 4], deploy.release_salt(VERSION))
-        self.assertEqual(
-            command[command.index("--create2-deployer") + 1], deploy.CREATE2_FACTORY
+        sig = command.index(deploy.SCRIPT_SIGNATURE)
+        self.assertEqual(deploy.SCRIPT_SIGNATURE, "run(address,address,uint64,bool,bytes32)")
+        self.assertEqual(command[sig + 4], "false")
+        self.assertEqual(command[sig + 5], deploy.release_salt(VERSION))
+        self.assertEqual(command[command.index("--create2-deployer") + 1], deploy.CREATE2_FACTORY)
+
+    def test_profiles_set_permit_expiry_for_gnosis_only(self) -> None:
+        self.assertIs(deploy.load_profile("gnosis-postage-v0.9.4")["bzz_permit_expiry"], True)
+        self.assertIs(deploy.load_profile(PROFILE_NAME)["bzz_permit_expiry"], False)
+
+    def test_profile_requires_boolean_permit_expiry(self) -> None:
+        profile = (
+            "[profiles.p]\nchain_id = 1\n"
+            'postage_stamp = "0x' + "11" * 20 + '"\nbzz = "0x' + "22" * 20 + '"\n'
+            "grace_blocks = 12\n"
         )
+        for extra, message in (
+            ("", "missing 'bzz_permit_expiry'"),
+            ('bzz_permit_expiry = "yes"\n', "invalid bzz_permit_expiry"),
+        ):
+            with tempfile.TemporaryDirectory() as tmp, self.subTest(extra=extra):
+                config = Path(tmp) / "deployments.toml"
+                config.write_text(profile + extra)
+                with (
+                    mock.patch.object(deploy, "CONFIG", config),
+                    self.assertRaisesRegex(SystemExit, message),
+                ):
+                    deploy.load_profile("p")
 
     def test_missing_factory_aborts_before_forge(self) -> None:
         fake = FakeRun(factory_code="0x")
@@ -142,7 +163,7 @@ class PasswordPromptTests(unittest.TestCase):
         self.assertTrue(fake.zenity_called)
         self.assertEqual(fake.password_read, PASSWORD)
         self.assertTrue(fake.password_is_regular_file)
-        (command, kwargs), = fake.script_calls
+        ((command, kwargs),) = fake.script_calls
         path = command[command.index("--password-file") + 1]
         fd = int(path.removeprefix("/dev/fd/"))
         self.assertEqual(kwargs["pass_fds"], (fd,))
@@ -178,7 +199,14 @@ class PasswordPromptTests(unittest.TestCase):
     def test_prompt_requires_account(self) -> None:
         with mock.patch("sys.stderr"), self.assertRaises(SystemExit):
             self.run_main(
-                [PROFILE_NAME, "--version", VERSION, "--rpc-url", "http://rpc.invalid", "--password-prompt"],
+                [
+                    PROFILE_NAME,
+                    "--version",
+                    VERSION,
+                    "--rpc-url",
+                    "http://rpc.invalid",
+                    "--password-prompt",
+                ],
                 FakeRun(),
             )
 
@@ -187,7 +215,7 @@ class PasswordPromptTests(unittest.TestCase):
         self.run_main(BASE_ARGS + ["--broadcast"], fake)
 
         self.assertFalse(fake.zenity_called)
-        (command, kwargs), = fake.script_calls
+        ((command, kwargs),) = fake.script_calls
         self.assertNotIn("--password-file", command)
         self.assertNotIn("pass_fds", kwargs)
 

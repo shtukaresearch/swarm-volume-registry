@@ -145,6 +145,18 @@ def _assert_conforms(rows, version):
         assert isinstance(r.block_number, int) and isinstance(r.log_index, int)
 
 
+def test_v2_rc4_skip_reasons_extend_without_renumbering():
+    """The contract appends to ``SkipReason``, so every earlier code keeps its name and the
+    new ones follow it (pure unit; ``IVolumeRegistryViews.SkipReason``)."""
+    assert decode._V2_RC4_SKIP_REASONS == {
+        1: "NoAuth",
+        2: "PaymentFailed",
+        3: "NotFound",
+        4: "NotActive",
+    }
+    assert decode._V2_RC4_ENUMS[("VolumeRetired", "reason")] is decode._V1_RETIRE_REASONS
+
+
 def test_catalogue_names_every_version():
     """A supported version without its own catalogue entry gets the v2-rc3 one; that is
     only right while every version after v2-rc2 shares the rc3 surface."""

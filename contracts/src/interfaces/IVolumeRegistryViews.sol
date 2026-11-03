@@ -46,7 +46,9 @@ interface IVolumeRegistryViews {
     enum SkipReason {
         None,
         NoAuth, // the owner's account is not active
-        PaymentFailed // pulling BZZ from the payer failed
+        PaymentFailed, // the payer's balance, allowance or permit cannot cover the deficit
+        NotFound, // no volume has this ID
+        NotActive // the volume is Retired
     }
 
     /// @notice An owner's funding account (DESIGN §4, §6.2).
@@ -133,7 +135,8 @@ interface IVolumeRegistryViews {
     /// @param newNormalisedBalance The batch's normalised balance after the topup.
     event Toppedup(bytes32 indexed volumeId, uint256 amount, uint256 newNormalisedBalance);
 
-    /// @notice A trigger found a deficit but did not pay it.
+    /// @notice A trigger did not pay a deficit: the volume is unknown or
+    ///         Retired, or the account or payer cannot pay.
     event TopupSkipped(bytes32 indexed volumeId, SkipReason reason);
 
     // ---------------------------------------------------------------------
@@ -148,7 +151,7 @@ interface IVolumeRegistryViews {
     error AccountNotActive();
     /// @notice The caller does not own the volume.
     error NotVolumeOwner();
-    /// @notice The volume does not exist or is Retired.
+    /// @notice `deleteVolume` on a volume that does not exist or is Retired.
     error VolumeNotActive();
     /// @notice The caller is not the owner's designated payer.
     error NotDesignated();
@@ -159,6 +162,9 @@ interface IVolumeRegistryViews {
     error DesignationClearedOnActivate();
     /// @notice The batch does not exist, or its balance is exhausted.
     error BatchNotLive();
+    /// @notice The batch's depth does not exceed Postage's `minimumBucketDepth`,
+    ///         so Postage would refuse to top it up.
+    error BatchDepthTooSmall();
     /// @notice `importVolume`'s topup neither went through nor was unnecessary.
     error ImportTopupFailed();
 
@@ -172,6 +178,9 @@ interface IVolumeRegistryViews {
     function bzz() external view returns (IERC20Like);
     /// @notice Runway, in blocks, charged at creation and restored by `trigger`.
     function graceBlocks() external view returns (uint64);
+    /// @notice Whether `trigger` checks the expiry of an unlimited allowance
+    ///         granted by `bzz`'s legacy `permit` (Gnosis BZZ).
+    function bzzPermitExpiry() external view returns (bool);
 
     // ---------------------------------------------------------------------
     // Views  (DESIGN §7.4)

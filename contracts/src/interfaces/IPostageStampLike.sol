@@ -31,6 +31,8 @@ interface IPostageStampLike {
 
     function minimumValidityBlocks() external view returns (uint64);
 
+    function minimumBucketDepth() external view returns (uint8);
+
     function minimumInitialBalancePerChunk() external view returns (uint256);
 
     function createBatch(

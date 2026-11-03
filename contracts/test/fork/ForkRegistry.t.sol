@@ -21,6 +21,8 @@ import {IVolumeRegistryViews} from "../../src/interfaces/IVolumeRegistryViews.so
 ///                                       0xcA11bde05977b3631167028862bE2a173976CA11.
 ///   - `FORK_GRACE_BLOCKS` (optional)  — registry constructor arg;
 ///                                       defaults to PostageStamp.minimumValidityBlocks().
+///   - `FORK_BZZ_PERMIT_EXPIRY` (optional) — registry constructor arg;
+///                                       `true` for Gnosis BZZ, defaults to false.
 ///   - `FORK_IMPORT_BATCH_ID` (optional) — a real, pre-existing batch for
 ///                                       test_fork_registerVolume_liveBatch;
 ///                                       that test is skipped when unset.
@@ -67,6 +69,7 @@ contract ForkRegistryTest is Test {
     address internal bzzAddr;
     address internal multicall3Addr;
     uint64 internal graceBlocks;
+    bool internal bzzPermitExpiry;
 
     VolumeRegistry internal registry;
     IERC20 internal bzz;
@@ -105,6 +108,7 @@ contract ForkRegistryTest is Test {
         // FORK_GRACE_BLOCKS defaults to the chain's minimumValidityBlocks
         // (smallest value the registry constructor will accept).
         graceBlocks = uint64(vm.envOr("FORK_GRACE_BLOCKS", uint256(stamp.minimumValidityBlocks())));
+        bzzPermitExpiry = vm.envOr("FORK_BZZ_PERMIT_EXPIRY", false);
 
         // Parity assertions.
         assertGt(postageAddr.code.length, 0, "PostageStamp code missing on fork");
@@ -119,7 +123,7 @@ contract ForkRegistryTest is Test {
 
         _assertBatchesLayoutParity();
 
-        registry = new VolumeRegistry(postageAddr, bzzAddr, graceBlocks);
+        registry = new VolumeRegistry(postageAddr, bzzAddr, graceBlocks, bzzPermitExpiry);
 
         // Fund + activate.
         deal(bzzAddr, payer, 1e30);

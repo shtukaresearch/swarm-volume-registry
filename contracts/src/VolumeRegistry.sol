@@ -2,6 +2,7 @@
 pragma solidity ^0.8.19;
 
 import {IERC20Like} from "./interfaces/IERC20Like.sol";
+import {IPermittableTokenLike} from "./interfaces/IPermittableTokenLike.sol";
 import {IPostageStampLike} from "./interfaces/IPostageStampLike.sol";
 import {IVolumeRegistry} from "./interfaces/IVolumeRegistry.sol";
 
@@ -20,6 +21,8 @@ import {IVolumeRegistry} from "./interfaces/IVolumeRegistry.sol";
 ///        - trigger check-order is: status → batch-dead → owner-mismatch
 ///          → depth-changed → TTL-expired → auth → payment (§8);
 ///        - retire beats auth-skip; payment-failure does not retire;
+///        - keeper calls revert only on out-of-gas, a paused Postage, or a
+///          fault; payer state is prechecked, never caught (ADR-0007);
 ///        - `importVolume` = register + trigger, atomic: it keeps only the
 ///          ToppedUp / NoDeficit outcomes and reverts otherwise (I13).
 contract VolumeRegistry is IVolumeRegistry {
@@ -32,7 +35,7 @@ contract VolumeRegistry is IVolumeRegistry {
     // as success; `importVolume` keeps only NoDeficit and ToppedUp.
     enum TriggerOutcome {
         Retired, // steps 2–5
-        Skipped, // steps 6, 8
+        Skipped, // steps 1, 6, 8
         NoDeficit, // step 7
         ToppedUp // step 9
     }
@@ -60,6 +63,7 @@ contract VolumeRegistry is IVolumeRegistry {
     IPostageStampLike public immutable postage;
     IERC20Like public immutable bzz;
     uint64 public immutable graceBlocks;
+    bool public immutable bzzPermitExpiry;
 
     // ---------------------------------------------------------------------
     // Storage
@@ -76,14 +80,18 @@ contract VolumeRegistry is IVolumeRegistry {
     // Constructor  (DESIGN §10)
     // ---------------------------------------------------------------------
 
-    constructor(address _postage, address _bzz, uint64 _graceBlocks) {
+    constructor(address _postage, address _bzz, uint64 _graceBlocks, bool _bzzPermitExpiry) {
         if (_postage == address(0) || _bzz == address(0)) revert ZeroAddress();
         uint64 floor_ = IPostageStampLike(_postage).minimumValidityBlocks();
         if (_graceBlocks < floor_) revert GraceBlocksBelowFloor(_graceBlocks, floor_);
+        // Uncaught: a token without `expirations` fails the deployment here
+        // rather than every topup later.
+        if (_bzzPermitExpiry) IPermittableTokenLike(_bzz).expirations(address(0), address(0));
 
         postage = IPostageStampLike(_postage);
         bzz = IERC20Like(_bzz);
         graceBlocks = _graceBlocks;
+        bzzPermitExpiry = _bzzPermitExpiry;
     }
 
     // =====================================================================
@@ -177,7 +185,8 @@ contract VolumeRegistry is IVolumeRegistry {
     /// @notice Bring an existing, live Postage batch under management. Moves
     ///         no BZZ.
     /// @dev Preconditions, in order: active account (`AccountNotActive`),
-    ///      live batch (`BatchNotLive`). No relation between the caller and
+    ///      live batch (`BatchNotLive`), depth above Postage's
+    ///      `minimumBucketDepth` (`BatchDepthTooSmall`). No relation between the caller and
     ///      the batch owner is required (ADR-0001). `chunkSigner` and `depth`
     ///      are read from Postage. A past `ttlExpiry` is accepted; the volume
     ///      retires `VolumeExpired` on its first trigger. No survival bound
@@ -215,24 +224,14 @@ contract VolumeRegistry is IVolumeRegistry {
         _triggerOne(volumeId);
     }
 
-    /// @notice Batched trigger. Per-item try/catch: one bad id never aborts
-    ///         the cycle. Reverts from an inner call are swallowed silently
-    ///         (the contract itself only ever emits `TopupSkipped` or
-    ///         `VolumeRetired` on a successful check — the revert path is
-    ///         reserved for malformed input like "volume already retired",
-    ///         which is uninteresting in a batched context).
+    /// @notice Batched trigger. No item-level state reverts (ADR-0007), so
+    ///         the loop needs no isolation: a revert here is out-of-gas, a
+    ///         paused Postage or a fault, and rolls back the whole batch.
     function trigger(bytes32[] calldata volumeIds) external {
         uint256 n = volumeIds.length;
         for (uint256 i = 0; i < n; ++i) {
-            try this._triggerExt(volumeIds[i]) {} catch {}
+            _triggerOne(volumeIds[i]);
         }
-    }
-
-    /// @dev External entry for try/catch wrapping. Never call directly from
-    ///      outside — `trigger(bytes32)` is the public surface.
-    function _triggerExt(bytes32 volumeId) external {
-        require(msg.sender == address(this), "INTERNAL_ONLY");
-        _triggerOne(volumeId);
     }
 
     /// @notice Retire an Active volume whose TTL has passed. No-op on an
@@ -252,9 +251,16 @@ contract VolumeRegistry is IVolumeRegistry {
     function _triggerOne(bytes32 volumeId) internal returns (TriggerOutcome) {
         Volume storage v = _volumes[volumeId];
         bytes32 batchId = v.batchId;
-        // Step 1 — volume must be Active. Revert (not skip) so malformed
-        // single-id calls are loud; batched calls swallow this.
-        if (v.status != Status.Active) revert VolumeNotActive();
+        // Step 1 — volume must be Active. An unknown ID is told apart from a
+        // retired one: the first is a fault in the keeper's input, the second
+        // an ordinary race with retirement.
+        Status status = v.status;
+        if (status != Status.Active) {
+            emit TopupSkipped(
+                volumeId, status == Status.None ? SkipReason.NotFound : SkipReason.NotActive
+            );
+            return TriggerOutcome.Skipped;
+        }
 
         // Step 2 — read Postage batch.
         (
@@ -309,29 +315,41 @@ contract VolumeRegistry is IVolumeRegistry {
         uint256 deficit = target - remaining;
         uint256 amount = deficit << v.depth;
 
-        // Step 7 — pull BZZ. transferFrom failure is not a retire-edge.
-        try IERC20Like(address(bzz)).transferFrom(acct.payer, address(this), amount) returns (
-            bool ok
-        ) {
-            if (!ok) {
-                emit TopupSkipped(volumeId, SkipReason.PaymentFailed);
-                return TriggerOutcome.Skipped;
-            }
-        } catch {
+        // Step 7 — pull BZZ. A payer that cannot pay is skipped, not retired.
+        // Its state is read beforehand because Gnosis BZZ reports these
+        // failures with empty revert data, indistinguishable from out-of-gas
+        // (ADR-0007); once the precheck passes, a failed pull is a fault.
+        address payer = acct.payer;
+        if (!_canPull(payer, amount)) {
             emit TopupSkipped(volumeId, SkipReason.PaymentFailed);
             return TriggerOutcome.Skipped;
         }
+        require(bzz.transferFrom(payer, address(this), amount), "BZZ_TRANSFER_FAIL");
 
-        // Step 8 — approve & topUp. If this reverts (e.g. Postage paused),
-        // the whole trigger() reverts; batched callers get try/catch-level
-        // isolation. We do NOT swallow it here — a live Postage failure is
-        // a contract-level state worth surfacing.
+        // Step 8 — approve & topUp. A revert here (e.g. Postage paused)
+        // propagates.
         require(bzz.approve(address(postage), amount), "BZZ_APPROVE_FAIL");
         postage.topUp(batchId, deficit);
 
-        (,,,, uint256 newBalance,) = postage.batches(batchId);
-        emit Toppedup(volumeId, amount, newBalance);
+        // `topUp` adds exactly `deficit` to the batch's normalised balance.
+        emit Toppedup(volumeId, amount, bNormalisedBalance + deficit);
         return TriggerOutcome.ToppedUp;
+    }
+
+    /// @dev Whether `bzz.transferFrom(payer, this, amount)` would succeed,
+    ///      judged from the payer's balance, its allowance to the registry
+    ///      and, on a token with `bzzPermitExpiry`, the expiry an unlimited
+    ///      allowance from the legacy `permit` carries (`allowance()` does
+    ///      not reflect it).
+    function _canPull(address payer, uint256 amount) internal view returns (bool) {
+        if (bzz.balanceOf(payer) < amount) return false;
+        uint256 allowed = bzz.allowance(payer, address(this));
+        if (allowed < amount) return false;
+        if (bzzPermitExpiry && allowed == type(uint256).max) {
+            uint256 expiry = IPermittableTokenLike(address(bzz)).expirations(payer, address(this));
+            if (expiry != 0 && expiry < block.timestamp) return false;
+        }
+        return true;
     }
 
     // =====================================================================
@@ -413,6 +431,8 @@ contract VolumeRegistry is IVolumeRegistry {
         if (bOwner == address(0) || bNormalisedBalance <= postage.currentTotalOutPayment()) {
             revert BatchNotLive();
         }
+        // Postage's `topUp` refuses such a batch; only `copyBatch` makes one.
+        if (bDepth <= postage.minimumBucketDepth()) revert BatchDepthTooSmall();
 
         volumeId = _recordVolume(acct, batchId, bOwner, bDepth, ttlExpiry);
         emit VolumeImported(

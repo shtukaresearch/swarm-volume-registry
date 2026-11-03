@@ -135,6 +135,24 @@ contract VolumeRegisterTest is RegistryFixture {
         assertEq(registry.getActiveVolumeCount(), 0);
     }
 
+    /// @notice A batch at `minimumBucketDepth`, which only the admin's
+    ///         `copyBatch` can make, is refused: Postage would refuse to top
+    ///         it up (DESIGN §14).
+    function test_registerVolume_depthAtMinimumBucketDepth_reverts() public {
+        _activateAccount(OWNER, PAYER, _fund());
+        bytes32 batchId = keccak256("copied");
+        stamp.copyBatch(
+            CHUNK_SIGNER, _perChunkCharge(), MIN_BUCKET_DEPTH, MIN_BUCKET_DEPTH / 2, batchId, false
+        );
+        vm.expectRevert(abi.encodeWithSignature("BatchTooSmall()"));
+        stamp.topUp(batchId, 1);
+
+        vm.prank(OWNER);
+        vm.expectRevert(IVolumeRegistryViews.BatchDepthTooSmall.selector);
+        registry.registerVolume(batchId, 0);
+        assertEq(registry.getActiveVolumeCount(), 0);
+    }
+
     // --- shared batches -------------------------------------------------
 
     function test_registerVolume_sameBatchTwice_distinctIds() public {

@@ -18,6 +18,9 @@ evm_version = "paris"
 bytecode_hash = "ipfs"
 cbor_metadata = true
 use_literal_content = false
+# Read-only access for vendored bytecode fixtures (vm.readFileBinary). Not a
+# compiler input, so it does not affect the bytecode.
+fs_permissions = [{ access = "read", path = "./test/fixtures" }]
 
 [fmt]
 line_length = 100

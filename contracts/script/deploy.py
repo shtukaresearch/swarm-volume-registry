@@ -12,11 +12,9 @@ import argparse
 import os
 import re
 import subprocess
-import sys
 import tomllib
 from pathlib import Path
 from typing import Any, NoReturn
-
 
 CONTRACTS = Path(__file__).resolve().parent.parent
 CONFIG = CONTRACTS / "deployments.toml"
@@ -28,6 +26,8 @@ VERSION_NAME = re.compile(r"v[1-9][0-9]*(-rc[1-9][0-9]*)?\Z")
 # Arachnid's deterministic deployment proxy, Foundry's default CREATE2 deployer. It is
 # deployed at this address on every chain we use; its calldata is salt ‖ initcode.
 CREATE2_FACTORY = "0x4e59b44847b379578588920ca78fbf26c0b4956c"
+# DeployVolumeRegistry.run(postageStamp, bzz, graceBlocks, bzzPermitExpiry, salt).
+SCRIPT_SIGNATURE = "run(address,address,uint64,bool,bytes32)"
 
 
 def fail(message: str) -> NoReturn:
@@ -43,7 +43,7 @@ def load_profile(name: str) -> dict[str, Any]:
         fail(f"unknown deployment profile {name!r}; available profiles: {choices}")
 
     profile = profiles[name]
-    for key in ("chain_id", "postage_stamp", "bzz", "grace_blocks"):
+    for key in ("chain_id", "postage_stamp", "bzz", "grace_blocks", "bzz_permit_expiry"):
         if key not in profile:
             fail(f"deployment profile {name!r} is missing {key!r}")
 
@@ -56,6 +56,8 @@ def load_profile(name: str) -> dict[str, Any]:
     grace = profile["grace_blocks"]
     if not isinstance(grace, int) or isinstance(grace, bool) or not 0 <= grace < 2**64:
         fail(f"deployment profile {name!r} has an invalid grace_blocks")
+    if not isinstance(profile["bzz_permit_expiry"], bool):
+        fail(f"deployment profile {name!r} has an invalid bzz_permit_expiry")
 
     return profile
 
@@ -183,10 +185,11 @@ def main(argv: list[str] | None = None) -> None:
         "script",
         "script/DeployVolumeRegistry.s.sol:DeployVolumeRegistry",
         "--sig",
-        "run(address,address,uint64,bytes32)",
+        SCRIPT_SIGNATURE,
         profile["postage_stamp"],
         profile["bzz"],
         str(profile["grace_blocks"]),
+        "true" if profile["bzz_permit_expiry"] else "false",
         salt,
         "--create2-deployer",
         CREATE2_FACTORY,

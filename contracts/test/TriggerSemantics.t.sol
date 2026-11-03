@@ -68,12 +68,21 @@ contract TriggerSemanticsTest is RegistryFixture {
         assertEq(bzz.balanceOf(PAYER), balAfterFirst);
     }
 
-    function test_trigger_retired_reverts() public {
+    function test_trigger_retired_skipsNotActive() public {
         bytes32 id = _setupActiveVolume();
         vm.prank(OWNER);
         registry.deleteVolume(id);
-        vm.expectRevert(IVolumeRegistryViews.VolumeNotActive.selector);
+        vm.expectEmit(true, true, true, true);
+        emit TopupSkipped(id, uint8(IVolumeRegistryViews.SkipReason.NotActive));
         registry.trigger(id);
+    }
+
+    function test_trigger_unknownId_skipsNotFound() public {
+        bytes32 id = keccak256("never registered");
+        vm.expectEmit(true, true, true, true);
+        emit TopupSkipped(id, uint8(IVolumeRegistryViews.SkipReason.NotFound));
+        registry.trigger(id);
+        assertEq(uint8(registry.getVolume(id).status), uint8(IVolumeRegistryViews.Status.None));
     }
 
     // -------- skip-no-retire paths (auth / payment) --------------------
@@ -217,43 +226,96 @@ contract TriggerSemanticsTest is RegistryFixture {
 
     // -------- batched trigger ------------------------------------------
 
-    function test_triggerBatch_perItemTryCatch() public {
-        // 3 volumes: id1 healthy, id2 retired already, id3 revoked account.
+    /// @notice Every item ends in its own event; none reverts the batch
+    ///         (ADR-0007).
+    function test_triggerBatch_eachItemEndsInItsEvent() public {
+        // id1 healthy, id2 retired, id3 revoked account, id4 never registered.
         _activateAccount(OWNER, PAYER, _expectedCreateCharge(DEFAULT_DEPTH) * 10);
         bytes32 id1 = _createDefaultVolume(OWNER, CHUNK_SIGNER);
         bytes32 id2 = _createDefaultVolume(OWNER, CHUNK_SIGNER);
 
         _activateAccount(OWNER_B, PAYER2, _expectedCreateCharge(DEFAULT_DEPTH) * 10);
         bytes32 id3 = _createDefaultVolume(OWNER_B, CHUNK_SIGNER);
+        bytes32 id4 = keccak256("never registered");
 
-        // Retire id2 via deleteVolume.
         vm.prank(OWNER);
         registry.deleteVolume(id2);
-
         _roll(3);
-
-        // Revoke id3's separate owner/payer pair without affecting id1.
         vm.prank(OWNER_B);
         registry.revoke(OWNER_B);
 
-        bytes32[] memory ids = new bytes32[](3);
+        bytes32[] memory ids = new bytes32[](4);
         ids[0] = id1;
         ids[1] = id2;
         ids[2] = id3;
+        ids[3] = id4;
 
         uint256 balBefore = bzz.balanceOf(PAYER);
 
-        // Expect id3 to emit TopupSkipped(NoAuth). id2's revert is swallowed.
-        // id1 emits Toppedup.
-        vm.recordLogs();
+        vm.expectEmit(true, true, true, false);
+        emit Toppedup(id1, 0, 0);
+        vm.expectEmit(true, true, true, true);
+        emit TopupSkipped(id2, uint8(IVolumeRegistryViews.SkipReason.NotActive));
+        vm.expectEmit(true, true, true, true);
+        emit TopupSkipped(id3, uint8(IVolumeRegistryViews.SkipReason.NoAuth));
+        vm.expectEmit(true, true, true, true);
+        emit TopupSkipped(id4, uint8(IVolumeRegistryViews.SkipReason.NotFound));
         registry.trigger(ids);
 
-        // id1 topped up (payer balance decreased).
-        assertLt(bzz.balanceOf(PAYER), balBefore);
-        // id2 still retired, unchanged.
+        assertLt(bzz.balanceOf(PAYER), balBefore, "id1 topped up");
         assertEq(uint8(registry.getVolume(id2).status), uint8(IVolumeRegistryViews.Status.Retired));
-        // id3 still active (NoAuth never retires).
         assertEq(uint8(registry.getVolume(id3).status), uint8(IVolumeRegistryViews.Status.Active));
+    }
+
+    /// @notice A paused PostageStamp reverts the whole batch, including
+    ///         items processed before the top-up that hit it.
+    function test_triggerBatch_postagePaused_revertsWhole() public {
+        _activateAccount(OWNER, PAYER, _expectedCreateCharge(DEFAULT_DEPTH) * FUND_MULT);
+        uint64 ttl = uint64(block.timestamp + 100);
+        bytes32 expiring = _createVolumeWithTtl(OWNER, CHUNK_SIGNER, ttl);
+        bytes32 draining = _createDefaultVolume(OWNER, CHUNK_SIGNER);
+        _roll(5);
+        vm.warp(ttl + 1);
+        // `draining` has no TTL; `expiring` would retire before any top-up.
+        bytes32[] memory ids = new bytes32[](2);
+        ids[0] = expiring;
+        ids[1] = draining;
+
+        stamp.pause();
+        vm.expectRevert("Pausable: paused");
+        registry.trigger(ids);
+
+        assertEq(
+            uint8(registry.getVolume(expiring).status),
+            uint8(IVolumeRegistryViews.Status.Active),
+            "retirement rolled back"
+        );
+    }
+
+    /// @notice A batch that runs out of gas reverts as a whole instead of
+    ///         dropping its tail (issue #2), so a gas estimate covers the work.
+    function test_triggerBatch_outOfGas_revertsWhole() public {
+        _activateAccount(OWNER, PAYER, _expectedCreateCharge(DEFAULT_DEPTH) * FUND_MULT);
+        bytes32[] memory ids = new bytes32[](3);
+        for (uint256 i = 0; i < ids.length; ++i) {
+            ids[i] = _createDefaultVolume(OWNER, CHUNK_SIGNER);
+        }
+        _roll(5);
+
+        uint256 snap = vm.snapshotState();
+        uint256 g = gasleft();
+        registry.trigger(ids);
+        uint256 full = g - gasleft();
+        vm.revertToState(snap);
+
+        uint256 balBefore = bzz.balanceOf(PAYER);
+        uint256 remainingBefore = _remaining(_batchOf(ids[0]));
+        (bool ok,) = address(registry).call{gas: full * 2 / 3}(
+            abi.encodeWithSignature("trigger(bytes32[])", ids)
+        );
+        assertFalse(ok, "short batch must revert");
+        assertEq(bzz.balanceOf(PAYER), balBefore, "no partial top-ups");
+        assertEq(_remaining(_batchOf(ids[0])), remainingBefore);
     }
 
     // -------- reap -----------------------------------------------------

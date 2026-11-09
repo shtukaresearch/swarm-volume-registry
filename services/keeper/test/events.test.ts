@@ -54,12 +54,16 @@ describe("decodeCycleEvents", () => {
       [
         log("TopupSkipped", volumeId(1), uint8(1)),
         log("TopupSkipped", volumeId(2), uint8(2)),
+        log("TopupSkipped", volumeId(3), uint8(3)),
+        log("TopupSkipped", volumeId(4), uint8(4)),
       ],
       REGISTRY,
     );
     expect(decoded.topupSkipped).toEqual([
       { volumeId: volumeId(1), reason: "NoAuth" },
       { volumeId: volumeId(2), reason: "PaymentFailed" },
+      { volumeId: volumeId(3), reason: "NotFound" },
+      { volumeId: volumeId(4), reason: "NotActive" },
     ]);
   });
 
@@ -129,11 +133,10 @@ describe("decodeCycleEvents", () => {
 const decode = (logs: Log[]) => decodeCycleEvents(logs, REGISTRY);
 
 describe("summarizeVolume", () => {
-  // In a batch, no event is either a volume that needed nothing or one whose
-  // inner call reverted and was swallowed. The receipt cannot say which, so
-  // this does not guess; runKeeperCycle checks chain state.
-  test("no events is no answer, not a noop", () => {
-    expect(summarizeVolume(decode([]), volumeId(1))).toBeUndefined();
+  // The only silent branch of `_triggerOne` is a zero deficit, and a volume
+  // that reverts takes the whole batch with it (ADR-0007).
+  test("no event is a noop", () => {
+    expect(summarizeVolume(decode([]), volumeId(1))).toEqual({ outcome: "noop" });
   });
 
   test("a top-up carries its amount", () => {
@@ -166,7 +169,7 @@ describe("summarizeVolume", () => {
       decode([log("Toppedup", volumeId(2), topup(5000n))]),
       volumeId(1),
     );
-    expect(summary).toBeUndefined();
+    expect(summary).toEqual({ outcome: "noop" });
   });
 
   test("the volume id is matched case-insensitively", () => {

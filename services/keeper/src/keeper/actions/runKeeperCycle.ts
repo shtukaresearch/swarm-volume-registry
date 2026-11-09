@@ -72,7 +72,7 @@ export type RunKeeperCycleReturnType = {
   noop: Hex[];
   /**
    * Volumes whose transaction reverted, was never mined, or never confirmed,
-   * and volumes that reverted inside a mined batch.
+   * and volumes held back because they revert `trigger` in simulation.
    */
   failed: Hex[];
   /** `selected` mode: requested ids that are not Active volumes. */
@@ -124,18 +124,21 @@ export function rotateVolumes<T>(ids: readonly T[], blockNumber: bigint): T[] {
  * **Batched**, through `trigger(bytes32[])`: one transaction, nonce and receipt
  * wait per batch rather than per volume, so a cycle reaches several times as
  * many volumes in the same time. Every batch carries the same fixed gas
- * limit; {@link trigger} explains why. The
- * cost is that the contract runs each volume in its own try/catch. A volume
- * that reverts there, whether out of gas, on a PostageStamp revert, or retired
- * since enumeration, leaves no event, the same as a volume that needed nothing.
- * So every volume the receipt is silent about is replayed: `trigger(bytes32)`
- * is simulated for it at the receipt's block, in one multicall. A revert there
- * is the volume's revert in the batch, and it is `failed`, with its reason;
- * `VolumeNotActive` means it retired first, and is reported as retired. No
- * revert is a `noop`. That covers a volume starved of gas inside the batch too,
- * which goes unreported: the next cycle tops it up. Every trigger after the
- * first tops up the deficit since, so a healthy volume almost always has an
- * event, and the replay runs mainly when something reverted.
+ * limit; {@link trigger} explains why.
+ *
+ * **Simulated before it is sent.** The batch reverts as a whole when any of its
+ * volumes does, and per ADR-0007 that means out of gas, a paused PostageStamp
+ * or a fault. So each batch is first run as an `eth_call` with its gas limit.
+ * If that reverts, each volume is simulated alone with `trigger(bytes32)`, in
+ * one multicall: the ones that revert are `failed` with their reason and not
+ * sent, and the rest go out without them. When none reverts alone, the batch
+ * only reverts together, and every volume in it is `failed` with the batch's
+ * reason. Either way one volume's fault does not hold back the others for
+ * good: each cycle rotates the list, so batches are made up differently.
+ *
+ * In a mined batch, every volume emits `Toppedup`, `TopupSkipped` or
+ * `VolumeRetired`, or nothing when it needed nothing, which is a `noop`. A
+ * volume that retired since enumeration answers `TopupSkipped(NotActive)`.
  *
  * **No client-side filtering.** Every Active volume is triggered and the
  * contract decides what each one needs. `_triggerOne` tops up only a real
@@ -282,9 +285,8 @@ export async function runKeeperCycle<
       });
     }
 
-    // Selected mode still checks status, so a caller who named an id is owed an
-    // answer about it. Sending a dead id would get no answer at all: the batch
-    // swallows its `VolumeNotActive`.
+    // Selected mode checks status first, so an id that is not Active is
+    // reported as such and never sent.
     const views = await getAction(
       client,
       multicall,
@@ -336,29 +338,94 @@ export async function runKeeperCycle<
     return { nonce, maxFeePerGas: baseFee * 2n + maxPriorityFeePerGas, maxPriorityFeePerGas };
   }
 
-  /** Trigger the head of `pending`, as many as one transaction takes. */
+  /**
+   * Trigger the head of `pending`, as many as one transaction takes, less any
+   * volume that would revert it.
+   */
   async function sendBatch(pending: VolumeView[]): Promise<VolumeResult[]> {
     const batch = pending.slice(0, batchSize);
-    let hash: Hex | undefined;
+    const reverts = await simulate(batch);
+    const sendable = batch.filter((v) => !reverts.has(v.volumeId));
+    const sent = new Map(
+      (sendable.length > 0 ? await send(sendable) : []).map((r) => [r.volumeId, r]),
+    );
+    return batch.map(
+      (v) =>
+        sent.get(v.volumeId) ?? {
+          volumeId: v.volumeId,
+          status: "failed" as const,
+          error: reverts.get(v.volumeId)!,
+        },
+    );
+  }
+
+  /**
+   * The volumes in `batch` that would revert it, each with its reason. Empty
+   * when the batch simulates cleanly, which is almost always: one `eth_call`.
+   * Otherwise each volume is simulated alone, in one multicall. Every volume
+   * is named when none reverts alone, or when the multicall itself fails.
+   */
+  async function simulate(batch: VolumeView[]): Promise<Map<Hex, string>> {
+    let batchReason: string;
     try {
-      if (dryRun) {
-        // `as never`: simulateContract derives its parameter type through the
-        // chain formatter, which viem cannot resolve against a generic client.
-        await getAction(
-          client,
-          simulateContract,
-          "simulateContract",
-        )({
+      // `as never`: simulateContract derives its parameter type through the
+      // chain formatter, which viem cannot resolve against a generic client.
+      await getAction(
+        client,
+        simulateContract,
+        "simulateContract",
+      )({
+        address: registry,
+        abi: registryAbi,
+        functionName: "trigger",
+        args: [batch.map((v) => v.volumeId)],
+        account: client.account,
+        chain: client.chain,
+        gas: parameters.gas ?? TRIGGER_GAS,
+      } as never);
+      return new Map();
+    } catch (err) {
+      batchReason = revertReason(err as Error);
+    }
+
+    const reverts = new Map<Hex, string>();
+    try {
+      const results = await getAction(
+        client,
+        multicall,
+        "multicall",
+      )({
+        allowFailure: true,
+        contracts: batch.map((v) => ({
           address: registry,
           abi: registryAbi,
-          functionName: "trigger",
-          args: [batch.map((v) => v.volumeId)],
-          account: client.account,
-          chain: client.chain,
-        } as never);
-        return batch.map((v) => ({ volumeId: v.volumeId, status: "simulated" as const }));
-      }
+          functionName: "trigger" as const,
+          args: [v.volumeId] as const,
+        })),
+      });
+      results.forEach((outcome, i) => {
+        if (outcome.status === "failure") {
+          reverts.set(batch[i]!.volumeId, `reverts in simulation: ${revertReason(outcome.error)}`);
+        }
+      });
+      if (reverts.size > 0) return reverts;
+    } catch (err) {
+      batchReason += `; simulating its volumes one by one failed too: ${message(err)}`;
+    }
+    for (const v of batch) {
+      reverts.set(v.volumeId, `the batch reverts in simulation: ${batchReason}`);
+    }
+    return reverts;
+  }
 
+  /** Send `batch` as one transaction and read back each volume's outcome. */
+  async function send(batch: VolumeView[]): Promise<VolumeResult[]> {
+    if (dryRun) {
+      return batch.map((v) => ({ volumeId: v.volumeId, status: "simulated" as const }));
+    }
+
+    let hash: Hex | undefined;
+    try {
       sending ??= await readSending();
       hash = await trigger(client, {
         registry,
@@ -387,15 +454,8 @@ export async function runKeeperCycle<
       }
 
       const decoded = decodeCycleEvents(receipt.logs, registry);
-      const summaries = batch.map((v) => summarizeVolume(decoded, v.volumeId));
-      const silent = batch.filter((_, i) => !summaries[i]);
-      const replayed = await replaySilent(silent, receipt.blockNumber);
-
-      return batch.map((v, i) => {
-        const summary = summaries[i] ?? replayed.get(v.volumeId)!;
-        if (summary instanceof Error) {
-          return { volumeId: v.volumeId, ...mined, status: "failed" as const, error: summary.message };
-        }
+      return batch.map((v) => {
+        const summary = summarizeVolume(decoded, v.volumeId);
         record(v.volumeId, hash!, summary);
         return { volumeId: v.volumeId, ...mined, status: "success" as const, ...summary };
       });
@@ -414,61 +474,6 @@ export async function runKeeperCycle<
     }
   }
 
-  /**
-   * What happened to each volume a mined batch emitted nothing for, found by
-   * simulating `trigger(bytes32)` for it at the batch's block, all in one
-   * multicall. A volume that reverted inside the batch reverts the same way
-   * here, with its reason: an Error carrying it, or a retirement when the
-   * reason is `VolumeNotActive`. One that does not revert is a `noop`: it
-   * needed nothing, or it ran out of gas inside the batch, which the next cycle
-   * makes up for. An Error for every volume when the simulation itself failed.
-   */
-  async function replaySilent(
-    silent: VolumeView[],
-    blockNumber: bigint,
-  ): Promise<Map<Hex, VolumeSummary | Error>> {
-    const replayed = new Map<Hex, VolumeSummary | Error>();
-    if (silent.length === 0) return replayed;
-
-    try {
-      const results = await getAction(
-        client,
-        multicall,
-        "multicall",
-      )({
-        allowFailure: true,
-        blockNumber,
-        contracts: silent.map((v) => ({
-          address: registry,
-          abi: registryAbi,
-          functionName: "trigger" as const,
-          args: [v.volumeId] as const,
-        })),
-      });
-
-      results.forEach((outcome, i) => {
-        const { volumeId } = silent[i]!;
-        if (outcome.status === "success") {
-          replayed.set(volumeId, { outcome: "noop" });
-          return;
-        }
-        const reason = revertReason(outcome.error);
-        replayed.set(
-          volumeId,
-          reason === "VolumeNotActive"
-            ? { outcome: "retired", reason: "before this batch reached it" }
-            : new Error(`reverted inside the batch: ${reason}`),
-        );
-      });
-    } catch (err) {
-      const error = new Error(
-        `the batch emitted nothing for this volume, and simulating it failed: ${message(err)}`,
-      );
-      for (const v of silent) replayed.set(v.volumeId, error);
-    }
-    return replayed;
-  }
-
   /** File a volume's outcome under the result's lists, and warn where it warrants. */
   function record(volumeId: Hex, hash: Hex, summary: VolumeSummary): void {
     switch (summary.outcome) {
@@ -481,7 +486,11 @@ export async function runKeeperCycle<
         break;
       case "topupSkipped":
         result.topupSkipped.push({ volumeId, reason: summary.reason });
-        result.warnings.push({ volumeId, hash, message: `not funded: ${summary.reason}` });
+        result.warnings.push({
+          volumeId,
+          hash,
+          message: SKIP_WARNINGS[summary.reason] ?? `not funded: ${summary.reason}`,
+        });
         break;
       case "noop":
         result.noop.push(volumeId);
@@ -491,9 +500,19 @@ export async function runKeeperCycle<
 }
 
 /**
+ * `TopupSkipped` reasons that are not a payer declining to pay, worded as what
+ * happened. `NotActive` is an ordinary race with retirement; `NotFound` means
+ * the keeper sent an id the registry never had.
+ */
+const SKIP_WARNINGS: Record<string, string> = {
+  NotActive: "retired before this batch reached it",
+  NotFound: "not a volume in this registry",
+};
+
+/**
  * A simulated call's revert, as its reason: the registry's error name, a
- * PostageStamp `require` message, or the first line of viem's message when
- * there is no revert data to decode.
+ * `require` message such as PostageStamp's when paused, or the node's own
+ * message when there is no revert data to decode, as with out of gas.
  */
 function revertReason(err: Error): string {
   const reverted =
@@ -504,5 +523,5 @@ function revertReason(err: Error): string {
     if (reverted.data && reverted.data.errorName !== "Error") return reverted.data.errorName;
     if (reverted.reason) return reverted.reason;
   }
-  return err instanceof BaseError ? err.shortMessage : message(err);
+  return err instanceof BaseError ? err.details || err.shortMessage : message(err);
 }

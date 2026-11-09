@@ -1,12 +1,12 @@
 # keeper
 
-The Swarm `VolumeRegistry` keeper: one Cloudflare Worker per registry deployment. Each scheduled run enumerates the registry's active volumes, sends them through the batched `trigger(bytes32[])`, up to 8 to a transaction, and reports what the contract did to each.
+The Swarm `VolumeRegistry` keeper: one Cloudflare Worker per registry deployment. Each scheduled run enumerates the registry's active volumes, sends them through the batched `trigger(bytes32[])`, up to 8 to a transaction, and reports what the contract did to each. A batch reverts as a whole when any of its volumes does ([ADR-0007](../../docs/adr/0007-keeper-endpoints-revert-only-on-bugs.md)), so each one is simulated before it is sent, and a volume that reverts is reported and left out.
 
 Cloudflare Cron Triggers are the only scheduler. GitHub Actions only tests the Worker; deploys are by hand with `wrangler`.
 
 | Env | Worker | Chain | Registry | Schedule |
 |---|---|---|---|---|
-| `sepolia-v2-rc3` | `keeper-cloudflare-sepolia-v2-rc3` | Sepolia (11155111) | v2-rc3 `0xab326d6d…0078745e` | every 10 minutes |
+| `sepolia-v2-rc4` | `keeper-cloudflare-sepolia-v2-rc4` | Sepolia (11155111) | v2-rc4 `0xe4913089…dad332a4` | every 10 minutes |
 
 Each env in [`wrangler.jsonc`](./wrangler.jsonc) is one registry deployment, keyed by its deployment label, with its own wallet and RPC credentials. This tree supports only the deployments it has envs for. A new registry deployment replaces its predecessor's env ([`RELEASING.md`](../../RELEASING.md) Part C); the predecessor's Worker keeps running what it was last deployed with until it is deleted, and `wrangler.jsonc` lists those Workers and the commits they were deployed from. Keepers may share one Telegram group; every alert names its deployment, chain and registry.
 
@@ -25,8 +25,8 @@ Each env in [`wrangler.jsonc`](./wrangler.jsonc) is one registry deployment, key
 
 Every run writes one JSON object to Workers Logs (`kind: "keeper/run"`) at the level matching its `status`:
 
-- **`failure`** (`console.error`) — invalid configuration, no usable RPC endpoint, the registry unreadable, or any volume whose transaction failed, reverted, or went unconfirmed within `RECEIPT_TIMEOUT_MS`. One failed volume does not stop the rest being attempted. The invocation itself then fails, so Cron Events shows it too.
-- **`warning`** (`console.warn`) — a failover to a secondary RPC, the wallet below `MIN_BALANCE_WEI`, a `TopupSkipped` (`NoAuth`: payer revoked; `PaymentFailed`: out of BZZ or allowance), a retirement, deferred work, or dry-run mode.
+- **`failure`** (`console.error`) — invalid configuration, no usable RPC endpoint, the registry unreadable, or any volume whose transaction failed, reverted, or went unconfirmed within `RECEIPT_TIMEOUT_MS`, or that was left out of its batch because its `trigger` reverts in simulation. One failed volume does not stop the rest being attempted. The invocation itself then fails, so Cron Events shows it too.
+- **`warning`** (`console.warn`) — a failover to a secondary RPC, the wallet below `MIN_BALANCE_WEI`, a `TopupSkipped` (`NoAuth`: payer revoked; `PaymentFailed`: out of BZZ or allowance; `NotActive`: retired before the batch reached it; `NotFound`: not a volume in this registry), a retirement, deferred work, or dry-run mode.
 - **`ok`** (`console.log`).
 
 `failures` and `warnings` each list `{ message, volumeId?, hash? }`; `volumes` has the per-volume detail, including the healthy `noop`s. In the Workers Logs query builder, filter on `status` or `deployment`.
@@ -82,7 +82,7 @@ A new deployment's Worker is set up by [`RELEASING.md`](../../RELEASING.md) Part
 4. Merge to `main`, then deploy by hand from it:
 
    ```bash
-   pnpm exec wrangler deploy --env sepolia-v2-rc3
+   pnpm exec wrangler deploy --env sepolia-v2-rc4
    ```
 
 ### Retiring a Worker
@@ -101,22 +101,22 @@ Rotate one value without redeploying code:
 
 ```bash
 # single value
-pnpm exec wrangler secret put PRIVATE_KEY --env sepolia-v2-rc3
-pnpm exec wrangler secret put RPC_URL --env sepolia-v2-rc3          # comma-separated, independent providers
-pnpm exec wrangler secret put TELEGRAM_BOT_TOKEN --env sepolia-v2-rc3
-pnpm exec wrangler secret put TELEGRAM_CHAT_ID --env sepolia-v2-rc3
+pnpm exec wrangler secret put PRIVATE_KEY --env sepolia-v2-rc4
+pnpm exec wrangler secret put RPC_URL --env sepolia-v2-rc4          # comma-separated, independent providers
+pnpm exec wrangler secret put TELEGRAM_BOT_TOKEN --env sepolia-v2-rc4
+pnpm exec wrangler secret put TELEGRAM_CHAT_ID --env sepolia-v2-rc4
 
 # or atomically via file (avoids typing a key into shell history)
-printf 'PRIVATE_KEY=0x…\nRPC_URL=https://…,https://…\nTELEGRAM_BOT_TOKEN=…\nTELEGRAM_CHAT_ID=-100…\n' > .secrets.sepolia-v2-rc3
-pnpm exec wrangler deploy --env sepolia-v2-rc3 --secrets-file .secrets.sepolia-v2-rc3
-rm .secrets.sepolia-v2-rc3
+printf 'PRIVATE_KEY=0x…\nRPC_URL=https://…,https://…\nTELEGRAM_BOT_TOKEN=…\nTELEGRAM_CHAT_ID=-100…\n' > .secrets.sepolia-v2-rc4
+pnpm exec wrangler deploy --env sepolia-v2-rc4 --secrets-file .secrets.sepolia-v2-rc4
+rm .secrets.sepolia-v2-rc4
 ```
 
 Validate immediately:
 
 ```bash
-curl https://keeper-cloudflare-sepolia-v2-rc3.<subdomain>.workers.dev/health   # 200 + wallet if ok, 503 with every problem if not
-pnpm exec wrangler tail --env sepolia-v2-rc3   # then force a cycle: curl "localhost:8787/cdn-cgi/local/scheduled?format=json" in dev, or wait one cron tick
+curl https://keeper-cloudflare-sepolia-v2-rc4.<subdomain>.workers.dev/health   # 200 + wallet if ok, 503 with every problem if not
+pnpm exec wrangler tail --env sepolia-v2-rc4   # then force a cycle: curl "localhost:8787/cdn-cgi/local/scheduled?format=json" in dev, or wait one cron tick
 ```
 
 Notes:
@@ -140,7 +140,7 @@ After changing `wrangler.jsonc`, run `pnpm types` and commit `worker-configurati
 To run it locally against a real chain, put the four secrets in `.dev.vars` (see `.dev.vars.example`), then:
 
 ```bash
-pnpm dev --var DRY_RUN:true          # wrangler dev --env sepolia-v2-rc3
+pnpm dev --var DRY_RUN:true          # wrangler dev --env sepolia-v2-rc4
 curl "localhost:8787/cdn-cgi/local/scheduled?format=json"
 ```
 

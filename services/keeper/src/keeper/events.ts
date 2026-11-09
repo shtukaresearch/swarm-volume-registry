@@ -56,13 +56,12 @@ export function decodeCycleEvents(
 }
 
 /**
- * One volume's outcome, from a successful batch receipt's decoded events, or
- * `undefined` when the receipt carries none for it.
+ * One volume's outcome, from a successful batch receipt's decoded events.
  *
  * Every branch of `_triggerOne` returns as soon as it emits, so a volume has
- * at most one event. No event is ambiguous in a batch: either the deficit was
- * zero and the contract did nothing, or the volume reverted inside the batch's
- * try/catch. `runKeeperCycle` settles which one by simulating it again.
+ * at most one event. No event is a `noop`: the only silent branch is a zero
+ * deficit, and a volume that reverts takes the whole batch with it (ADR-0007),
+ * so a successful receipt cannot hide one.
  *
  * The receipt holds every volume in the batch, so the `volumeId` filter is what
  * keeps one volume's event from being attributed to another.
@@ -70,7 +69,7 @@ export function decodeCycleEvents(
 export function summarizeVolume(
   decoded: DecodedEvents,
   volumeId: Hex,
-): Exclude<VolumeSummary, { outcome: "noop" }> | undefined {
+): VolumeSummary {
   const mine = (id: Hex) => id.toLowerCase() === volumeId.toLowerCase();
 
   const toppedUp = decoded.toppedUp.find((e) => mine(e.volumeId));
@@ -82,5 +81,5 @@ export function summarizeVolume(
   const skipped = decoded.topupSkipped.find((e) => mine(e.volumeId));
   if (skipped) return { outcome: "topupSkipped", reason: skipped.reason };
 
-  return undefined;
+  return { outcome: "noop" };
 }

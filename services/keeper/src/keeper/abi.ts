@@ -6,12 +6,11 @@
 // full error set is here regardless, because decoding a failure costs nothing
 // and is worth having when there is one.
 //
-// The keeper sends `trigger(bytes32[])`, which runs every id as
-// `try this._triggerExt(id) {} catch {}`: a volume that reverts inside it leaves
-// no trace in the receipt. `trigger(bytes32)` is never sent. `runKeeperCycle`
-// only simulates it, for a volume the batch receipt is silent about, to
-// reproduce that volume's revert and its reason. viem tells the overloads
-// apart by their arguments: an array of ids, or one id.
+// The keeper sends `trigger(bytes32[])`, which reverts as a whole when any of
+// its volumes does (ADR-0007). `trigger(bytes32)` is never sent:
+// `runKeeperCycle` only simulates it, one volume at a time, to find which
+// volume makes a batch revert and why. viem tells the overloads apart by their
+// arguments: an array of ids, or one id.
 
 export const registryAbi = [
   {
@@ -117,13 +116,12 @@ export const registryAbi = [
   // Custom errors, so a revert prints a name instead of a 4-byte blob. These
   // are a decode table like RETIRE_REASONS below, not call surface: viem
   // matches revert data against them by selector, and they add no way to drive
-  // the registry. A simulated `trigger(bytes32)` reverts with them, which is
-  // how a volume the batch swallowed gets a named reason; `VolumeNotActive`
-  // there means it retired before the batch reached it. The rest earn their
-  // place when the configured address is not the registry you think it is — a
-  // stale deployment, a wrong chain — which is exactly when a keeper's logs are
-  // all you have.
+  // the registry. `trigger` reverts with none of them, by design (ADR-0007), so
+  // they earn their place when the configured address is not the registry you
+  // think it is — a stale deployment, a wrong chain — which is exactly when a
+  // keeper's logs are all you have.
   { type: "error", name: "AccountNotActive", inputs: [] },
+  { type: "error", name: "BatchDepthTooSmall", inputs: [] },
   { type: "error", name: "BatchNotLive", inputs: [] },
   { type: "error", name: "DesignationClearedOnActivate", inputs: [] },
   {
@@ -158,5 +156,7 @@ export const RETIRE_REASONS: Record<number, string> = {
 export const SKIP_REASONS: Record<number, string> = {
   1: "NoAuth",
   2: "PaymentFailed",
+  3: "NotFound",
+  4: "NotActive",
 };
 

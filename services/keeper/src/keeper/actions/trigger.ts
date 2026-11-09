@@ -36,22 +36,17 @@ export const BATCH_SIZE = 8;
  * Idempotent: the contract tops up to a target, so a second call in the same
  * block transfers nothing.
  *
- * **The gas limit is fixed, never estimated.** The contract runs each id as
- * `try this._triggerExt(id) {} catch {}`, and an inner call that runs out of
- * gas is caught like any other revert, so the batch succeeds at almost any
- * limit. An estimate is the lowest limit at which the transaction succeeds, so
- * it would be a limit at which volumes run out of gas and are skipped. A
- * top-up's cost is unpredictable anyway: the `transferFrom` → `approve` →
- * `topUp` path has cost from ~480k to ~1.5M on Sepolia, depending on
- * PostageStamp state. So every batch carries the same fixed limit, just under
- * the EIP-7825 cap: enough for {@link BATCH_SIZE} volumes all topping up. Unused
- * gas is not charged, and the healthy majority of volumes need about 30k. Each
- * inner call is offered 63/64 of the gas left, so one expensive volume draws on
- * the room the cheap ones left.
+ * **The gas limit is fixed, never estimated.** A top-up's cost is
+ * unpredictable: the `transferFrom` → `approve` → `topUp` path has cost from
+ * ~480k to ~1.5M on Sepolia, depending on PostageStamp state, which can change
+ * between an estimate and inclusion. Running out of gas reverts the whole batch
+ * (ADR-0007), so the limit has to cover the worst case rather than the
+ * expected one. Every batch carries the same fixed limit, just under the
+ * EIP-7825 cap: enough for {@link BATCH_SIZE} volumes all topping up. Unused
+ * gas is not charged, and the healthy majority of volumes need about 30k.
  *
- * Even a mined batch can still have skipped a volume. A volume that reverted
- * inside the batch leaves no event, the same as a volume that needed nothing.
- * The caller tells the two apart — see `runKeeperCycle`.
+ * Out of gas aside, the batch reverts only on a paused PostageStamp or a
+ * fault; `runKeeperCycle` simulates it first to keep such a volume out.
  *
  * @example
  * const hash = await trigger(walletClient, {

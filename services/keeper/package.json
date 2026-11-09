@@ -5,8 +5,8 @@
   "type": "module",
   "description": "Swarm VolumeRegistry keeper — one Cloudflare Worker per registry deployment",
   "scripts": {
-    "dev": "wrangler dev --env sepolia-v2-rc3",
-    "check:deploy": "wrangler deploy --dry-run --env sepolia-v2-rc3 --outdir dist/sepolia-v2-rc3",
+    "dev": "wrangler dev --env sepolia-v2-rc4",
+    "check:deploy": "wrangler deploy --dry-run --env sepolia-v2-rc4 --outdir dist/sepolia-v2-rc4",
     "types": "wrangler types --strict-vars false",
     "check:types": "wrangler types --strict-vars false --check",
     "typecheck": "tsc --noEmit",

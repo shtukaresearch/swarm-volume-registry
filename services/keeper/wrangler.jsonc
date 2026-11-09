@@ -10,7 +10,8 @@
   // running whatever it was last deployed with until it is deleted out of band.
   // Workers retired from this file, and the commit each was last deployed from:
   //
-  //   keeper-sepolia  v2-rc2 0x00f72ee2…3c5a4177  a4f5b62
+  //   keeper-sepolia                    v2-rc2 0x00f72ee2…3c5a4177  a4f5b62
+  //   keeper-cloudflare-sepolia-v2-rc3  v2-rc3 0xab326d6d…0078745e  b4b325c (#38 before its rebase)
   "name": "keeper",
   "main": "src/index.ts",
   "compatibility_date": "2026-09-15",
@@ -54,19 +55,19 @@
   //   probe (5 s) + CYCLE_TIMEOUT_MS + RECEIPT_TIMEOUT_MS + 5 s slack ≤ interval
   // and also ≤ the 15 min Cron Trigger wall-clock limit.
   "env": {
-    // Sepolia — registry v2-rc3, graceBlocks = 300 (~1 h at 12 s blocks). Every
+    // Sepolia — registry v2-rc4, graceBlocks = 300 (~1 h at 12 s blocks). Every
     // ten minutes leaves ~50 min of slack for missed runs. A run starts new
     // transactions for up to 7 min (CYCLE_TIMEOUT_MS), roughly 35 volumes at
     // 12 s blocks, capped at 30. Each receipt gets up to 2 min: about 1 in 15
     // Sepolia transactions takes 3–5 blocks to land, longer than the old 30 s.
     // Warnings go to Telegram so skipped top-ups, retirements and RPC failovers
     // cannot make a run look healthy.
-    "sepolia-v2-rc3": {
-      "name": "keeper-cloudflare-sepolia-v2-rc3",
+    "sepolia-v2-rc4": {
+      "name": "keeper-cloudflare-sepolia-v2-rc4",
       "vars": {
-        "DEPLOYMENT_NAME": "keeper-cloudflare-sepolia-v2-rc3",
+        "DEPLOYMENT_NAME": "keeper-cloudflare-sepolia-v2-rc4",
         "CHAIN_ID": "11155111",
-        "REGISTRY_ADDRESS": "0xab326d6dbdcd1e90e06af22f4e72fa480078745e",
+        "REGISTRY_ADDRESS": "0xe491308994af391a32191a8c380ca818dad332a4",
         "NOTIFY_WARNINGS": "true",
         "MIN_BALANCE_WEI": "50000000000000000",
         "MAX_VOLUMES_PER_CYCLE": "30",

@@ -9,12 +9,11 @@
  *
  * The trigger path mirrors `_triggerOne`'s check order (DESIGN §8) closely
  * enough to emit the event the real contract would: retire edges first, then
- * auth, then the deficit — and *no* event when the volume needs nothing. Like
- * the batched overload, it swallows a volume that reverts — one not Active,
- * one with a `revert` reason, or one that is starved — leaving no event for it
- * either, so the keeper has to tell the silences apart. A simulated
- * `trigger(bytes32)` reverts with the same revert data the contract would, and
- * a starved volume simulates cleanly, as it would with gas to spare.
+ * auth, then the deficit — and *no* event when the volume needs nothing. An id
+ * that is unknown or no longer Active answers `TopupSkipped(NotFound|NotActive)`.
+ * As in ADR-0007, the batched overload reverts as a whole when any of its
+ * volumes does: one with a `revert` reason reverts with it, alone or in a batch,
+ * and a `starve`d one makes only the batch run out of gas.
  */
 import {
   createWalletClient,
@@ -26,6 +25,7 @@ import {
   encodeEventTopics,
   encodeFunctionResult,
   keccak256,
+  RpcRequestError,
   multicall3Abi,
   numberToHex,
   parseTransaction,
@@ -81,10 +81,14 @@ const solidityError = [
   { type: "error", name: "Error", inputs: [{ type: "string", name: "message" }] },
 ] as const;
 
-/** A revert, with the data a node returns for it. */
-class Revert extends Error {
-  constructor(readonly data: Hex) {
-    super("execution reverted");
+/**
+ * A revert, as a node reports it: JSON-RPC code 3 with the revert data. viem
+ * does not retry that code, as it would a plain Error.
+ */
+class Revert extends RpcRequestError {
+  declare data: Hex;
+  constructor(data: Hex) {
+    super({ body: {}, url: "mock", error: { code: 3, message: "execution reverted", data } });
   }
 }
 
@@ -107,7 +111,7 @@ const RETIRE = {
 } as const;
 
 /** TopupSkipped reason codes. */
-const SKIP = { noAuth: 1, paymentFailed: 2 } as const;
+const SKIP = { noAuth: 1, paymentFailed: 2, notFound: 3, notActive: 4 } as const;
 
 export interface MockVolume {
   volumeId: Hex;
@@ -123,7 +127,10 @@ export interface MockVolume {
   batch?: { owner?: Address; depth?: number; normalisedBalance: bigint };
   /** Model a payer whose `transferFrom` fails: BZZ balance or allowance gone. */
   payerBroke?: boolean;
-  /** Model an inner call that runs out of gas: swallowed, no event, no change. */
+  /**
+   * Model a volume whose top-up does not fit the batch's gas: the batch runs
+   * out of gas, with no revert data, while the volume alone simulates cleanly.
+   */
   starve?: boolean;
   /** Model `_triggerOne` reverting with this `require` reason, e.g. Postage paused. */
   revert?: string;
@@ -195,6 +202,7 @@ export function mockChain(options: MockChainOptions = {}) {
   const batches: Hex[][] = [];
   const sentGas: bigint[] = [];
   const sentNonces: number[] = [];
+  let simulations = 0;
   const calls: string[] = [];
   const receipts = new Map<Hex, { volumeIds: readonly Hex[] }>();
   let multicallCount = 0;
@@ -207,7 +215,10 @@ export function mockChain(options: MockChainOptions = {}) {
   const isActive = (v: MockVolume | undefined) => !!v && (v.status ?? 1) === 1;
 
   /** `_triggerOne`'s decision, in the same order the contract makes it. */
-  function outcomeFor(v: MockVolume): Emission {
+  function outcomeFor(id: Hex): Emission {
+    const v = find(id);
+    if (!v) return { event: "TopupSkipped", reason: SKIP.notFound };
+    if (!isActive(v)) return { event: "TopupSkipped", reason: SKIP.notActive };
     const batch = v.batch;
     const depth = v.depth ?? 20;
     const chunkSigner = v.chunkSigner ?? SIGNER;
@@ -280,23 +291,32 @@ export function mockChain(options: MockChainOptions = {}) {
         return encodeFunctionResult({ abi: registryAbi, functionName, result: view });
       }
       case "trigger": {
-        // The batch runs each id in its own try/catch, so it never reverts.
         const [arg] = args as readonly [Hex | readonly Hex[]];
-        if (Array.isArray(arg)) return "0x";
-        const volume = find(arg as Hex);
-        if (!isActive(volume)) {
-          throw new Revert(encodeErrorResult({ abi: registryAbi, errorName: "VolumeNotActive" }));
-        }
-        if (volume!.revert) {
-          throw new Revert(
-            encodeErrorResult({ abi: solidityError, errorName: "Error", args: [volume!.revert] }),
-          );
-        }
+        const batch = Array.isArray(arg);
+        const ids = (batch ? arg : [arg]) as readonly Hex[];
+        if (batch) simulations += 1;
+        const reason = revertFor(ids, batch);
+        if (reason !== undefined) throw new Revert(reason);
         return "0x";
       }
       default:
         throw new Error(`mock registry: unhandled ${functionName}`);
     }
+  }
+
+  /**
+   * The revert data `trigger` would end with for these ids, or undefined when
+   * it succeeds. Running out of gas only happens to a whole batch.
+   */
+  function revertFor(ids: readonly Hex[], batch: boolean): Hex | undefined {
+    for (const id of ids) {
+      const v = find(id);
+      if (v?.revert && isActive(v)) {
+        return encodeErrorResult({ abi: solidityError, errorName: "Error", args: [v.revert] });
+      }
+    }
+    if (batch && ids.some((id) => find(id)?.starve)) return "0x";
+    return undefined;
   }
 
   function callPostage(data: Hex): Hex {
@@ -360,16 +380,10 @@ export function mockChain(options: MockChainOptions = {}) {
     });
   }
 
-  /**
-   * Whatever the contract would have emitted for each volume, in order. A
-   * volume that reverts inside the batch — not Active, or starved — emits
-   * nothing, exactly as one that needs nothing.
-   */
+  /** Whatever the contract would have emitted for each volume, in order. */
   function receiptLogs(volumeIds: readonly Hex[]) {
     return volumeIds.flatMap((volumeId) => {
-      const volume = find(volumeId);
-      if (!volume || !isActive(volume) || volume.starve || volume.revert) return [];
-      const emission = outcomeFor(volume);
+      const emission = outcomeFor(volumeId);
       return emission ? [{ volumeId, emission }] : [];
     }).map(({ volumeId, emission }, i) => eventLog(volumeId, emission!, i));
   }
@@ -460,6 +474,7 @@ export function mockChain(options: MockChainOptions = {}) {
         const hash = args[0] as Hex;
         const sent = receipts.get(hash);
         if (!sent || options.dropReceipts) return null;
+        const reverted = options.revertTx || revertFor(sent.volumeIds, true) !== undefined;
         return {
           transactionHash: hash,
           transactionIndex: "0x0",
@@ -471,9 +486,9 @@ export function mockChain(options: MockChainOptions = {}) {
           gasUsed: numberToHex(400_000n),
           effectiveGasPrice: numberToHex(1_500_000_000n),
           contractAddress: null,
-          status: options.revertTx ? "0x0" : "0x1",
+          status: reverted ? "0x0" : "0x1",
           type: "0x2",
-          logs: options.revertTx ? [] : receiptLogs(sent.volumeIds),
+          logs: reverted ? [] : receiptLogs(sent.volumeIds),
           logsBloom: `0x${"0".repeat(512)}`,
         };
       }
@@ -507,6 +522,10 @@ export function mockChain(options: MockChainOptions = {}) {
     calls,
     get multicallCount() {
       return multicallCount;
+    },
+    /** How many times `trigger(bytes32[])` was simulated with eth_call. */
+    get simulations() {
+      return simulations;
     },
     /** How many PostageStamp reads were made. */
     get postageReads() {

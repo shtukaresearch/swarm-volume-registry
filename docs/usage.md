@@ -231,11 +231,13 @@ function trigger(bytes32[] calldata volumeIds) external;
 function reap(bytes32 volumeId) external;
 ```
 - `trigger(id)` — top up one volume. See §8 for semantics.
-- `trigger(ids[])` — loop with per-item `try/catch`; one revert never aborts the batch.
-  In v1 the catch also absorbs an inner out-of-gas failure, so a successful receipt does
-  not prove every requested id was processed. Keep batches conservatively sized and
-  verify per-volume outcomes; estimating a single-id trigger and extrapolating is safer
-  than relying on `eth_estimateGas` for the batched entry point.
+- `trigger(ids[])` — `trigger(id)` on each id in order. From v2-rc4 there is no
+  per-item isolation: `trigger` reverts only on out-of-gas, a paused Postage, or a fault
+  ([ADR-0007](adr/0007-keeper-endpoints-revert-only-on-bugs.md)), and any revert rolls
+  back the whole batch. A successful receipt therefore covers every id, and
+  `eth_estimateGas` measures the real work. In v1 and up to v2-rc3, each item runs in a
+  `try/catch` that also absorbs an inner out-of-gas failure, so a successful receipt
+  does not prove every requested id was processed. See [KEEPERS.md](KEEPERS.md).
 - `reap(id)` — retire an `Active` volume if, and only if, its TTL has expired. It is an
   idempotent no-op for inactive volumes and for active volumes whose TTL has not passed.
   It does not inspect Postage batch death, owner, or depth.
@@ -274,7 +276,7 @@ function getAccount(address owner) external view returns (Account memory);
 | `AccountActivated(address indexed owner, address indexed payer)` | Payer confirmed; account is now `Active`. |
 | `AccountRevoked(address indexed owner, address indexed payer, address revoker)` | Either party called `revoke`. |
 | `Toppedup(bytes32 indexed volumeId, uint256 amount, uint256 newNormalisedBalance)` | A trigger pulled BZZ from the payer and forwarded to Postage. |
-| `TopupSkipped(bytes32 indexed volumeId, uint8 reason)` | A trigger ran but moved no BZZ. `reason` ∈ `{NoAuth=1, PaymentFailed=2}`. Volume remains `Active`. |
+| `TopupSkipped(bytes32 indexed volumeId, uint8 reason)` | A trigger ran but moved no BZZ. `reason` ∈ `{NoAuth=1, PaymentFailed=2}`, and from v2-rc4 also `{NotFound=3, NotActive=4}` for an id that is not an `Active` volume. A volume skipped for `NoAuth` or `PaymentFailed` remains `Active`. |
 
 ## 8. How topups work
 

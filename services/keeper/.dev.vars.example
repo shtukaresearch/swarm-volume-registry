@@ -1,4 +1,4 @@
-# Secrets for `pnpm dev` (wrangler dev --env sepolia). Copy to .dev.vars and
+# Secrets for `pnpm dev` (wrangler dev --env sepolia-v2-rc4). Copy to .dev.vars and
 # fill in; never commit .dev.vars.
 #
 # Only the names in `secrets.required` are loaded from this file — anything
@@ -27,3 +27,9 @@ TELEGRAM_BOT_TOKEN="<id>:<secret>"
 # Numeric Telegram user or group chat ID. Both deployments may use the same
 # destination, but Cloudflare stores the value separately for each Worker.
 TELEGRAM_CHAT_ID="-100..."
+
+# Telegram's secret_token for the bot's webhook, which carries /verbosity:
+# 16-256 characters of A-Z, a-z, 0-9, _ and -. Generate one per deployment with
+# `openssl rand -hex 32`. Locally, nothing registers a webhook unless
+# TELEGRAM_WEBHOOK_URL is passed with --var.
+TELEGRAM_WEBHOOK_SECRET="<openssl rand -hex 32>"

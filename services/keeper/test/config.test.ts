@@ -110,6 +110,14 @@ describe("readConfig", () => {
     // "yes" is not a typo for "true" we should guess at.
     ["a fuzzy flag", { NOTIFY_WARNINGS: "yes" }, /"true" or "false"/],
     ["a short volume id", { VOLUME_IDS: "0x1234" }, /not a 32-byte hex string/],
+    ["a short webhook secret", { TELEGRAM_WEBHOOK_SECRET: "short" }, /16-256 characters/],
+    [
+      "an http webhook URL",
+      { TELEGRAM_WEBHOOK_URL: "http://k.example/telegram", TELEGRAM_WEBHOOK_SECRET: "x".repeat(16) },
+      /must be an https URL/,
+    ],
+    // Registered without a secret, anyone who found the URL could send commands.
+    ["a webhook URL without a secret", { TELEGRAM_WEBHOOK_URL: "https://k.example/telegram" }, /without TELEGRAM_WEBHOOK_SECRET/],
   ])("rejects %s", (_name, overrides, message) => {
     expect(problems(env(overrides)).join("\n")).toMatch(message);
   });
@@ -168,7 +176,13 @@ describe("reading around a broken config", () => {
 
 const WRANGLER = join(import.meta.dirname, "..", "wrangler.jsonc");
 const RECORDS = join(import.meta.dirname, "..", "..", "..", "contracts", "deployments");
-const SECRETS = ["PRIVATE_KEY", "RPC_URL", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"].sort();
+const SECRETS = [
+  "PRIVATE_KEY",
+  "RPC_URL",
+  "TELEGRAM_BOT_TOKEN",
+  "TELEGRAM_CHAT_ID",
+  "TELEGRAM_WEBHOOK_SECRET",
+].sort();
 
 // Every env in the file, read raw: a deployment added there is covered here
 // without anyone remembering to list it.
@@ -298,6 +312,7 @@ describe("committed deployments (wrangler.jsonc)", () => {
           RPC_URL: "https://rpc.example",
           TELEGRAM_BOT_TOKEN: TOKEN,
           TELEGRAM_CHAT_ID: "-1001234567890",
+          TELEGRAM_WEBHOOK_SECRET: "test-webhook-secret-0123456789",
         } as KeeperEnv;
         expect(problems(withSecrets)).toEqual([]);
       });

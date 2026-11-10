@@ -14,12 +14,14 @@ Each env in [`wrangler.jsonc`](./wrangler.jsonc) is one registry deployment, key
 
 | | |
 |---|---|
-| `src/index.ts` | `scheduled()` and `GET /health` |
+| `src/index.ts` | `scheduled()`, `GET /health` and `POST /telegram` |
 | `src/config.ts` | validates the Worker's bindings into a config, reporting every problem at once |
 | `src/client.ts` | supported chains, the per-run RPC probe, the viem client |
 | `src/keeper/` | the keeper cycle: enumerate at a pinned block, trigger each volume, decode each receipt |
 | `src/reporting.ts` | the one structured report per run that logs and alerts are both rendered from |
 | `src/notifications/telegram.ts` | formats that report for Telegram and sends it |
+| `src/notifications/webhook.ts` | the `/verbosity` command, and registering the bot's webhook |
+| `src/notifications/preferences.ts` | the `PreferenceStore` Durable Object that keeps the group's level |
 
 ## What a run reports
 
@@ -31,7 +33,17 @@ Every run writes one JSON object to Workers Logs (`kind: "keeper/run"`) at the l
 
 `failures` and `warnings` each list `{ message, volumeId?, hash? }`; `volumes` has the per-volume detail, including the healthy `noop`s. In the Workers Logs query builder, filter on `status` or `deployment`.
 
-Failures and warnings go to Telegram. `NOTIFY_WARNINGS` remains configurable, but defaults to `true` so skipped top-ups, retirements and RPC failovers are visible.
+Failures always go to Telegram. Whether warnings do is up to the group:
+
+| Command | Effect |
+|---|---|
+| `/verbosity warn` | failures and warnings |
+| `/verbosity error` | failures only |
+| `/verbosity` | show the current level |
+
+The level is saved per chat in the `KEEPER_PREFS` Durable Object and holds across runs and deploys. Until the group sets one, `NOTIFY_WARNINGS` decides; it is `true`, so skipped top-ups, retirements and RPC failovers are visible by default. Commands are taken only from `TELEGRAM_CHAT_ID`, and only from a webhook request carrying `TELEGRAM_WEBHOOK_SECRET`; anyone in the group can change the level.
+
+Telegram delivers commands by pushing them to the Worker's `POST /telegram`; nothing polls. Where it pushes to is held by Telegram, per bot, and set with `setWebhook`. The Worker does that itself: after each run it reads `getWebhookInfo` and, if the webhook is not `TELEGRAM_WEBHOOK_URL`, or Telegram's last error is a 403 from a rotated secret, registers it with the current secret. So `wrangler deploy` is the only step, and the first tick after it brings the command online. Telegram allows one webhook per bot: only one deployment sharing a bot may set `TELEGRAM_WEBHOOK_URL`, or they will take it from each other every tick.
 
 A failed run is not retried by the platform (`noRetry()`): the next tick is the retry, and an overlapping one would race the same wallet's nonce. `trigger` is idempotent, so nothing is lost by waiting.
 
@@ -47,10 +59,11 @@ Secrets, per deployment — never shared between them:
 | `RPC_URL` | Comma-separated, from independent providers. Probed every run — chain id included — and tried in order. |
 | `TELEGRAM_BOT_TOKEN` | From @BotFather. |
 | `TELEGRAM_CHAT_ID` | Numeric user or private-group chat ID. Deployments may post to the same group, but store it independently. |
+| `TELEGRAM_WEBHOOK_SECRET` | Telegram's `secret_token`: 16–256 characters of `A-Z a-z 0-9 _ -`, e.g. `openssl rand -hex 32`. Telegram echoes it on every update, and `/telegram` refuses any request without it. |
 
 Declared in `secrets.required`, so `wrangler deploy` refuses to ship a deployment with any of them unset. The Worker validates their shape too: a key or URL set to the wrong thing fails the run and alerts, rather than passing for an idle keeper.
 
-Variables, in `wrangler.jsonc` per env: `DEPLOYMENT_NAME`, `CHAIN_ID`, `REGISTRY_ADDRESS`, `NOTIFY_WARNINGS`, `MIN_BALANCE_WEI` (0 disables the warning), and the cycle limits `MAX_VOLUMES_PER_CYCLE`, `CYCLE_TIMEOUT_MS`, `RECEIPT_TIMEOUT_MS`, `CONFIRMATIONS`. Not set by any deployment, but accepted: `DRY_RUN`, `VOLUME_IDS` (maintain only these), `PAGE_SIZE`.
+Variables, in `wrangler.jsonc` per env: `DEPLOYMENT_NAME`, `CHAIN_ID`, `REGISTRY_ADDRESS`, `NOTIFY_WARNINGS` (the level until the group sets one), `TELEGRAM_WEBHOOK_URL` (this Worker's `https://…/telegram`; unset, the deployment leaves the bot's webhook alone), `MIN_BALANCE_WEI` (0 disables the warning), and the cycle limits `MAX_VOLUMES_PER_CYCLE`, `CYCLE_TIMEOUT_MS`, `RECEIPT_TIMEOUT_MS`, `CONFIRMATIONS`. Not set by any deployment, but accepted: `DRY_RUN`, `VOLUME_IDS` (maintain only these), `PAGE_SIZE`.
 
 **A run must fit inside its cron interval**, so two runs never share the wallet at once: 5 s of RPC probing, plus `CYCLE_TIMEOUT_MS` (no new transaction starts after it), plus `RECEIPT_TIMEOUT_MS` for the last one, plus 5 s of slack. `test/config.test.ts` holds each env to that, and to the 15-minute Cron Trigger limit. On Sepolia that is up to 7 minutes of new transactions, roughly 35 at 12 s blocks, and up to 2 minutes for each receipt. Transactions are sent one at a time, each with up to 8 volumes, so a run reaches roughly `8 × CYCLE_TIMEOUT_MS / block time` volumes, capped at 30 by `MAX_VOLUMES_PER_CYCLE`. The rest are deferred, with a warning, and each run starts at a different point in the list so the same volumes are not deferred every time. If the active set outgrows that, raise the budget.
 
@@ -95,7 +108,7 @@ pnpm exec wrangler delete --name keeper-sepolia
 
 ### Secret rotation
 
-Secrets are never in `wrangler.jsonc` or git — they live in Cloudflare Workers Secrets per env (`secrets.required: PRIVATE_KEY, RPC_URL, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID`).
+Secrets are never in `wrangler.jsonc` or git — they live in Cloudflare Workers Secrets per env (`secrets.required: PRIVATE_KEY, RPC_URL, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_WEBHOOK_SECRET`).
 
 Rotate one value without redeploying code:
 
@@ -105,9 +118,10 @@ pnpm exec wrangler secret put PRIVATE_KEY --env sepolia-v2-rc4
 pnpm exec wrangler secret put RPC_URL --env sepolia-v2-rc4          # comma-separated, independent providers
 pnpm exec wrangler secret put TELEGRAM_BOT_TOKEN --env sepolia-v2-rc4
 pnpm exec wrangler secret put TELEGRAM_CHAT_ID --env sepolia-v2-rc4
+openssl rand -hex 32 | pnpm exec wrangler secret put TELEGRAM_WEBHOOK_SECRET --env sepolia-v2-rc4
 
 # or atomically via file (avoids typing a key into shell history)
-printf 'PRIVATE_KEY=0x…\nRPC_URL=https://…,https://…\nTELEGRAM_BOT_TOKEN=…\nTELEGRAM_CHAT_ID=-100…\n' > .secrets.sepolia-v2-rc4
+printf 'PRIVATE_KEY=0x…\nRPC_URL=https://…,https://…\nTELEGRAM_BOT_TOKEN=…\nTELEGRAM_CHAT_ID=-100…\nTELEGRAM_WEBHOOK_SECRET=…\n' > .secrets.sepolia-v2-rc4
 pnpm exec wrangler deploy --env sepolia-v2-rc4 --secrets-file .secrets.sepolia-v2-rc4
 rm .secrets.sepolia-v2-rc4
 ```
@@ -124,6 +138,7 @@ Notes:
 * `wrangler deploy` refuses if any `secrets.required` entry is missing; the Worker itself re-validates shape (e.g. `PRIVATE_KEY` is `0x`-hex, `RPC_URL` parses) and **fails the run and alerts** rather than reporting `ok` with no work — a bad rotation is never silent.
 * `HEALTH` is unauthenticated and reveals only the wallet address, not secret values.
 * Keep `PRIVATE_KEY` per deployment; keys are never shared. `TELEGRAM_CHAT_ID` is also a per-deployment secret, even when deployments post to the same group.
+* A new `TELEGRAM_WEBHOOK_SECRET` refuses Telegram's updates until the next tick re-registers the webhook with it; commands sent in between are retried by Telegram.
 * After rotation, the next cron tick uses the new value; no Workers restart needed. Old secrets are overwritten in place — delete the local `.secrets.*` file after.
 
 ## Working on it
@@ -137,7 +152,7 @@ pnpm check:deploy   # bundles the env, as CI does
 
 After changing `wrangler.jsonc`, run `pnpm types` and commit `worker-configuration.d.ts`; CI fails if it is stale.
 
-To run it locally against a real chain, put the four secrets in `.dev.vars` (see `.dev.vars.example`), then:
+To run it locally against a real chain, put the five secrets in `.dev.vars` (see `.dev.vars.example`), then:
 
 ```bash
 pnpm dev --var DRY_RUN:true          # wrangler dev --env sepolia-v2-rc4

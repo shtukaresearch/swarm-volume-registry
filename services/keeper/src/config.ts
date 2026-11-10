@@ -67,6 +67,9 @@ const DIGITS = /^\d+$/;
 // `<bot id>:<secret>`, as BotFather issues it.
 const BOT_TOKEN = /^\d+:[\w-]+$/;
 const CHAT_ID = /^(-?\d+|@[A-Za-z]\w{3,})$/;
+// Telegram's `secret_token` for setWebhook: A-Z, a-z, 0-9, _ and -, 1-256
+// characters. A shorter secret is easier to guess, so require 16.
+const WEBHOOK_SECRET = /^[A-Za-z0-9_-]{16,256}$/;
 
 const text = (env: KeeperEnv, key: keyof KeeperEnv): string => {
   const value = env[key];
@@ -101,6 +104,27 @@ export function readTelegramConfig(env: KeeperEnv): TelegramConfig | undefined {
   return BOT_TOKEN.test(botToken) && CHAT_ID.test(chatId)
     ? { botToken, chatId }
     : undefined;
+}
+
+/**
+ * The secret Telegram echoes in every webhook update, or `undefined` when
+ * commands are not configured. Read leniently for the same reason as
+ * {@link readTelegramConfig}: a broken wallet config must not hide a broken
+ * command channel.
+ */
+export function readWebhookSecret(env: KeeperEnv): string | undefined {
+  const secret = text(env, "TELEGRAM_WEBHOOK_SECRET");
+  return WEBHOOK_SECRET.test(secret) ? secret : undefined;
+}
+
+/**
+ * Where Telegram should deliver updates — this Worker's own `/telegram` — or
+ * `undefined` when the deployment does not register its webhook. Telegram
+ * delivers only to https.
+ */
+export function readWebhookUrl(env: KeeperEnv): string | undefined {
+  const url = text(env, "TELEGRAM_WEBHOOK_URL");
+  return isHttpsUrl(url) ? url : undefined;
 }
 
 /**
@@ -158,6 +182,23 @@ export function readConfig(env: KeeperEnv): Config {
   if (!chatId) problems.push("TELEGRAM_CHAT_ID is required");
   else if (!CHAT_ID.test(chatId)) {
     problems.push(`TELEGRAM_CHAT_ID must be a numeric chat id or @channel: ${chatId}`);
+  }
+
+  // Optional at runtime: a deployment without a webhook still alerts. When it
+  // is set, it has to be usable as Telegram's `secret_token`.
+  const webhookSecret = text(env, "TELEGRAM_WEBHOOK_SECRET");
+  if (webhookSecret && !WEBHOOK_SECRET.test(webhookSecret)) {
+    problems.push("TELEGRAM_WEBHOOK_SECRET must be 16-256 characters of A-Z, a-z, 0-9, _ or -");
+  }
+
+  // Registering a webhook without a secret would hand the command to anyone
+  // who finds the URL.
+  const webhookUrl = text(env, "TELEGRAM_WEBHOOK_URL");
+  if (webhookUrl && !isHttpsUrl(webhookUrl)) {
+    problems.push(`TELEGRAM_WEBHOOK_URL must be an https URL: ${webhookUrl}`);
+  }
+  if (webhookUrl && !webhookSecret) {
+    problems.push("TELEGRAM_WEBHOOK_URL is set without TELEGRAM_WEBHOOK_SECRET");
   }
 
   const volumeIds = list(text(env, "VOLUME_IDS"));
@@ -223,6 +264,14 @@ function isHttpUrl(raw: string): boolean {
   try {
     const { protocol } = new URL(raw);
     return protocol === "https:" || protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+
+function isHttpsUrl(raw: string): boolean {
+  try {
+    return new URL(raw).protocol === "https:";
   } catch {
     return false;
   }

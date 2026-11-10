@@ -17,6 +17,11 @@
   "compatibility_date": "2026-09-15",
   "compatibility_flags": ["nodejs_compat"],
 
+  // `KEEPER_PREFS` stores the Telegram group's `/verbosity` setting. A Durable
+  // Object is created with the Worker by this migration, unlike a KV namespace,
+  // which would have to exist in the account before the Worker could bind it.
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["PreferenceStore"] }],
+
   // Workers Logs and Traces. Every run emits one structured JSON line — the same
   // report the Telegram alert is rendered from — at the level matching its
   // status: log / warn / error. Traces capture the RPC and Telegram fetches
@@ -38,7 +43,13 @@
   // bare `wrangler deploy` with no `--env` fails on missing secrets instead of
   // quietly creating a cron-less `keeper` Worker.
   "secrets": {
-    "required": ["PRIVATE_KEY", "RPC_URL", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"]
+    "required": [
+      "PRIVATE_KEY",
+      "RPC_URL",
+      "TELEGRAM_BOT_TOKEN",
+      "TELEGRAM_CHAT_ID",
+      "TELEGRAM_WEBHOOK_SECRET"
+    ]
   },
 
   // Per env. `vars` and `secrets` are not inherited, hence the repetition.
@@ -60,8 +71,10 @@
     // transactions for up to 7 min (CYCLE_TIMEOUT_MS), roughly 35 volumes at
     // 12 s blocks, capped at 30. Each receipt gets up to 2 min: about 1 in 15
     // Sepolia transactions takes 3–5 blocks to land, longer than the old 30 s.
-    // Warnings go to Telegram so skipped top-ups, retirements and RPC failovers
-    // cannot make a run look healthy.
+    // Warnings go to Telegram unless the group sets `/verbosity error`; skipped
+    // top-ups, retirements and RPC failovers are warnings by default.
+    // Each run points the bot's webhook at TELEGRAM_WEBHOOK_URL if it is not
+    // already there; Telegram allows one per bot, so only one env per bot sets it.
     "sepolia-v2-rc4": {
       "name": "keeper-cloudflare-sepolia-v2-rc4",
       "vars": {
@@ -69,14 +82,24 @@
         "CHAIN_ID": "11155111",
         "REGISTRY_ADDRESS": "0xe491308994af391a32191a8c380ca818dad332a4",
         "NOTIFY_WARNINGS": "true",
+        "TELEGRAM_WEBHOOK_URL": "https://keeper-cloudflare-sepolia-v2-rc4.amacpherson88.workers.dev/telegram",
         "MIN_BALANCE_WEI": "50000000000000000",
         "MAX_VOLUMES_PER_CYCLE": "30",
         "CYCLE_TIMEOUT_MS": "420000",
         "RECEIPT_TIMEOUT_MS": "120000",
         "CONFIRMATIONS": "1"
       },
+      "durable_objects": {
+        "bindings": [{ "name": "KEEPER_PREFS", "class_name": "PreferenceStore" }]
+      },
       "secrets": {
-        "required": ["PRIVATE_KEY", "RPC_URL", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"]
+        "required": [
+          "PRIVATE_KEY",
+          "RPC_URL",
+          "TELEGRAM_BOT_TOKEN",
+          "TELEGRAM_CHAT_ID",
+          "TELEGRAM_WEBHOOK_SECRET"
+        ]
       },
       "triggers": { "crons": ["*/10 * * * *"] }
     }

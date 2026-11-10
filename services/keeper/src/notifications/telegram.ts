@@ -10,6 +10,7 @@
 import type { TelegramConfig } from "../config.js";
 import type { KeeperReport } from "../reporting.js";
 import type { KeeperIssue } from "../keeper/types.js";
+import type { Verbosity } from "./preferences.js";
 
 /** Telegram's hard limit on one message's text. */
 export const TELEGRAM_MAX_LENGTH = 4096;
@@ -17,12 +18,12 @@ export const TELEGRAM_MAX_LENGTH = 4096;
 const ICON = { failure: "🔴", warning: "🟡", ok: "🟢" } as const;
 
 /**
- * Failures always page. Warnings page only where the deployment opts in:
- * on a one-minute schedule a standing warning — a payer who revoked, a
- * wallet running low — would repeat every run.
+ * Failures always page. Warnings page only when the group asked for them with
+ * `/verbosity warn`: on a ten-minute schedule a standing warning — a payer who
+ * revoked, a wallet running low — would repeat every run.
  */
-export function shouldNotify(report: KeeperReport, notifyWarnings: boolean): boolean {
-  return report.status === "failure" || (report.status === "warning" && notifyWarnings);
+export function shouldNotify(report: KeeperReport, level: Verbosity): boolean {
+  return report.status === "failure" || (report.status === "warning" && level === "warn");
 }
 
 export function formatTelegramMessage(report: KeeperReport): string {

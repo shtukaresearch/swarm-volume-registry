@@ -94,17 +94,17 @@ describe("formatTelegramMessage", () => {
 
 describe("shouldNotify", () => {
   test("failures always notify", () => {
-    expect(shouldNotify(report(), false)).toBe(true);
+    expect(shouldNotify(report(), "error")).toBe(true);
   });
 
-  test("warnings notify only where the deployment opts in", () => {
+  test("warnings notify only at warn", () => {
     const warning = report({ status: "warning", failures: [] });
-    expect(shouldNotify(warning, false)).toBe(false);
-    expect(shouldNotify(warning, true)).toBe(true);
+    expect(shouldNotify(warning, "error")).toBe(false);
+    expect(shouldNotify(warning, "warn")).toBe(true);
   });
 
   test("a clean run never notifies", () => {
-    expect(shouldNotify(report({ status: "ok", failures: [] }), true)).toBe(false);
+    expect(shouldNotify(report({ status: "ok", failures: [] }), "warn")).toBe(false);
   });
 });
 

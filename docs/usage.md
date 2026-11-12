@@ -33,12 +33,12 @@ A reference for integrating with a deployed `VolumeRegistry` contract. Aimed at 
 
 ## 1. What this is
 
-`VolumeRegistry` is a Swarm contract that wraps postage batch lifecycle behind a two-role ownership model and a permissionless keeper API.
+`VolumeRegistry` is a contract that wraps Swarm postage batch lifecycle behind a multi-role ownership model and a permissionless keeper API.
 
-- You create a *volume* once. It is an on-chain record bound 1:1 to a Postage batch.
+- You create a *volume* by calling a volume creation endpoint here or by importing an existing batch (permissionlessly) from `Postage`. It is an on-chain record bound to a Postage batch.
 - A separately-authorized *funding wallet* (the "payer") holds BZZ. Payment happens via ERC20 `approve` — no custody, no delegation beyond the allowance.
-- A *keeper* — anyone — calls `trigger(volumeId)` on a schedule, and the registry tops the batch back up to a fixed runway target. An altruistic keeper runs against this deployment on a best-effort basis, so the common case requires no keeper setup on your part.
-- Revoking the payer is a single O(1) call that disables topups across every volume managed by the (owner, payer) pair.
+- A *keeper* — a stateless bot operated by anyone — calls `trigger(volumeId)` or `trigger(volumeId[])` on a schedule, and the registry tops the batch back up to a fixed runway target. An altruistic keeper runs against this deployment on a best-effort basis, so the common case requires no keeper setup on your part.
+- The payer may revoke authorisation to the owner, disabling topups across every volume managed by the (owner, payer) pair.
 
 The contract does not custody BZZ, does not sign chunks, is not upgradeable, and has no admin role.
 

@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import { collectActiveVolumes } from "../src/keeper/actions/collectActiveVolumes.js";
 import { getActiveVolumeCount } from "../src/keeper/actions/getActiveVolumeCount.js";
 import { rotateVolumes, runKeeperCycle } from "../src/keeper/actions/runKeeperCycle.js";
-import { trigger } from "../src/keeper/actions/trigger.js";
+import { TRIGGER_GAS, trigger } from "../src/keeper/actions/trigger.js";
 import { REGISTRY, mockChain, volumeId, type MockVolume } from "./mock-chain.js";
 
 const GRACE = 17_280n;
@@ -50,83 +50,55 @@ describe("read actions", () => {
 });
 
 describe("trigger", () => {
-  test("sends the one id it was given", async () => {
-    const chain = mockChain({ volumes: [due(1)] });
+  test("sends every id it was given, in one transaction", async () => {
+    const chain = mockChain({ volumes: [due(1), due(2)] });
     const hash = await trigger(chain.client, {
       registry: REGISTRY,
-      volumeId: volumeId(1),
+      volumeIds: [volumeId(1), volumeId(2)],
     });
 
     expect(hash).toMatch(/^0x[0-9a-f]{64}$/);
-    expect(chain.triggerCalls).toEqual([volumeId(1)]);
+    expect(chain.batches).toEqual([[volumeId(1), volumeId(2)]]);
   });
 
-  test("an explicit gas limit skips estimation", async () => {
+  // The batch swallows an inner out-of-gas, so an estimate would find a limit
+  // that starves volumes; a top-up's cost is unpredictable anyway. Every batch
+  // carries the same limit instead, whatever its size.
+  test("sends a fixed gas limit, without estimating", async () => {
+    const one = mockChain({ volumes: [due(1)] });
+    await trigger(one.client, { registry: REGISTRY, volumeIds: [volumeId(1)] });
+    const three = mockChain({ volumes: [due(1), due(2), due(3)] });
+    await trigger(three.client, {
+      registry: REGISTRY,
+      volumeIds: [volumeId(1), volumeId(2), volumeId(3)],
+    });
+
+    expect([...one.sentGas, ...three.sentGas]).toEqual([TRIGGER_GAS, TRIGGER_GAS]);
+    expect(TRIGGER_GAS).toBe(16_000_000n);
+    expect(three.calls).not.toContain("eth_estimateGas");
+    expect(three.calls).not.toContain("eth_call");
+  });
+
+  test("an explicit gas limit replaces the default", async () => {
     const chain = mockChain({ volumes: [due(1)] });
-    await trigger(chain.client, {
-      registry: REGISTRY,
-      volumeId: volumeId(1),
-      gas: 1_000_000n,
-    });
-    expect(chain.calls).not.toContain("eth_estimateGas");
-    expect(chain.sentGas[0]).toBe(1_000_000n);
+    await trigger(chain.client, { registry: REGISTRY, volumeIds: [volumeId(1)], gas: 5_000_000n });
+    expect(chain.sentGas).toEqual([5_000_000n]);
   });
 
-  // Estimation reverts exactly as the call would, so a separate simulate pass
-  // would only cost a round trip.
-  test("does not spend an eth_call simulating first", async () => {
-    const chain = mockChain({ volumes: [due(1)] });
-    await trigger(chain.client, { registry: REGISTRY, volumeId: volumeId(1) });
-
-    expect(chain.calls).toContain("eth_estimateGas");
-    expect(chain.calls).not.toContain("eth_call");
-  });
-
-  test("scales the estimate by gasMultiplier", async () => {
-    const chain = mockChain({ volumes: [due(1)], estimateGas: 5_000_000n });
-    await trigger(chain.client, { registry: REGISTRY, volumeId: volumeId(1) });
-    expect(chain.sentGas[0]).toBe(6_000_000n); // 5M × 1.2
-
-    const custom = mockChain({ volumes: [due(1)], estimateGas: 5_000_000n });
-    await trigger(custom.client, {
-      registry: REGISTRY,
-      volumeId: volumeId(1),
-      gasMultiplier: 2,
-    });
-    expect(custom.sentGas[0]).toBe(10_000_000n);
-  });
-
-  // A volume that estimates as a ~28k no-op can need the whole transferFrom →
-  // approve → topUp path by the time it is included. Scaling alone would not
-  // cover that; the floor does.
-  test("a no-op estimate is raised to the gas floor", async () => {
-    const chain = mockChain({ volumes: [funded(1)], estimateGas: 28_000n });
-    await trigger(chain.client, { registry: REGISTRY, volumeId: volumeId(1) });
-    expect(chain.sentGas[0]).toBe(3_000_000n);
-
-    const custom = mockChain({ volumes: [funded(1)], estimateGas: 28_000n });
-    await trigger(custom.client, {
-      registry: REGISTRY,
-      volumeId: volumeId(1),
-      gasFloor: 500_000n,
-    });
-    expect(custom.sentGas[0]).toBe(500_000n);
-  });
-
-  test("a scaled estimate above the floor is not clamped down to it", async () => {
-    const chain = mockChain({ volumes: [due(1)], estimateGas: 40_000_000n });
-    await trigger(chain.client, { registry: REGISTRY, volumeId: volumeId(1) });
-    expect(chain.sentGas[0]).toBe(48_000_000n);
-  });
-
-  // No batching try/catch stands between `_triggerOne`'s status check and the
-  // caller any more, so a dead id fails at estimation and no gas is spent.
-  test("a volume that is not Active reverts before anything is sent", async () => {
+  // EIP-7825: a node rejects a gas limit above 2^24 outright.
+  test("refuses a gas limit above the transaction cap", async () => {
     const chain = mockChain({ volumes: [due(1)] });
     await expect(
-      trigger(chain.client, { registry: REGISTRY, volumeId: volumeId(99) }),
-    ).rejects.toThrow(/VolumeNotActive/);
-    expect(chain.triggerCalls).toHaveLength(0);
+      trigger(chain.client, { registry: REGISTRY, volumeIds: [volumeId(1)], gas: 2n ** 24n + 1n }),
+    ).rejects.toThrow(/transaction cap/);
+    expect(chain.batches).toHaveLength(0);
+  });
+
+  test("refuses an empty batch", async () => {
+    const chain = mockChain({ volumes: [] });
+    await expect(
+      trigger(chain.client, { registry: REGISTRY, volumeIds: [] }),
+    ).rejects.toThrow(/at least one volume/);
   });
 });
 
@@ -167,16 +139,15 @@ describe("runKeeperCycle", () => {
     expect(chain.triggerCalls).toHaveLength(0);
   });
 
-  // One transaction per volume, per docs/KEEPERS.md. No client-side filtering:
-  // the contract decides what each id needs, and a fully-funded volume is a
-  // no-op on chain.
-  test("a fully-funded registry still triggers every volume, one tx each", async () => {
+  // No client-side filtering: the contract decides what each id needs, and a
+  // fully-funded volume is a no-op on chain.
+  test("a fully-funded registry still triggers every volume, in one tx", async () => {
     const chain = mockChain({ volumes: [funded(1), funded(2)] });
     const result = await runKeeperCycle(chain.client, { registry: REGISTRY });
 
     expect(result.ok).toBe(true);
     expect(result.volumeCount).toBe(2);
-    expect(chain.triggerCalls).toEqual(inCycleOrder([1, 2]));
+    expect(chain.batches).toEqual([inCycleOrder([1, 2])]);
   });
 
   test("every active volume is triggered, due or not", async () => {
@@ -193,21 +164,53 @@ describe("runKeeperCycle", () => {
     ]);
   });
 
-  // The keeper carries no PostageStamp ABI at all, and this is why: nothing on
-  // the cycle path may form a second opinion about what a volume needs.
+  // Nothing on the cycle path forms a second opinion about what a volume
+  // needs: the batch is simulated against the registry itself, never checked
+  // against PostageStamp state.
   test("reads no PostageStamp state — the contract does that itself", async () => {
     const chain = mockChain({ volumes: [funded(1), due(2)] });
     await runKeeperCycle(chain.client, { registry: REGISTRY });
-
-    // Enumeration only: no batches()/lastPrice()/graceBlocks() round trips.
     expect(chain.postageReads).toBe(0);
+  });
+
+  test("simulates each batch before sending it", async () => {
+    const chain = mockChain({ volumes: [funded(1), due(2)] });
+    await runKeeperCycle(chain.client, { registry: REGISTRY });
+
+    expect(chain.simulations).toBe(1);
+    // Enumeration only: a clean simulation needs no per-volume one.
+    expect(chain.multicallCount).toBe(1);
+  });
+
+  test("splits the attempted volumes into transactions of batchSize", async () => {
+    const chain = mockChain({ volumes: Array.from({ length: 5 }, (_, i) => due(i + 1)) });
+    const result = await runKeeperCycle(chain.client, { registry: REGISTRY, batchSize: 2 });
+
+    expect(result.ok).toBe(true);
+    expect(chain.batches.map((b) => b.length)).toEqual([2, 2, 1]);
+    expect(chain.triggerCalls).toEqual(inCycleOrder([1, 2, 3, 4, 5]));
+  });
+
+  test("by default, 8 volumes a transaction", async () => {
+    const chain = mockChain({ volumes: Array.from({ length: 10 }, (_, i) => funded(i + 1)) });
+    await runKeeperCycle(chain.client, { registry: REGISTRY, maxVolumesPerCycle: 10 });
+
+    expect(chain.batches.map((b) => b.length)).toEqual([8, 2]);
+  });
+
+  test("a batchSize below 1 is a failed cycle, not a stuck loop", async () => {
+    const chain = mockChain({ volumes: [due(1)] });
+    const result = await runKeeperCycle(chain.client, { registry: REGISTRY, batchSize: 0 });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/batchSize must be a positive integer/);
+    expect(chain.batches).toHaveLength(0);
   });
 });
 
-// The point of one transaction per volume: every volume's receipt describes
-// only that volume, so each outcome is attributable — including the absence of
-// an event, which the batched overload could not tell apart from gas
-// starvation.
+// A batch receipt carries every volume's event, each attributed to its own
+// volume. A volume without one needed nothing: one that reverts takes the
+// whole batch with it (ADR-0007).
 describe("per-volume outcomes", () => {
   test("a funded volume needing nothing reports noop, not silence", async () => {
     const chain = mockChain({ volumes: [funded(1)] });
@@ -313,6 +316,57 @@ describe("per-volume outcomes", () => {
     expect(result.toppedUp.map((t) => t.volumeId)).toEqual([volumeId(2)]);
     expect(result.topupSkipped.map((t) => t.volumeId)).toEqual([volumeId(3)]);
     expect(result.retired.map((r) => r.volumeId)).toEqual([volumeId(4)]);
+    // One transaction, so every volume shares its hash.
+    expect(new Set(result.volumes.map((v) => v.hash)).size).toBe(1);
+  });
+
+  // One volume that reverts would revert the whole batch. Simulating each
+  // volume alone finds it, and the rest go out without it.
+  test("a volume that would revert the batch is held back, with its reason", async () => {
+    const chain = mockChain({
+      volumes: [due(1), { ...due(2), revert: "Pausable: paused" }, funded(3)],
+    });
+    const result = await runKeeperCycle(chain.client, { registry: REGISTRY });
+
+    expect(result.ok).toBe(false);
+    expect(result.failed).toEqual([volumeId(2)]);
+    expect(chain.batches).toEqual([inCycleOrder([1, 3])]);
+    const byId = Object.fromEntries(result.volumes.map((v) => [v.volumeId, v]));
+    expect(byId[volumeId(2)]).toEqual({
+      volumeId: volumeId(2),
+      status: "failed",
+      error: "reverts in simulation: Pausable: paused",
+    });
+    expect(byId[volumeId(1)]).toMatchObject({ status: "success", outcome: "toppedUp" });
+    expect(byId[volumeId(3)]).toMatchObject({ status: "success", outcome: "noop" });
+  });
+
+  // Out of gas: no volume reverts alone, so none can be singled out. Sending
+  // would only burn gas on a revert; the next cycle batches them differently.
+  test("a batch that reverts only as a whole is not sent", async () => {
+    const chain = mockChain({ volumes: [{ ...due(1), starve: true }, due(2)] });
+    const result = await runKeeperCycle(chain.client, { registry: REGISTRY });
+
+    expect(result.ok).toBe(false);
+    expect(chain.batches).toEqual([]);
+    expect(result.failed.sort()).toEqual([volumeId(1), volumeId(2)]);
+    for (const v of result.volumes) {
+      expect(v.error).toMatch(/^the batch reverts in simulation: /);
+    }
+  });
+
+  // The race a keeper hits when a volume retires between the pinned block and
+  // the batch: the contract answers `TopupSkipped(NotActive)`.
+  test("a volume retired before the batch reached it is a warning, not a failure", async () => {
+    // The mock's active index still lists it; the contract sees it Retired.
+    const chain = mockChain({ volumes: [due(1), { ...due(2), status: 2 }] });
+    const result = await runKeeperCycle(chain.client, { registry: REGISTRY });
+
+    expect(result.ok).toBe(true);
+    expect(result.topupSkipped).toEqual([{ volumeId: volumeId(2), reason: "NotActive" }]);
+    expect(result.warnings.map((w) => w.message)).toEqual([
+      "retired before this batch reached it",
+    ]);
   });
 });
 
@@ -346,37 +400,28 @@ describe("bounds and failures", () => {
     expect(reached.size).toBe(8);
   });
 
-  test("a reverted transaction fails the cycle without throwing", async () => {
-    const chain = mockChain({ volumes: [due(1)], revertTx: true });
+  test("a reverted transaction fails every volume in it, without throwing", async () => {
+    const chain = mockChain({ volumes: [due(1), due(2)], revertTx: true });
     const result = await runKeeperCycle(chain.client, { registry: REGISTRY });
 
     expect(result.ok).toBe(false);
-    expect(result.volumes[0]?.status).toBe("reverted");
+    expect(result.volumes.map((v) => v.status)).toEqual(["reverted", "reverted"]);
     expect(result.volumes[0]?.hash).toBeDefined();
-    expect(result.failed).toEqual([volumeId(1)]);
+    expect(result.failed).toEqual(inCycleOrder([1, 2]));
   });
 
   // KEEPERS.md: process every configured volume even if an earlier one fails,
   // then report the run as failed and name the volumes affected.
-  test("one failing volume does not stop the ones after it", async () => {
-    const chain = mockChain({
-      volumes: [due(1), { ...due(2), status: 2 }, due(3)],
-    });
-    const result = await runKeeperCycle(chain.client, { registry: REGISTRY });
+  test("one failing batch does not stop the ones after it", async () => {
+    const chain = mockChain({ volumes: [due(1), due(2), due(3)], rejectSends: [1] });
+    const result = await runKeeperCycle(chain.client, { registry: REGISTRY, batchSize: 1 });
 
-    // The retired volume is still in the mock's active index, so enumeration
-    // hands it over and its trigger reverts at estimation — the race a keeper
-    // hits when a volume retires between the pinned block and the send.
+    const [first, ...rest] = inCycleOrder([1, 2, 3]);
     expect(result.ok).toBe(false);
-    const byId = Object.fromEntries(result.volumes.map((v) => [v.volumeId, v]));
-    expect(byId[volumeId(1)]?.status).toBe("success");
-    expect(byId[volumeId(2)]?.status).toBe("failed");
-    expect(byId[volumeId(3)]?.status).toBe("success");
-    expect(result.failed).toEqual([volumeId(2)]);
-    expect(byId[volumeId(2)]?.error).toContain("VolumeNotActive");
-    expect(chain.triggerCalls).toEqual(
-      inCycleOrder([1, 2, 3]).filter((id) => id !== volumeId(2)),
-    );
+    expect(result.failed).toEqual([first]);
+    expect(result.volumes[0]?.error).toContain("underpriced");
+    expect(result.volumes.slice(1).map((v) => v.status)).toEqual(["success", "success"]);
+    expect(chain.triggerCalls).toEqual(rest);
   });
 
   test("a dead RPC produces an error result, not a throw", async () => {
@@ -387,16 +432,17 @@ describe("bounds and failures", () => {
     expect(result.error).toContain("socket hang up");
   });
 
-  test("a stuck transaction keeps its hash for follow-up", async () => {
-    const chain = mockChain({ volumes: [due(1)], dropReceipts: true });
+  test("a stuck transaction keeps its hash for follow-up, on every volume in it", async () => {
+    const chain = mockChain({ volumes: [due(1), due(2)], dropReceipts: true });
     const result = await runKeeperCycle(chain.client, {
       registry: REGISTRY,
       receiptTimeout: 300,
     });
 
     expect(result.ok).toBe(false);
-    expect(result.volumes[0]?.status).toBe("failed");
+    expect(result.volumes.map((v) => v.status)).toEqual(["failed", "failed"]);
     expect(result.volumes[0]?.hash).toBeDefined();
+    expect(result.volumes[1]?.hash).toBe(result.volumes[0]?.hash);
   });
 
   test("dryRun simulates and sends nothing", async () => {
@@ -412,19 +458,28 @@ describe("bounds and failures", () => {
     expect(chain.triggerCalls).toHaveLength(0);
     expect(chain.calls).not.toContain("eth_sendRawTransaction");
   });
+
+  test("dryRun reports a volume that would revert", async () => {
+    const chain = mockChain({ volumes: [due(1), { ...due(2), revert: "Pausable: paused" }] });
+    const result = await runKeeperCycle(chain.client, { registry: REGISTRY, dryRun: true });
+
+    expect(result.ok).toBe(false);
+    expect(result.failed).toEqual([volumeId(2)]);
+    expect(chain.calls).not.toContain("eth_sendRawTransaction");
+  });
 });
 
 // Every RPC request is a subrequest, and Workers Free allows 50 an invocation.
 describe("RPC budget", () => {
   const count = (calls: string[], method: string) => calls.filter((c) => c === method).length;
 
-  test("nonce and fees are read once a cycle, not once a volume", async () => {
+  test("nonce and fees are read once a cycle, not once a batch", async () => {
     const volumes = Array.from({ length: 5 }, (_, i) => due(i + 1));
     const chain = mockChain({ volumes });
-    const result = await runKeeperCycle(chain.client, { registry: REGISTRY });
+    const result = await runKeeperCycle(chain.client, { registry: REGISTRY, batchSize: 2 });
 
     expect(result.ok).toBe(true);
-    expect(chain.triggerCalls).toHaveLength(5);
+    expect(chain.batches).toHaveLength(3);
     expect(count(chain.calls, "eth_getTransactionCount")).toBe(1);
     expect(count(chain.calls, "eth_maxPriorityFeePerGas")).toBe(1);
     expect(count(chain.calls, "eth_getBlockByNumber")).toBe(1);
@@ -432,22 +487,42 @@ describe("RPC budget", () => {
     expect(count(chain.calls, "eth_fillTransaction")).toBe(0);
   });
 
+  // One eth_call a batch, and a multicall only for a batch that reverts.
+  test("a clean batch costs one simulation, and no multicall", async () => {
+    const volumes = Array.from({ length: 5 }, (_, i) => funded(i + 1));
+    const chain = mockChain({ volumes });
+    await runKeeperCycle(chain.client, { registry: REGISTRY, batchSize: 2 });
+
+    expect(chain.simulations).toBe(3);
+    expect(chain.multicallCount).toBe(1);
+  });
+
   test("consecutive sends carry consecutive nonces", async () => {
     const chain = mockChain({ volumes: [due(1), due(2), due(3)] });
-    await runKeeperCycle(chain.client, { registry: REGISTRY });
+    await runKeeperCycle(chain.client, { registry: REGISTRY, batchSize: 1 });
 
     expect(chain.sentNonces).toEqual([0, 1, 2]);
   });
 
-  test("a failure makes the next send read nonce and fees again", async () => {
-    const chain = mockChain({ volumes: [due(1), { ...due(2), status: 2 }, due(3)] });
-    const result = await runKeeperCycle(chain.client, { registry: REGISTRY });
+  test("a failed send makes the next one read nonce and fees again", async () => {
+    const chain = mockChain({ volumes: [due(1), due(2), due(3)], rejectSends: [2] });
+    const result = await runKeeperCycle(chain.client, { registry: REGISTRY, batchSize: 1 });
 
-    expect(result.failed).toEqual([volumeId(2)]);
-    expect(chain.triggerCalls).toHaveLength(2);
-    // Once at the start, once after the failure — unless the failure came last.
-    const last = inCycleOrder([1, 2, 3]).at(-1) === volumeId(2);
-    expect(count(chain.calls, "eth_getTransactionCount")).toBe(last ? 1 : 2);
+    expect(result.failed).toHaveLength(1);
+    expect(chain.batches).toHaveLength(2);
+    expect(count(chain.calls, "eth_getTransactionCount")).toBe(2);
+  });
+
+  // A volume held back is never sent, so it spends no nonce and leaves the
+  // cycle's nonce and fees as they were.
+  test("a volume held back from its batch does not reset nonce and fees", async () => {
+    const chain = mockChain({
+      volumes: [due(1), { ...due(2), revert: "Pausable: paused" }, due(3)],
+    });
+    await runKeeperCycle(chain.client, { registry: REGISTRY, batchSize: 1 });
+
+    expect(chain.sentNonces).toEqual([0, 1]);
+    expect(count(chain.calls, "eth_getTransactionCount")).toBe(1);
   });
 });
 
@@ -464,8 +539,8 @@ describe("selected mode", () => {
   });
 
   // A named id that has disappeared is a warning, not a failure — and catching
-  // it in the status read costs nothing, where letting it through would burn a
-  // gas estimate to reach the same conclusion.
+  // it in the status read costs nothing, where sending it would get no answer:
+  // the batch swallows its `VolumeNotActive`.
   test("flags ids that are not Active volumes, and warns", async () => {
     const chain = mockChain({ volumes: [due(1)] });
     const result = await runKeeperCycle(chain.client, {

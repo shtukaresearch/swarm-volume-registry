@@ -9,11 +9,11 @@ const METHODS = {
   "getActiveVolumeCount()": "0xe7b4ed6a",
   "getActiveVolumes(uint256,uint256)": "0x68abda20",
   "getVolume(bytes32)": "0x92650fb3",
+  "trigger(bytes32[])": "0x5ef6eac9",
   "trigger(bytes32)": "0x4c097cb4",
 } as const;
 
-/** The overload a v2 keeper must not call. Present on chain, absent from this ABI. */
-const BATCHED_TRIGGER = "0x5ef6eac9";
+const ID = `0x${"11".repeat(32)}` as const;
 
 describe("registry call ABI", () => {
   const encoded = {
@@ -29,12 +29,17 @@ describe("registry call ABI", () => {
     "getVolume(bytes32)": encodeFunctionData({
       abi: registryAbi,
       functionName: "getVolume",
-      args: [`0x${"11".repeat(32)}`],
+      args: [ID],
+    }),
+    "trigger(bytes32[])": encodeFunctionData({
+      abi: registryAbi,
+      functionName: "trigger",
+      args: [[ID, ID]],
     }),
     "trigger(bytes32)": encodeFunctionData({
       abi: registryAbi,
       functionName: "trigger",
-      args: [`0x${"11".repeat(32)}`],
+      args: [ID],
     }),
   } as const;
 
@@ -44,20 +49,16 @@ describe("registry call ABI", () => {
     });
   }
 
-  // docs/KEEPERS.md: a v2 keeper calls trigger(bytes32) per volume. The batched
-  // overload swallows per-item reverts, so a gas-starved volume is
-  // indistinguishable from a healthy one. Leaving it out of this ABI is what
-  // makes that unbypassable — put it back and the keeper can silently regress.
-  test("carries no batched trigger to fall back to", () => {
-    expect(encoded["trigger(bytes32)"].slice(0, 10)).not.toBe(BATCHED_TRIGGER);
-
+  // viem picks the overload by its arguments, so the two must stay distinct:
+  // the batch is sent, the single id only simulated.
+  test("carries exactly the two trigger overloads", () => {
     const triggers = registryAbi.filter(
       (item) => item.type === "function" && item.name === "trigger",
     );
-    expect(triggers).toHaveLength(1);
-    expect(triggers[0]).toMatchObject({
-      inputs: [{ type: "bytes32", name: "volumeId" }],
-    });
+    expect(triggers.map((t) => t.inputs)).toEqual([
+      [{ type: "bytes32[]", name: "volumeIds" }],
+      [{ type: "bytes32", name: "volumeId" }],
+    ]);
   });
 });
 
@@ -71,6 +72,7 @@ type ErrorName = Extract<(typeof registryAbi)[number], { type: "error" }>["name"
 // selector here is a type error, not a test that quietly stops covering it.
 const SELECTORS: Record<ErrorName, `0x${string}`> = {
   AccountNotActive: "0x4d571464",
+  BatchDepthTooSmall: "0xe875cf5f",
   BatchNotLive: "0xe004958b",
   DesignationClearedOnActivate: "0x2b8cb86b",
   GraceBlocksBelowFloor: "0xa728cabc",

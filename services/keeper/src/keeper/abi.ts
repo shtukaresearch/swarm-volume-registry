@@ -1,25 +1,16 @@
 // The VolumeRegistry surface a keeper cycle touches, and nothing more.
 // Kept `as const` so viem can infer per-function argument and return types.
 //
-// Deliberately partial on the call side. Enumeration, the single-volume write,
-// and the events that explain what the write did — that is the whole cycle. The
-// contract's full error set is here regardless, because decoding a failure
-// costs nothing and is worth having when there is one. `postage()`,
-// `graceBlocks()` and `reap()` are absent because nothing here calls them: the
-// contract decides what each volume needs, so the keeper never reads
-// PostageStamp state to second-guess it.
+// Deliberately partial on the call side: enumeration, the two trigger
+// overloads, and the events that explain what a trigger did. The contract's
+// full error set is here regardless, because decoding a failure costs nothing
+// and is worth having when there is one.
 //
-// `trigger(bytes32[])` is absent, and its absence is the point. The batched
-// overload runs every id as `try this._triggerExt(id) {} catch {}`, and an
-// inner call receives only 63/64 of the remaining gas — so a short gas limit
-// lets the inner call run out, the `catch` swallow it, and the transaction
-// *succeed* having topped up nothing. A mined batch therefore cannot tell "this
-// volume needed nothing" apart from "this volume was starved of gas", and both
-// look like a clean receipt. Per docs/KEEPERS.md, a v2 keeper calls
-// `trigger(bytes32)` once per volume: one receipt per volume, one unambiguous
-// outcome, and a real top-level revert when something is wrong. Leaving the
-// overload out of this ABI is what makes that unbypassable — and it keeps
-// viem's overload inference simple.
+// The keeper sends `trigger(bytes32[])`, which reverts as a whole when any of
+// its volumes does (ADR-0007). `trigger(bytes32)` is never sent:
+// `runKeeperCycle` only simulates it, one volume at a time, to find which
+// volume makes a batch revert and why. viem tells the overloads apart by their
+// arguments: an array of ids, or one id.
 
 export const registryAbi = [
   {
@@ -86,6 +77,13 @@ export const registryAbi = [
     type: "function",
     name: "trigger",
     stateMutability: "nonpayable",
+    inputs: [{ type: "bytes32[]", name: "volumeIds" }],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "trigger",
+    stateMutability: "nonpayable",
     inputs: [{ type: "bytes32", name: "volumeId" }],
     outputs: [],
   },
@@ -118,16 +116,12 @@ export const registryAbi = [
   // Custom errors, so a revert prints a name instead of a 4-byte blob. These
   // are a decode table like RETIRE_REASONS below, not call surface: viem
   // matches revert data against them by selector, and they add no way to drive
-  // the registry.
-  //
-  // `VolumeNotActive` is live surface now that the keeper calls
-  // `trigger(bytes32)`: step 1 of `_triggerOne` reverts on a volume that was
-  // retired between enumeration and the send, and with no batching try/catch in
-  // the way that revert reaches gas estimation, where it costs nothing and
-  // names itself. The rest earn their place when the configured address is not
-  // the registry you think it is — a stale deployment, a wrong chain — which is
-  // exactly when a keeper's logs are all you have.
+  // the registry. `trigger` reverts with none of them, by design (ADR-0007), so
+  // they earn their place when the configured address is not the registry you
+  // think it is — a stale deployment, a wrong chain — which is exactly when a
+  // keeper's logs are all you have.
   { type: "error", name: "AccountNotActive", inputs: [] },
+  { type: "error", name: "BatchDepthTooSmall", inputs: [] },
   { type: "error", name: "BatchNotLive", inputs: [] },
   { type: "error", name: "DesignationClearedOnActivate", inputs: [] },
   {
@@ -162,4 +156,7 @@ export const RETIRE_REASONS: Record<number, string> = {
 export const SKIP_REASONS: Record<number, string> = {
   1: "NoAuth",
   2: "PaymentFailed",
+  3: "NotFound",
+  4: "NotActive",
 };
+

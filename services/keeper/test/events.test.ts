@@ -54,12 +54,16 @@ describe("decodeCycleEvents", () => {
       [
         log("TopupSkipped", volumeId(1), uint8(1)),
         log("TopupSkipped", volumeId(2), uint8(2)),
+        log("TopupSkipped", volumeId(3), uint8(3)),
+        log("TopupSkipped", volumeId(4), uint8(4)),
       ],
       REGISTRY,
     );
     expect(decoded.topupSkipped).toEqual([
       { volumeId: volumeId(1), reason: "NoAuth" },
       { volumeId: volumeId(2), reason: "PaymentFailed" },
+      { volumeId: volumeId(3), reason: "NotFound" },
+      { volumeId: volumeId(4), reason: "NotActive" },
     ]);
   });
 
@@ -129,10 +133,9 @@ describe("decodeCycleEvents", () => {
 const decode = (logs: Log[]) => decodeCycleEvents(logs, REGISTRY);
 
 describe("summarizeVolume", () => {
-  // The whole reason a v2 keeper spends a transaction per volume: an empty
-  // receipt is an answer, not a gap. Batched, this was indistinguishable from
-  // an inner call that ran out of gas and got swallowed.
-  test("no events means the volume needed nothing", () => {
+  // The only silent branch of `_triggerOne` is a zero deficit, and a volume
+  // that reverts takes the whole batch with it (ADR-0007).
+  test("no event is a noop", () => {
     expect(summarizeVolume(decode([]), volumeId(1))).toEqual({ outcome: "noop" });
   });
 
@@ -160,6 +163,7 @@ describe("summarizeVolume", () => {
     expect(summary).toEqual({ outcome: "topupSkipped", reason: "PaymentFailed" });
   });
 
+  // A batch receipt carries every volume's event.
   test("another volume's event is never attributed to this one", () => {
     const summary = summarizeVolume(
       decode([log("Toppedup", volumeId(2), topup(5000n))]),
@@ -173,6 +177,6 @@ describe("summarizeVolume", () => {
       decode([log("Toppedup", volumeId(0xab), topup(1n))]),
       volumeId(0xab).toUpperCase().replace("0X", "0x") as Hex,
     );
-    expect(summary.outcome).toBe("toppedUp");
+    expect(summary?.outcome).toBe("toppedUp");
   });
 });

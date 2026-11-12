@@ -2,16 +2,18 @@
  * An in-memory VolumeRegistry + PostageStamp behind a viem `custom` transport.
  *
  * Enough of the JSON-RPC surface to drive a whole keeper cycle — multicall
- * reads, estimate, sign, send, receipt — so the wiring is exercised end to end
+ * reads, sign, send, receipt — so the wiring is exercised end to end
  * without anvil. Contract *semantics* are covered by the Foundry suite; what
  * these fixtures prove is that the keeper enumerates and sends the right
  * things, and reads back the right outcome for each volume.
  *
  * The trigger path mirrors `_triggerOne`'s check order (DESIGN §8) closely
  * enough to emit the event the real contract would: retire edges first, then
- * auth, then the deficit — and *no* event when the volume needs nothing. That
- * last case is the one the batched overload could never report, so the mock has
- * to be able to produce it.
+ * auth, then the deficit — and *no* event when the volume needs nothing. An id
+ * that is unknown or no longer Active answers `TopupSkipped(NotFound|NotActive)`.
+ * As in ADR-0007, the batched overload reverts as a whole when any of its
+ * volumes does: one with a `revert` reason reverts with it, alone or in a batch,
+ * and a `starve`d one makes only the batch run out of gas.
  */
 import {
   createWalletClient,
@@ -19,9 +21,11 @@ import {
   decodeFunctionData,
   publicActions,
   encodeAbiParameters,
+  encodeErrorResult,
   encodeEventTopics,
   encodeFunctionResult,
   keccak256,
+  RpcRequestError,
   multicall3Abi,
   numberToHex,
   parseTransaction,
@@ -72,6 +76,22 @@ const postageAbi = [
   },
 ] as const;
 
+/** Solidity's `require(…, reason)` revert. */
+const solidityError = [
+  { type: "error", name: "Error", inputs: [{ type: "string", name: "message" }] },
+] as const;
+
+/**
+ * A revert, as a node reports it: JSON-RPC code 3 with the revert data. viem
+ * does not retry that code, as it would a plain Error.
+ */
+class Revert extends RpcRequestError {
+  declare data: Hex;
+  constructor(data: Hex) {
+    super({ body: {}, url: "mock", error: { code: 3, message: "execution reverted", data } });
+  }
+}
+
 const MULTICALL3 = sepolia.contracts.multicall3.address;
 export const REGISTRY = "0x1111111111111111111111111111111111111111" as const;
 export const POSTAGE = "0x2222222222222222222222222222222222222222" as const;
@@ -91,11 +111,11 @@ const RETIRE = {
 } as const;
 
 /** TopupSkipped reason codes. */
-const SKIP = { noAuth: 1, paymentFailed: 2 } as const;
+const SKIP = { noAuth: 1, paymentFailed: 2, notFound: 3, notActive: 4 } as const;
 
 export interface MockVolume {
   volumeId: Hex;
-  /** Default: the volume id. The keeper never reads it. */
+  /** Default: the volume id. */
   batchId?: Hex;
   owner?: Address;
   chunkSigner?: Address;
@@ -107,23 +127,30 @@ export interface MockVolume {
   batch?: { owner?: Address; depth?: number; normalisedBalance: bigint };
   /** Model a payer whose `transferFrom` fails: BZZ balance or allowance gone. */
   payerBroke?: boolean;
+  /**
+   * Model a volume whose top-up does not fit the batch's gas: the batch runs
+   * out of gas, with no revert data, while the volume alone simulates cleanly.
+   */
+  starve?: boolean;
+  /** Model `_triggerOne` reverting with this `require` reason, e.g. Postage paused. */
+  revert?: string;
 }
 
 export interface MockChainOptions {
   volumes?: MockVolume[];
   lastPrice?: bigint;
   outPayment?: bigint;
-  /** The registry's immutable. Only the mock needs it; the keeper never reads it. */
+  /** The registry's immutable. */
   graceBlocks?: bigint;
   blockNumber?: bigint;
   timestamp?: bigint;
   balance?: bigint;
-  /** What eth_estimateGas returns. Default 500_000. */
-  estimateGas?: bigint;
   /** Fail every RPC request with this message. */
   failWith?: string;
   /** Mark sent transactions as reverted. */
   revertTx?: boolean;
+  /** Reject these sends (1-based, counting every attempt), as a node would. */
+  rejectSends?: number[];
   /** Never return a receipt, to model a stuck transaction. */
   dropReceipts?: boolean;
   /** What eth_chainId answers. Default Sepolia — set it to model a wrong network. */
@@ -156,7 +183,7 @@ const volumeTuple = (v: MockVolume) => ({
   accountActive: v.accountActive ?? true,
 });
 
-/** The single event a `trigger(bytes32)` receipt carries, or none. */
+/** The single event `_triggerOne` emits for a volume, or none. */
 type Emission =
   | { event: "Toppedup"; amount: bigint; newBalance: bigint }
   | { event: "VolumeRetired"; reason: number }
@@ -172,11 +199,14 @@ export function mockChain(options: MockChainOptions = {}) {
   const timestamp = options.timestamp ?? 1_700_000_000n;
 
   const triggerCalls: Hex[] = [];
+  const batches: Hex[][] = [];
   const sentGas: bigint[] = [];
   const sentNonces: number[] = [];
+  let simulations = 0;
   const calls: string[] = [];
-  const receipts = new Map<Hex, { volumeId: Hex }>();
+  const receipts = new Map<Hex, { volumeIds: readonly Hex[] }>();
   let multicallCount = 0;
+  let sendAttempts = 0;
   let postageReads = 0;
 
   const find = (id: Hex) =>
@@ -185,7 +215,10 @@ export function mockChain(options: MockChainOptions = {}) {
   const isActive = (v: MockVolume | undefined) => !!v && (v.status ?? 1) === 1;
 
   /** `_triggerOne`'s decision, in the same order the contract makes it. */
-  function outcomeFor(v: MockVolume): Emission {
+  function outcomeFor(id: Hex): Emission {
+    const v = find(id);
+    if (!v) return { event: "TopupSkipped", reason: SKIP.notFound };
+    if (!isActive(v)) return { event: "TopupSkipped", reason: SKIP.notActive };
     const batch = v.batch;
     const depth = v.depth ?? 20;
     const chunkSigner = v.chunkSigner ?? SIGNER;
@@ -258,18 +291,32 @@ export function mockChain(options: MockChainOptions = {}) {
         return encodeFunctionResult({ abi: registryAbi, functionName, result: view });
       }
       case "trigger": {
-        // Step 1 of `_triggerOne`. Unlike the batched overload there is no
-        // try/catch to swallow this, so it reaches estimation and the send is
-        // never paid for.
-        const [id] = args as readonly [Hex];
-        if (!isActive(find(id))) {
-          throw new Error("execution reverted: VolumeNotActive");
-        }
+        const [arg] = args as readonly [Hex | readonly Hex[]];
+        const batch = Array.isArray(arg);
+        const ids = (batch ? arg : [arg]) as readonly Hex[];
+        if (batch) simulations += 1;
+        const reason = revertFor(ids, batch);
+        if (reason !== undefined) throw new Revert(reason);
         return "0x";
       }
       default:
         throw new Error(`mock registry: unhandled ${functionName}`);
     }
+  }
+
+  /**
+   * The revert data `trigger` would end with for these ids, or undefined when
+   * it succeeds. Running out of gas only happens to a whole batch.
+   */
+  function revertFor(ids: readonly Hex[], batch: boolean): Hex | undefined {
+    for (const id of ids) {
+      const v = find(id);
+      if (v?.revert && isActive(v)) {
+        return encodeErrorResult({ abi: solidityError, errorName: "Error", args: [v.revert] });
+      }
+    }
+    if (batch && ids.some((id) => find(id)?.starve)) return "0x";
+    return undefined;
   }
 
   function callPostage(data: Hex): Hex {
@@ -282,7 +329,9 @@ export function mockChain(options: MockChainOptions = {}) {
         return encodeFunctionResult({ abi: postageAbi, functionName, result: outPayment });
       case "batches": {
         const [id] = args as readonly [Hex];
-        const found = find(id);
+        const found = volumes.find(
+          (v) => (v.batchId ?? v.volumeId).toLowerCase() === id.toLowerCase(),
+        );
         const batch = found?.batch;
         return encodeFunctionResult({
           abi: postageAbi,
@@ -320,8 +369,8 @@ export function mockChain(options: MockChainOptions = {}) {
     const results = batch.map((call) => {
       try {
         return { success: true, returnData: dispatch(call.target, call.callData) };
-      } catch {
-        return { success: false, returnData: "0x" as Hex };
+      } catch (err) {
+        return { success: false, returnData: err instanceof Revert ? err.data : ("0x" as Hex) };
       }
     });
     return encodeFunctionResult({
@@ -331,12 +380,15 @@ export function mockChain(options: MockChainOptions = {}) {
     });
   }
 
-  /** Whatever the contract would have emitted for this one volume — or nothing. */
-  function receiptLogs(volumeId: Hex) {
-    const volume = find(volumeId);
-    const emission = volume ? outcomeFor(volume) : undefined;
-    if (!emission) return [];
+  /** Whatever the contract would have emitted for each volume, in order. */
+  function receiptLogs(volumeIds: readonly Hex[]) {
+    return volumeIds.flatMap((volumeId) => {
+      const emission = outcomeFor(volumeId);
+      return emission ? [{ volumeId, emission }] : [];
+    }).map(({ volumeId, emission }, i) => eventLog(volumeId, emission!, i));
+  }
 
+  function eventLog(volumeId: Hex, emission: NonNullable<Emission>, logIndex: number) {
     const data =
       emission.event === "Toppedup"
         ? encodeAbiParameters(
@@ -345,23 +397,21 @@ export function mockChain(options: MockChainOptions = {}) {
           )
         : encodeAbiParameters([{ type: "uint8" }], [emission.reason]);
 
-    return [
-      {
-        address: REGISTRY,
-        topics: encodeEventTopics({
-          abi: registryAbi,
-          eventName: emission.event,
-          args: { volumeId },
-        }),
-        data,
-        blockNumber: numberToHex(blockNumber),
-        blockHash: keccak256(toHex("block")),
-        transactionHash: keccak256(toHex("tx")),
-        transactionIndex: "0x0",
-        logIndex: "0x0",
-        removed: false,
-      },
-    ];
+    return {
+      address: REGISTRY,
+      topics: encodeEventTopics({
+        abi: registryAbi,
+        eventName: emission.event,
+        args: { volumeId },
+      }),
+      data,
+      blockNumber: numberToHex(blockNumber),
+      blockHash: keccak256(toHex("block")),
+      transactionHash: keccak256(toHex("tx")),
+      transactionIndex: "0x0",
+      logIndex: numberToHex(logIndex),
+      removed: false,
+    };
   }
 
   /**
@@ -393,20 +443,19 @@ export function mockChain(options: MockChainOptions = {}) {
         };
       case "eth_call":
         return handleCall(args[0] as { to: Address; data: Hex });
-      case "eth_estimateGas":
-        // Run the call so a revert surfaces here, the way a node's estimate
-        // does — that is what makes estimation the keeper's pre-flight check.
-        handleCall(args[0] as { to: Address; data: Hex });
-        return numberToHex(options.estimateGas ?? 500_000n);
       case "eth_getBalance":
         return numberToHex(options.balance ?? 10n ** 18n);
       case "eth_getTransactionCount":
-        return numberToHex(BigInt(triggerCalls.length));
+        return numberToHex(BigInt(batches.length));
       case "eth_gasPrice":
         return numberToHex(1_500_000_000n);
       case "eth_maxPriorityFeePerGas":
         return numberToHex(1_000_000n);
       case "eth_sendRawTransaction": {
+        sendAttempts += 1;
+        if (options.rejectSends?.includes(sendAttempts)) {
+          throw new Error("replacement transaction underpriced");
+        }
         const { data, gas, nonce } = parseTransaction(args[0] as Hex);
         sentGas.push(gas ?? 0n);
         sentNonces.push(nonce ?? 0);
@@ -414,16 +463,18 @@ export function mockChain(options: MockChainOptions = {}) {
           abi: registryAbi,
           data: data as Hex,
         });
-        const volumeId = (callArgs as readonly [Hex])[0];
-        triggerCalls.push(volumeId);
-        const hash = keccak256(toHex(`tx-${triggerCalls.length}`));
-        receipts.set(hash, { volumeId });
+        const volumeIds = (callArgs as readonly [readonly Hex[]])[0];
+        triggerCalls.push(...volumeIds);
+        batches.push([...volumeIds]);
+        const hash = keccak256(toHex(`tx-${batches.length}`));
+        receipts.set(hash, { volumeIds });
         return hash;
       }
       case "eth_getTransactionReceipt": {
         const hash = args[0] as Hex;
         const sent = receipts.get(hash);
         if (!sent || options.dropReceipts) return null;
+        const reverted = options.revertTx || revertFor(sent.volumeIds, true) !== undefined;
         return {
           transactionHash: hash,
           transactionIndex: "0x0",
@@ -435,9 +486,9 @@ export function mockChain(options: MockChainOptions = {}) {
           gasUsed: numberToHex(400_000n),
           effectiveGasPrice: numberToHex(1_500_000_000n),
           contractAddress: null,
-          status: options.revertTx ? "0x0" : "0x1",
+          status: reverted ? "0x0" : "0x1",
           type: "0x2",
-          logs: options.revertTx ? [] : receiptLogs(sent.volumeId),
+          logs: reverted ? [] : receiptLogs(sent.volumeIds),
           logsBloom: `0x${"0".repeat(512)}`,
         };
       }
@@ -460,8 +511,10 @@ export function mockChain(options: MockChainOptions = {}) {
   return {
     client,
     request,
-    /** The volume id carried by each transaction sent, in order. */
+    /** Every volume id sent, in order, across all transactions. */
     triggerCalls,
+    /** The volume ids carried by each transaction sent, in order. */
+    batches,
     /** Gas limit carried by each transaction actually sent. */
     sentGas,
     /** Nonce carried by each transaction actually sent. */
@@ -469,6 +522,10 @@ export function mockChain(options: MockChainOptions = {}) {
     calls,
     get multicallCount() {
       return multicallCount;
+    },
+    /** How many times `trigger(bytes32[])` was simulated with eth_call. */
+    get simulations() {
+      return simulations;
     },
     /** How many PostageStamp reads were made. */
     get postageReads() {

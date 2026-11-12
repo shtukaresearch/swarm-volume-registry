@@ -56,16 +56,15 @@ export function decodeCycleEvents(
 }
 
 /**
- * Reduce a successful single-volume `trigger` receipt to one outcome.
+ * One volume's outcome, from a successful batch receipt's decoded events.
  *
- * `trigger(bytes32)` touches exactly one volume and every branch of
- * `_triggerOne` returns immediately, so at most one of the three events can be
- * present. None of them means `noop` — the deficit was zero and the contract
- * did nothing, which is what a healthy volume looks like.
+ * Every branch of `_triggerOne` returns as soon as it emits, so a volume has
+ * at most one event. No event is a `noop`: the only silent branch is a zero
+ * deficit, and a volume that reverts takes the whole batch with it (ADR-0007),
+ * so a successful receipt cannot hide one.
  *
- * The `volumeId` filter is belt-and-braces: the receipt should carry only this
- * volume's logs, but attributing someone else's event to it would be a silent
- * lie, and the check is free.
+ * The receipt holds every volume in the batch, so the `volumeId` filter is what
+ * keeps one volume's event from being attributed to another.
  */
 export function summarizeVolume(
   decoded: DecodedEvents,

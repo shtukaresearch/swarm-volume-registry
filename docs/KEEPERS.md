@@ -27,11 +27,32 @@ keeper cannot compensate for missing payer authorization, allowance, or funds.
 
 ## Calling the contract
 
-For v2, call `trigger(bytes32)` separately for each volume.
+A keeper can call `trigger(bytes32)` for each volume, or `trigger(bytes32[])` for
+several volumes in one transaction.
 
-Do not use `trigger(bytes32[])` in a v2 keeper. Its gas accounting and per-item error
-handling make failures difficult to detect reliably. This interface is expected to
-improve in v3.
+From release v2-rc4, `trigger` reverts only on out-of-gas, a paused PostageStamp, or a
+fault in the registry or PostageStamp
+([ADR-0007](adr/0007-keeper-endpoints-revert-only-on-bugs.md)). No state of a volume,
+account or payer makes it revert. An unknown ID emits `TopupSkipped(NotFound)`, and a
+retired volume emits `TopupSkipped(NotActive)`.
+
+`trigger(bytes32[])` triggers each ID in turn, and reverts as a whole if any of them
+reverts. A successful batch has therefore processed every ID in it. Because one volume
+can revert the whole batch:
+
+- Simulate the batch with `eth_call` before sending it. If the simulation reverts,
+  simulate each volume alone to find the one responsible. Report it, and send the rest
+  without it.
+- Give every batch enough gas for all of its volumes to top up. A top-up's cost depends
+  on PostageStamp state, and running out of gas reverts the batch. Unused gas is not
+  charged.
+- Keep batches within the chain's per-transaction gas cap, where it has one (2^24 under
+  EIP-7825).
+
+Releases up to v2-rc3 differ. Their `trigger(bytes32[])` runs each ID in a `try/catch`
+that also absorbs out-of-gas, so a successful receipt does not show that every ID was
+processed, and `eth_estimateGas` underestimates the work. For those releases, call
+`trigger(bytes32)` for each volume, or check every ID that has no event in the receipt.
 
 Process every configured volume even if an earlier volume fails, but report the overall
 keeper run as failed and identify which volumes were affected.
@@ -116,17 +137,21 @@ Keeper calls may produce:
 
 - `Toppedup`: BZZ was added to the postage batch.
 - `VolumeRetired`: the volume no longer exists.
-- `TopupSkipped`: the volume still exists, but no payment was made.
+- `TopupSkipped`: no payment was made.
 
-`TopupSkipped` can indicate that the owner's account is no longer active or that
-payment failed because of payer balance, allowance, or token behavior. These conditions
-require action by the user or payer, not the keeper.
+`TopupSkipped` can indicate that the owner's account is no longer active (`NoAuth`) or
+that payment failed because of payer balance, allowance, or token behavior
+(`PaymentFailed`). These conditions require action by the user or payer, not the
+keeper. From v2-rc4, it also answers a trigger for an ID that was never a volume
+(`NotFound`), which points to a keeper configuration fault, or for a volume that has
+already retired (`NotActive`).
 
 Record the transaction hash and decoded outcome for each volume. Repeated skips should
 produce a warning or alert.
 
 A healthy volume may need no top-up and emit no event. A confirmed, successful
-single-volume transaction is still a successful keeper operation in that case.
+transaction is still a successful keeper operation for that volume. From v2-rc4 this
+holds within a batch too.
 
 ## Failure and warning signals
 
@@ -141,6 +166,7 @@ Treat at least the following as failures:
 - Failure to sign or submit a transaction.
 - Insufficient gas funds.
 - A reverted transaction.
+- A volume whose `trigger` reverts in simulation.
 - A transaction that does not receive a receipt within the configured timeout.
 
 Useful warnings include:
@@ -189,7 +215,7 @@ Without sBZZ, some operational behavior can still be tested:
 A complete end-to-end test requires an actual volume funded with sBZZ. With one
 available, also verify:
 
-- A successful `trigger(bytes32)` transaction.
+- A successful `trigger` transaction.
 - Receipt and event handling.
 - Processing continues when one configured volume fails.
 - Missed scheduled runs leave the intended safety margin.

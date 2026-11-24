@@ -23,6 +23,12 @@ import {
   sendTelegram,
   shouldNotify,
 } from "./notifications/telegram.js";
+import { defaultVerbosity, readVerbosity } from "./notifications/preferences.js";
+import {
+  ensureWebhook,
+  handleTelegramWebhook,
+  type WebhookRegistration,
+} from "./notifications/webhook.js";
 import {
   abortedReport,
   cycleReport,
@@ -38,6 +44,9 @@ import {
 export class KeeperRunFailed extends Error {
   override name = "KeeperRunFailed";
 }
+
+// Wrangler finds the Durable Object class by its export from the main module.
+export { PreferenceStore } from "./notifications/preferences.js";
 
 const message = (err: unknown): string =>
   err instanceof Error ? err.message : String(err);
@@ -60,11 +69,9 @@ export async function runScheduled(
     others: [env.TELEGRAM_BOT_TOKEN ?? "", env.PRIVATE_KEY ?? ""],
   });
 
-  let notifyWarnings = false;
   let report: KeeperReport;
   try {
     const config = readConfig(env);
-    notifyWarnings = config.notifyWarnings;
     report = await runCycle(config, run);
   } catch (err) {
     // Invalid configuration is a failure, never a quiet skip (KEEPERS.md).
@@ -80,17 +87,29 @@ export async function runScheduled(
   // Read leniently and separately, so a deployment whose wallet or RPC config
   // is broken can still report that it is.
   const telegram = readTelegramConfig(env);
-  if (telegram && shouldNotify(report, notifyWarnings)) {
-    const { sent, reason } = await sendTelegram(telegram, formatTelegramMessage(report));
-    if (!sent) {
-      console.error(
-        JSON.stringify({
-          kind: "keeper/notify-failed",
-          deployment: report.deployment,
-          status: report.status,
-          reason: scrub(reason ?? "unknown"),
-        }),
-      );
+  if (telegram && report.status !== "ok") {
+    // Failures always page, so the group's setting only matters for warnings.
+    // Reading it only then keeps a healthy run free of the extra subrequest.
+    const level =
+      report.status === "failure"
+        ? "error"
+        : await readVerbosity(
+            env.KEEPER_PREFS,
+            telegram.chatId,
+            defaultVerbosity(env.NOTIFY_WARNINGS?.trim().toLowerCase() === "true"),
+          );
+    if (shouldNotify(report, level)) {
+      const { sent, reason } = await sendTelegram(telegram, formatTelegramMessage(report));
+      if (!sent) {
+        console.error(
+          JSON.stringify({
+            kind: "keeper/notify-failed",
+            deployment: report.deployment,
+            status: report.status,
+            reason: scrub(reason ?? "unknown"),
+          }),
+        );
+      }
     }
   }
 
@@ -140,6 +159,17 @@ async function runCycle(config: Config, run: RunInput): Promise<KeeperReport> {
   });
 }
 
+/** A change or a failure is worth a line; a webhook already in place is not. */
+function logWebhook(registration: WebhookRegistration | undefined): void {
+  if (registration?.status === "registered") {
+    console.log(JSON.stringify({ kind: "keeper/webhook-registered" }));
+  } else if (registration?.status === "failed") {
+    console.error(
+      JSON.stringify({ kind: "keeper/webhook-failed", reason: registration.reason }),
+    );
+  }
+}
+
 export default {
   async scheduled(controller, env) {
     // The next tick is the retry. A platform retry could overlap it on the
@@ -151,6 +181,8 @@ export default {
       cron: controller.cron,
       scheduledTime: controller.scheduledTime,
     });
+    // After the run, so a slow Telegram cannot eat into the cycle's time.
+    logWebhook(await ensureWebhook(env));
     if (report.status === "failure") throw new KeeperRunFailed(report.summary);
   },
 
@@ -161,7 +193,9 @@ export default {
    * *last run* worked is in Workers Logs and Telegram, not here.
    */
   async fetch(request, env) {
-    if (new URL(request.url).pathname !== "/health") {
+    const { pathname } = new URL(request.url);
+    if (pathname === "/telegram") return handleTelegramWebhook(request, env);
+    if (pathname !== "/health") {
       return new Response("not found\n", { status: 404 });
     }
     try {

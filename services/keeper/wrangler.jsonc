@@ -39,7 +39,13 @@
   // bare `wrangler deploy` with no `--env` fails on missing secrets instead of
   // quietly creating a cron-less `keeper` Worker.
   "secrets": {
-    "required": ["PRIVATE_KEY", "RPC_URL", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"]
+    "required": [
+      "PRIVATE_KEY",
+      "RPC_URL",
+      "TELEGRAM_BOT_TOKEN",
+      "TELEGRAM_CHAT_ID",
+      "TELEGRAM_WEBHOOK_SECRET"
+    ]
   },
 
   // Per env. `vars` and `secrets` are not inherited, hence the repetition.
@@ -61,8 +67,11 @@
     // transactions for up to 7 min (CYCLE_TIMEOUT_MS), roughly 35 volumes at
     // 12 s blocks, capped at 30. Each receipt gets up to 2 min: about 1 in 15
     // Sepolia transactions takes 3–5 blocks to land, longer than the old 30 s.
-    // Warnings go to Telegram so skipped top-ups, retirements and RPC failovers
-    // cannot make a run look healthy.
+    // Warnings go to Telegram unless the group sets `/verbosity error`; skipped
+    // top-ups, retirements and RPC failovers are warnings by default.
+    // With the optional TELEGRAM_WEBHOOK_URL secret set, each run points the
+    // bot's webhook at it if it is not already there; Telegram allows one per
+    // bot, so only one env per bot sets it.
     "sepolia-v2-rc4": {
       "name": "keeper-cloudflare-sepolia-v2-rc4",
       "vars": {
@@ -76,15 +85,29 @@
         "RECEIPT_TIMEOUT_MS": "120000",
         "CONFIRMATIONS": "1"
       },
+      "durable_objects": {
+        "bindings": [{ "name": "KEEPER_PREFS", "class_name": "PreferenceStore" }]
+      },
       "secrets": {
-        "required": ["PRIVATE_KEY", "RPC_URL", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"]
+        "required": [
+          "PRIVATE_KEY",
+          "RPC_URL",
+          "TELEGRAM_BOT_TOKEN",
+          "TELEGRAM_CHAT_ID",
+          "TELEGRAM_WEBHOOK_SECRET"
+        ]
       },
       "triggers": { "crons": ["*/10 * * * *"] },
-      // This Worker once ran #48's PreferenceStore Durable Object; v2 deletes
-      // it and its stored preferences. No other env ever had it.
+      // `KEEPER_PREFS` stores the Telegram group's `/verbosity` setting. A
+      // Durable Object is created with the Worker by a migration, unlike a KV
+      // namespace, which would have to exist in the account before the Worker
+      // could bind it. Migrations are per Worker, so this history is this
+      // Worker's own: it ran #48's PreferenceStore at v1, v2 deleted it with
+      // its stored preferences, and v3 creates it again, empty.
       "migrations": [
         { "tag": "v1", "new_sqlite_classes": ["PreferenceStore"] },
-        { "tag": "v2", "deleted_classes": ["PreferenceStore"] }
+        { "tag": "v2", "deleted_classes": ["PreferenceStore"] },
+        { "tag": "v3", "new_sqlite_classes": ["PreferenceStore"] }
       ]
     }
   }

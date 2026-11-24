@@ -11,6 +11,7 @@ import worker, { KeeperRunFailed } from "../src/index.js";
 import type { KeeperEnv } from "../src/config.js";
 import type { KeeperReport } from "../src/reporting.js";
 import { REGISTRY, mockChain, volumeId, type MockVolume } from "./mock-chain.js";
+import { memoryPrefs } from "./mock-prefs.js";
 
 /** anvil account #1 — a well-known throwaway key, test fixtures only. */
 const KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
@@ -18,18 +19,21 @@ const TOKEN = "123456789:AAtest-BOTSECRET-fixtures-only";
 const LIVE = "https://live.example/v3/LIVESECRET";
 const DEAD = "https://dead.example/v3/DEADSECRET";
 const SECRETS = ["LIVESECRET", "DEADSECRET", "BOTSECRET", KEY.slice(2)];
+const CHAT = "-1001234567890";
+const WEBHOOK = "https://keeper-test.example.workers.dev/telegram";
+const WEBHOOK_SECRET = "test-webhook-secret-0123456789";
 
 const due = (n: number): MockVolume => ({
   volumeId: volumeId(n),
   batch: { normalisedBalance: 1_000_000n + 1n },
 });
 
-const env = (overrides: Record<string, string | undefined> = {}): KeeperEnv =>
+const env = (overrides: Record<string, unknown> = {}): KeeperEnv =>
   ({
     DEPLOYMENT_NAME: "keeper-test",
     CHAIN_ID: "11155111",
     REGISTRY_ADDRESS: REGISTRY,
-    TELEGRAM_CHAT_ID: "-1001234567890",
+    TELEGRAM_CHAT_ID: CHAT,
     NOTIFY_WARNINGS: "false",
     MIN_BALANCE_WEI: "0",
     MAX_VOLUMES_PER_CYCLE: "10",
@@ -48,11 +52,20 @@ type Chain = ReturnType<typeof mockChain>;
 /** A chain; an endpoint that is down; or one that fails only certain methods. */
 type Route = Chain | "down" | { chain: Chain; httpErrorOn: string[] };
 let rpc: Map<string, Route>;
-let telegram: { status: number; sent: string[] };
+let telegram: { status: number; sent: string[]; webhook: string; setWebhook: number };
 let rpcRequests: string[];
 
 function serve(url: string, init?: RequestInit): Promise<Response> | Response {
   if (url.startsWith("https://api.telegram.org/")) {
+    const method = url.split("/").pop();
+    if (method === "getWebhookInfo") {
+      return Response.json({ ok: true, result: { url: telegram.webhook } });
+    }
+    if (method === "setWebhook") {
+      telegram.setWebhook++;
+      telegram.webhook = JSON.parse(String(init?.body)).url;
+      return Response.json({ ok: true, result: true });
+    }
     telegram.sent.push(JSON.parse(String(init?.body)).text);
     return new Response(telegram.status === 200 ? '{"ok":true}' : '{"ok":false}', {
       status: telegram.status,
@@ -82,7 +95,7 @@ const spies: Array<{ mockRestore(): void }> = [];
 
 beforeEach(() => {
   rpc = new Map();
-  telegram = { status: 200, sent: [] };
+  telegram = { status: 200, sent: [], webhook: "", setWebhook: 0 };
   rpcRequests = [];
   for (const level of ["log", "warn", "error"] as const) {
     logs[level] = [];
@@ -268,6 +281,48 @@ describe("scheduled", () => {
     expect(notify.reason).toContain("500");
   });
 
+  // The group's /verbosity outranks NOTIFY_WARNINGS, but never silences a failure.
+  test("the group's saved level decides whether warnings page", async () => {
+    rpc.set(DEAD, "down");
+    rpc.set(LIVE, mockChain({ volumes: [due(1)] }));
+    const failover = { RPC_URL: `${DEAD},${LIVE}` };
+
+    await scheduled(env({ ...failover, NOTIFY_WARNINGS: "true", KEEPER_PREFS: memoryPrefs({ [CHAT]: "error" }) }));
+    expect(telegram.sent).toEqual([]);
+
+    await scheduled(env({ ...failover, NOTIFY_WARNINGS: "false", KEEPER_PREFS: memoryPrefs({ [CHAT]: "warn" }) }));
+    expect(telegram.sent).toHaveLength(1);
+  });
+
+  test("a failure pages even at error, without reading the level", async () => {
+    rpc.set(LIVE, mockChain({ volumes: [due(1)], revertTx: true }));
+    const prefs = memoryPrefs({ [CHAT]: "error" });
+    const get = vi.spyOn(prefs, "get");
+
+    await scheduled(env({ KEEPER_PREFS: prefs }));
+
+    expect(telegram.sent).toHaveLength(1);
+    expect(get).not.toHaveBeenCalled();
+  });
+
+  test("a run points the bot's webhook at this Worker, once", async () => {
+    rpc.set(LIVE, mockChain({ volumes: [] }));
+    const bindings = env({ TELEGRAM_WEBHOOK_URL: WEBHOOK, TELEGRAM_WEBHOOK_SECRET: WEBHOOK_SECRET });
+
+    await scheduled(bindings);
+    expect(telegram.webhook).toBe(WEBHOOK);
+    expect(logs.log.map((l) => JSON.parse(l).kind)).toContain("keeper/webhook-registered");
+
+    await scheduled(bindings);
+    expect(telegram.setWebhook).toBe(1);
+  });
+
+  test("a deployment without TELEGRAM_WEBHOOK_URL leaves the webhook alone", async () => {
+    rpc.set(LIVE, mockChain({ volumes: [] }));
+    await scheduled(env({ TELEGRAM_WEBHOOK_SECRET: WEBHOOK_SECRET }));
+    expect(telegram.setWebhook).toBe(0);
+  });
+
   test("DRY_RUN sends nothing, and says so rather than looking healthy", async () => {
     const chain = mockChain({ volumes: [due(1)] });
     rpc.set(LIVE, chain);
@@ -319,5 +374,30 @@ describe("GET /health", () => {
 
   test("anything else is a 404", async () => {
     expect((await get("/")).status).toBe(404);
+  });
+});
+
+describe("POST /telegram", () => {
+  const post = (secret: string, bindings: KeeperEnv) =>
+    worker.fetch(
+      new Request("https://keeper-test.example.workers.dev/telegram", {
+        method: "POST",
+        headers: { "X-Telegram-Bot-Api-Secret-Token": secret },
+        body: JSON.stringify({
+          update_id: 1,
+          message: { text: "/verbosity error", chat: { id: Number(CHAT) }, from: { id: 1 } },
+        }),
+      }) as unknown as Parameters<typeof worker.fetch>[0],
+      bindings,
+    );
+
+  test("is routed to the command handler, and touches no RPC", async () => {
+    const prefs = memoryPrefs();
+    const bindings = env({ TELEGRAM_WEBHOOK_SECRET: WEBHOOK_SECRET, KEEPER_PREFS: prefs });
+
+    expect((await post("wrong-secret-0123456789", bindings)).status).toBe(403);
+    expect((await post(WEBHOOK_SECRET, bindings)).status).toBe(200);
+    expect(prefs.levels.get(CHAT)).toBe("error");
+    expect(rpcRequests).toEqual([]);
   });
 });

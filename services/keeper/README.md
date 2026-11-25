@@ -1,8 +1,8 @@
 # keeper
 
-The Swarm `VolumeRegistry` keeper: one Cloudflare Worker per registry deployment. Each scheduled run enumerates the registry's active volumes, sends them through the batched `trigger(bytes32[])`, up to 8 and 4M gas to a transaction, and reports what the contract did to each. A batch reverts as a whole when any of its volumes does ([ADR-0007](../../docs/adr/0007-keeper-endpoints-revert-only-on-bugs.md)), so each batch's gas is estimated before it is sent, and a batch whose estimate reverts is reported with the decoded reason and not sent.
+The Swarm `VolumeRegistry` keeper: one deployment per registry deployment, on a Cloudflare Worker or AWS Lambda from the same source. Each scheduled run enumerates the registry's active volumes, sends them through the batched `trigger(bytes32[])`, up to 8 and 4M gas to a transaction, and reports what the contract did to each. A batch reverts as a whole when any of its volumes does ([ADR-0007](../../docs/adr/0007-keeper-endpoints-revert-only-on-bugs.md)), so each batch's gas is estimated before it is sent, and a batch whose estimate reverts is reported with the decoded reason and not sent.
 
-Cloudflare Cron Triggers are the only scheduler. GitHub Actions tests the Worker on every PR, and `keeper-deploy.yml` deploys every env in `wrangler.jsonc` when a keeper change merges to `main`.
+Cloudflare Cron Triggers are the scheduler for the Workers; an EventBridge rule drives the Lambdas. GitHub Actions tests the Worker on every PR, and `keeper-deploy.yml` deploys every env in `wrangler.jsonc` when a keeper change merges to `main`. AWS deploys are run by hand ([AWS Lambda](#aws-lambda)).
 
 | Env | Worker | Chain | Registry | Schedule |
 |---|---|---|---|---|
@@ -121,6 +121,28 @@ Notes:
 * `HEALTH` is unauthenticated and reveals only the wallet address, not secret values.
 * Keep `PRIVATE_KEY` per deployment; keys are never shared. `TELEGRAM_CHAT_ID` is also a per-deployment secret, even when deployments post to the same group.
 * After rotation, the next cron tick uses the new value; no Workers restart needed. Old secrets are overwritten in place — delete the local `.secrets.*` file after.
+
+## AWS Lambda
+
+The same source also runs on AWS Lambda: `src/aws/handler.ts` calls the Worker's `scheduled()` and `fetch()` directly, `src/aws/websocket.ts` stands in for viem's `isows` import, and an EventBridge rule replaces the Cron Trigger. Each wrangler env gets its own pair of functions and rule, named `keeper-aws-<deployment>` for `keeper-cloudflare-<deployment>` — a deployment's Cloudflare and AWS keepers never share a name, a wallet is per deployment, and running both is a way to survive one platform's outage.
+
+```bash
+# bundle only, as CI's check:aws would
+pnpm check:aws
+# build, then create or update both functions, their URL and the rule
+AWS_PROFILE=<profile> pnpm aws deploy sepolia-v2-rc4 --secrets-file .secrets.sepolia-aws
+# first deploy, with the rule left off
+AWS_PROFILE=<profile> pnpm aws deploy sepolia-v2-rc4 --secrets-file .secrets.sepolia-aws --paused
+```
+
+- **Credentials** come from `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`(/`AWS_SESSION_TOKEN`), or from `aws configure export-credentials` for `AWS_PROFILE`, so `aws sso login` suffices. Region from `AWS_REGION`/`AWS_DEFAULT_REGION`, default `eu-central-1`. The deploy uses aws4fetch (a few KB) and the REST APIs, not the AWS SDK.
+- **Secrets** are the env's `secrets.required`, given with `--secrets-file` or kept from the deployed function, as `wrangler deploy` does. The deploy refuses without all of them.
+- **Account setup** is a `lambda-cron-exec` role that only writes logs, and the `LambdaCronDeveloper` permission set.
+- **One run at a time**: each function reserves one concurrent execution, retries are off, and the Lambda timeout equals the cron interval.
+- **Start delay**: every run waits a random 60–180 s before the cycle, so it does not reach the same volumes at the same second as a Cloudflare keeper on the same schedule. The deploy takes the longest wait out of `CYCLE_TIMEOUT_MS` (420 s becomes 240 s), so the run still ends inside its timeout. `test/config.test.ts` holds each env to that budget.
+- **Runtime**: `nodejs24.x`, `arm64`, 256 MB. `/health` is a separate function behind a public Function URL, so health traffic cannot take the keeper's single concurrent run.
+
+A merge deploys the Workers only: after a keeper change, redeploy each AWS env by hand with the commands above. Run the function once (`aws lambda invoke --function-name keeper-aws-<deployment> --payload '{}' --cli-binary-format raw-in-base64-out out.json`) and read the `keeper/run` line in CloudWatch, not the empty `out.json`.
 
 ## Working on it
 

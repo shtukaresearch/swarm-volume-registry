@@ -140,11 +140,15 @@ A test deployed a registry with a different, otherwise valid ERC20. Deployment s
 
 [deployments.toml:21](../contracts/deployments.toml#L21) selects **17,280 blocks**, while the design proposes **120,960** for Gnosis v2. Using the existing profile would deploy a one-day target. Select and verify the intended immutable value explicitly.
 
+> Addressed 2026-11-25 by Andrew W. Macpherson with Claude Opus 5.5 in commit `0f605fe4`: the new profile `gnosis-postage-v0.9.4-7d` in [deployments.toml](../contracts/deployments.toml) sets `grace_blocks = 120960`, and [RELEASING.md](../RELEASING.md) verifies the Gnosis v2 deployment against it.
+
 ### Compiler assurance
 
 The build pins optimized, via-IR Solidity **0.8.19** in [foundry.toml](../contracts/foundry.toml). Solidity's known-bug list, consulted during this review, includes `SOL-2026-7` (`YulOptimizerKnowledgeBaseStaleBookkeeping`), affecting that optimizer/version combination and fixed in 0.8.38.
 
 No miscompilation was demonstrated in this contract. This remains a build-assurance concern requiring compiler upgrade validation or a documented applicability analysis. See the [Solidity known-bug list](https://docs.soliditylang.org/en/latest/bugs.html).
+
+> Addressed 2026-11-25 by Andrew W. Macpherson with Claude Opus 5.5 in commit `0f605fe4`: [foundry.toml](../contracts/foundry.toml) pins Solidity 0.8.38 (`0.8.38+commit.1835d247`, released 2026-10-22). The two bugs the known-bug list still records for 0.8.38, `OverlappingRecursiveStorageStructCopyCorruption` and its via-IR variant, require recursive structs in storage, which `VolumeRegistry` does not declare. The existing suite passes under 0.8.38.
 
 ## Accepted security boundaries
 

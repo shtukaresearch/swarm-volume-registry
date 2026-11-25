@@ -25,6 +25,19 @@ verifier = "blockscout"
 verifier_url = "https://gnosis.blockscout.com/api/"
 explorer_url = "https://gnosis.blockscout.com/address/{address}"
 
+# Seven-day runway (120960 blocks at 5-second blocks), the Gnosis v2 value
+# (DESIGN §10.1). Same PostageStamp as gnosis-postage-v0.9.4.
+[profiles."gnosis-postage-v0.9.4-7d"]
+chain_id = 100
+postage_stamp = "0x45a1502382541Cd610CC9068e88727426b696293"
+bzz = "0xdBF3Ea6F5beE45c02255B2c26a16F300502F68da"
+grace_blocks = 120960
+bzz_permit_expiry = true
+deployment_network = "gnosis"
+verifier = "blockscout"
+verifier_url = "https://gnosis.blockscout.com/api/"
+explorer_url = "https://gnosis.blockscout.com/address/{address}"
+
 [profiles."sepolia-postage-v0.9.4"]
 chain_id = 11155111
 postage_stamp = "0xcdfdC3752caaA826fE62531E0000C40546eC56A6"

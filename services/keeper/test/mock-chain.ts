@@ -217,6 +217,7 @@ export function mockChain(options: MockChainOptions = {}) {
   const sentGas: bigint[] = [];
   const sentNonces: number[] = [];
   let estimates = 0;
+  const estimateBlocks: string[] = [];
   const calls: string[] = [];
   const receipts = new Map<Hex, { volumeIds: readonly Hex[] }>();
   let multicallCount = 0;
@@ -228,8 +229,11 @@ export function mockChain(options: MockChainOptions = {}) {
 
   const isActive = (v: MockVolume | undefined) => !!v && (v.status ?? 1) === 1;
 
-  /** `_triggerOne`'s decision, in the same order the contract makes it. */
-  function outcomeFor(id: Hex): Emission {
+  /**
+   * `_triggerOne`'s decision, in the same order the contract makes it.
+   * `out` is PostageStamp's total outpayment where it runs.
+   */
+  function outcomeFor(id: Hex, out = outPayment): Emission {
     const v = find(id);
     if (!v) return { event: "TopupSkipped", reason: SKIP.notFound };
     if (!isActive(v)) return { event: "TopupSkipped", reason: SKIP.notActive };
@@ -237,7 +241,7 @@ export function mockChain(options: MockChainOptions = {}) {
     const depth = v.depth ?? 20;
     const chunkSigner = v.chunkSigner ?? SIGNER;
 
-    if (!batch || batch.normalisedBalance <= outPayment) {
+    if (!batch || batch.normalisedBalance <= out) {
       return { event: "VolumeRetired", reason: RETIRE.batchDied };
     }
     if ((batch.owner ?? chunkSigner) !== chunkSigner) {
@@ -254,7 +258,7 @@ export function mockChain(options: MockChainOptions = {}) {
       return { event: "TopupSkipped", reason: SKIP.noAuth };
     }
 
-    const remaining = batch.normalisedBalance - outPayment;
+    const remaining = batch.normalisedBalance - out;
     const target = lastPrice * graceBlocks;
     if (remaining >= target) return undefined; // I5: zero deficit is silent
     if (v.payerBroke) {
@@ -320,20 +324,26 @@ export function mockChain(options: MockChainOptions = {}) {
     return undefined;
   }
 
-  /** `eth_estimateGas` for `trigger(bytes32[])`, which is the only thing estimated. */
-  function estimateGas(tx: { to: Address; data: Hex }): Hex {
+  /**
+   * `eth_estimateGas` for `trigger(bytes32[])`, which is the only thing
+   * estimated. As on geth and reth, `pending` runs on an empty block after
+   * the latest, which drains every batch by one more block's price.
+   */
+  function estimateGas(tx: { to: Address; data: Hex }, block: unknown): Hex {
     if (tx.to.toLowerCase() !== REGISTRY.toLowerCase()) {
       throw new Error(`mock chain: no estimate for ${tx.to}`);
     }
     const { functionName, args } = decodeFunctionData({ abi: registryAbi, data: tx.data });
     if (functionName !== "trigger") throw new Error(`mock registry: no estimate for ${functionName}`);
     estimates += 1;
+    estimateBlocks.push(String(block ?? "latest"));
+    const out = block === "pending" ? outPayment + lastPrice : outPayment;
     const ids = (args as readonly [readonly Hex[]])[0];
     const reason = revertFor(ids);
     if (reason !== undefined) throw new Revert(reason);
     if (ids.some((id) => find(id)?.starve)) throw new GasCapExceeded();
     const gas = ids.reduce<bigint>(
-      (sum, id) => sum + (outcomeFor(id)?.event === "Toppedup" ? MOCK_GAS.topUp : MOCK_GAS.other),
+      (sum, id) => sum + (outcomeFor(id, out)?.event === "Toppedup" ? MOCK_GAS.topUp : MOCK_GAS.other),
       MOCK_GAS.base,
     );
     return numberToHex(gas);
@@ -464,7 +474,7 @@ export function mockChain(options: MockChainOptions = {}) {
       case "eth_call":
         return handleCall(args[0] as { to: Address; data: Hex });
       case "eth_estimateGas":
-        return estimateGas(args[0] as { to: Address; data: Hex });
+        return estimateGas(args[0] as { to: Address; data: Hex }, args[1]);
       case "eth_getBalance":
         return numberToHex(options.balance ?? 10n ** 18n);
       case "eth_getTransactionCount":
@@ -549,6 +559,8 @@ export function mockChain(options: MockChainOptions = {}) {
     get estimates() {
       return estimates;
     },
+    /** The block tag each estimate ran at. */
+    estimateBlocks,
     /** How many PostageStamp reads were made. */
     get postageReads() {
       return postageReads;

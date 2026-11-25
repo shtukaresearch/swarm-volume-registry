@@ -26,34 +26,41 @@ export type TriggerReturnType = Hex;
 /** EIP-7825: no transaction may carry a gas limit above 2^24. */
 export const TX_GAS_LIMIT_CAP = 16_777_216n;
 
-/** What a batch's gas estimate is multiplied by, for PostageStamp-dependent variance. */
-export const GAS_MULTIPLIER = 2n;
+/**
+ * Percent added to a batch's `pending` estimate, for PostageStamp writes by
+ * others between estimate and inclusion. Replaying 300 Gnosis registry
+ * transactions (2026-11), the estimate only ever fell short across the
+ * sender's own earlier write, which this keeper waits out; across others'
+ * writes it never did.
+ */
+export const GAS_HEADROOM_PERCENT = 5n;
 
 /**
- * Gas reserved per volume on top of the estimate: one top-up, which has cost
- * from ~400k to ~1.5M on Sepolia.
+ * Gas limit a batch is shrunk to fit, so one keeper transaction never claims
+ * a large share of a block. A single volume above it is still sent.
  */
-export const TOPUP_RESERVE = 1_000_000n;
+export const MAX_BATCH_GAS = 4_000_000n;
 
-/**
- * Volumes per transaction. Eight top-ups at the observed worst case of ~1.5M
- * each fit under {@link TX_GAS_LIMIT_CAP}.
- */
+/** Most volumes per transaction; {@link MAX_BATCH_GAS} usually binds first. */
 export const BATCH_SIZE = 8;
 
 /**
- * The gas limit to send `trigger(volumeIds)` with: its `eth_estimateGas` times
- * {@link GAS_MULTIPLIER}, plus {@link TOPUP_RESERVE} per volume, capped at
+ * The gas limit to send `trigger(volumeIds)` with: its `eth_estimateGas` at the
+ * `pending` block plus {@link GAS_HEADROOM_PERCENT}, capped at
  * {@link TX_GAS_LIMIT_CAP}.
  *
  * From v2-rc4 the estimate is meaningful (ADR-0007): nothing in the batch
- * swallows out-of-gas any more, so it measures the work actually done. That
- * work can still grow before inclusion, and running out of gas reverts the
- * whole batch. A top-up's cost depends on PostageStamp state, which the
- * multiplier covers. And a volume estimated at target takes the cheap path,
- * ~22–50k, but every block drains its batch, so by inclusion it may need a
- * top-up. No multiplier covers that, so each volume carries a top-up's worth
- * of reserve. Unused gas is not charged.
+ * swallows out-of-gas any more, so it measures the work actually done. What
+ * that work is depends on the block: a volume topped up in the latest block
+ * is at target there and takes the cheap path, ~22–50k, but every block
+ * drains its batch, so one block later it needs a top-up. Geth and reth both
+ * estimate `pending` on an empty block after the latest, so every volume
+ * that will need a top-up at inclusion already takes that path in the
+ * estimate. Blocks further ahead estimate the same. The keeper estimates
+ * only after its previous batch's receipt, so its own writes are already in
+ * the state. Unused gas is not charged, and the receipt's `gasUsed` stays
+ * ~15% below the estimate: storage refunds are deducted only after
+ * execution, and each external call holds back 1/64 of the gas left.
  *
  * The estimate doubles as the batch's simulation. It throws in the same cases
  * the transaction would revert: out of gas, a paused PostageStamp, or a fault.
@@ -81,9 +88,10 @@ export async function estimateTriggerGas<
     functionName: "trigger",
     args: [volumeIds],
     account,
+    blockTag: "pending",
     prepare: false,
   } as never);
-  const limit = estimate * GAS_MULTIPLIER + BigInt(volumeIds.length) * TOPUP_RESERVE;
+  const limit = estimate + (estimate * GAS_HEADROOM_PERCENT + 99n) / 100n;
   return limit < TX_GAS_LIMIT_CAP ? limit : TX_GAS_LIMIT_CAP;
 }
 

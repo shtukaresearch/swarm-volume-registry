@@ -3,8 +3,7 @@ import { collectActiveVolumes } from "../src/keeper/actions/collectActiveVolumes
 import { getActiveVolumeCount } from "../src/keeper/actions/getActiveVolumeCount.js";
 import { rotateVolumes, runKeeperCycle } from "../src/keeper/actions/runKeeperCycle.js";
 import {
-  GAS_MULTIPLIER,
-  TOPUP_RESERVE,
+  GAS_HEADROOM_PERCENT,
   TX_GAS_LIMIT_CAP,
   estimateTriggerGas,
   trigger,
@@ -30,8 +29,18 @@ const funded = (n: number): MockVolume => ({
 
 const due = (n: number): MockVolume => ({
   volumeId: volumeId(n),
-  batch: { normalisedBalance: OUT + 1n },
+  batch: { normalisedBalance: OUT + TARGET / 2n },
 });
+
+/** Topped up in the latest block: nothing due there, a top-up one block on. */
+const atTarget = (n: number): MockVolume => ({
+  volumeId: volumeId(n),
+  batch: { normalisedBalance: OUT + TARGET },
+});
+
+/** The limit an estimate is sent with. */
+const withHeadroom = (estimate: bigint) =>
+  estimate + (estimate * GAS_HEADROOM_PERCENT + 99n) / 100n;
 
 describe("read actions", () => {
   test("getActiveVolumeCount counts the index", async () => {
@@ -67,27 +76,28 @@ describe("trigger", () => {
     expect(chain.batches).toEqual([[volumeId(1), volumeId(2)]]);
   });
 
-  // A top-up's cost depends on PostageStamp state, and a volume estimated at
-  // target may need one by inclusion. Running out of gas reverts the batch.
-  test("sends twice its estimate, plus a top-up's reserve per volume", async () => {
+  // A top-up's cost depends on PostageStamp state, which can change before
+  // inclusion. Running out of gas reverts the batch.
+  test("sends its pending estimate plus headroom", async () => {
     const chain = mockChain({ volumes: [due(1), funded(2)] });
     await trigger(chain.client, { registry: REGISTRY, volumeIds: [volumeId(1), volumeId(2)] });
 
     const estimate = MOCK_GAS.base + MOCK_GAS.topUp + MOCK_GAS.other;
-    expect(chain.sentGas).toEqual([estimate * GAS_MULTIPLIER + 2n * TOPUP_RESERVE]);
+    expect(chain.sentGas).toEqual([withHeadroom(estimate)]);
     expect(chain.estimates).toBe(1);
   });
 
   // The incident in docs/KEEPERS.md: estimated at target, a top-up by inclusion.
-  test("a volume estimated at target still has room to top up", async () => {
-    const chain = mockChain({ volumes: [funded(1)] });
+  test("a volume at target in the latest block is estimated as a top-up", async () => {
+    const chain = mockChain({ volumes: [atTarget(1)] });
     const gas = await estimateTriggerGas(chain.client, { registry: REGISTRY, volumeIds: [volumeId(1)] });
 
-    expect(gas).toBeGreaterThan(MOCK_GAS.base + MOCK_GAS.topUp);
+    expect(chain.estimateBlocks).toEqual(["pending"]);
+    expect(gas).toBe(withHeadroom(MOCK_GAS.base + MOCK_GAS.topUp));
   });
 
   test("never asks for more than the transaction cap", async () => {
-    const volumes = Array.from({ length: 8 }, (_, i) => due(i + 1));
+    const volumes = Array.from({ length: 16 }, (_, i) => due(i + 1));
     const chain = mockChain({ volumes });
     const gas = await estimateTriggerGas(chain.client, {
       registry: REGISTRY,
@@ -205,9 +215,28 @@ describe("runKeeperCycle", () => {
     await runKeeperCycle(chain.client, { registry: REGISTRY });
 
     expect(chain.estimates).toBe(1);
-    expect(chain.sentGas).toEqual([
-      (MOCK_GAS.base + MOCK_GAS.topUp + MOCK_GAS.other) * GAS_MULTIPLIER + 2n * TOPUP_RESERVE,
-    ]);
+    expect(chain.sentGas).toEqual([withHeadroom(MOCK_GAS.base + MOCK_GAS.topUp + MOCK_GAS.other)]);
+  });
+
+  // Eight top-ups at the mock's 1M each are 8.45M with headroom: three fit
+  // under 4M, then three of the remaining five, then the last two.
+  test("shrinks a batch whose limit is above maxBatchGas", async () => {
+    const chain = mockChain({ volumes: Array.from({ length: 8 }, (_, i) => due(i + 1)) });
+    const result = await runKeeperCycle(chain.client, { registry: REGISTRY });
+
+    expect(result.ok).toBe(true);
+    expect(chain.batches.map((b) => b.length)).toEqual([3, 3, 2]);
+    expect(chain.estimates).toBe(5);
+    for (const gas of chain.sentGas) expect(gas).toBeLessThanOrEqual(4_000_000n);
+    expect(chain.triggerCalls).toEqual(inCycleOrder([1, 2, 3, 4, 5, 6, 7, 8]));
+  });
+
+  test("sends a single volume above maxBatchGas", async () => {
+    const chain = mockChain({ volumes: [due(1)] });
+    const result = await runKeeperCycle(chain.client, { registry: REGISTRY, maxBatchGas: 500_000n });
+
+    expect(result.ok).toBe(true);
+    expect(chain.sentGas).toEqual([withHeadroom(MOCK_GAS.base + MOCK_GAS.topUp)]);
   });
 
   test("splits the attempted volumes into transactions of batchSize", async () => {
@@ -258,7 +287,7 @@ describe("per-volume outcomes", () => {
     const chain = mockChain({ volumes: [due(1)] });
     const result = await runKeeperCycle(chain.client, { registry: REGISTRY });
 
-    const expected = (TARGET - 1n) << 20n;
+    const expected = (TARGET - TARGET / 2n) << 20n;
     expect(result.toppedUp).toEqual([{ volumeId: volumeId(1), amount: expected }]);
     expect(result.volumes[0]).toMatchObject({
       outcome: "toppedUp",

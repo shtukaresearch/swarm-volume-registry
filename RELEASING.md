@@ -207,7 +207,7 @@ require an API key:
 
 ```sh
 export RPC_URL="https://rpc.gnosischain.com"
-python3 script/verify_deployment.py gnosis-postage-v0.9.4 --version v2
+python3 script/verify_deployment.py gnosis-postage-v0.9.4-7d --version v2
 ```
 
 Confirm that the Gnosis Blockscout contract page shows the verified source at:

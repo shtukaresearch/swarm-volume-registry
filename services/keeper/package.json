@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Swarm VolumeRegistry keeper — one Cloudflare Worker per registry deployment",
+  "description": "Swarm VolumeRegistry keeper \u2014 one implementation, deployed per chain to a Cloudflare Worker or AWS Lambda",
   "scripts": {
     "dev": "wrangler dev --env sepolia-v2-rc4",
     "check:deploy": "wrangler deploy --dry-run --env sepolia-v2-rc4 --outdir dist/sepolia-v2-rc4",
@@ -11,13 +11,20 @@
     "check:types": "wrangler types --strict-vars false --check",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "deployments": "node scripts/deployments.mjs"
+    "deployments": "node scripts/deployments.mjs",
+    "aws": "node scripts/aws.ts",
+    "check:aws": "node scripts/aws.ts build",
+    "deploy:aws:sepolia-v2-rc4": "node scripts/aws.ts deploy sepolia-v2-rc4"
   },
   "dependencies": {
     "viem": "2.55.16"
   },
   "devDependencies": {
+    "@types/aws-lambda": "^8.10.164",
     "@types/node": "^24.19.1",
+    "aws4fetch": "^1.0.20",
+    "esbuild": "^0.28.2",
+    "fflate": "^0.8.3",
     "typescript": "^5.6.3",
     "vitest": "^5.0.3",
     "wrangler": "^4.134.0"

@@ -27,7 +27,7 @@ import type {
   VolumeView,
 } from "../types.js";
 import { collectActiveVolumes } from "./collectActiveVolumes.js";
-import { BATCH_SIZE, estimateTriggerGas, trigger } from "./trigger.js";
+import { BATCH_SIZE, MAX_BATCH_GAS, estimateTriggerGas, trigger } from "./trigger.js";
 
 export type RunKeeperCycleParameters = {
   registry: Address;
@@ -37,8 +37,10 @@ export type RunKeeperCycleParameters = {
   pageSize?: number;
   /** Volumes attempted per cycle. Default 50; the rest defers to the next. */
   maxVolumesPerCycle?: number;
-  /** Volumes per transaction. Default {@link BATCH_SIZE}. */
+  /** Most volumes per transaction. Default {@link BATCH_SIZE}. */
   batchSize?: number;
+  /** Gas limit a batch is shrunk to fit. Default {@link MAX_BATCH_GAS}. */
+  maxBatchGas?: bigint;
   /** Default 1. */
   confirmations?: number;
   /** Per-transaction receipt wait, in ms. Default 60_000. */
@@ -128,6 +130,7 @@ export function rotateVolumes<T>(ids: readonly T[], blockNumber: bigint): T[] {
  * estimate reverts only on out of gas, a paused PostageStamp or a fault, and
  * leaving a volume out fixes none of them. So a batch whose estimate reverts
  * is not sent, and every volume in it is `failed` with the decoded reason.
+ * A batch whose limit is above `maxBatchGas` sends fewer volumes instead.
  *
  * In a mined batch, every volume emits `Toppedup`, `TopupSkipped` or
  * `VolumeRetired`, or nothing when it needed nothing, which is a `noop`. A
@@ -182,6 +185,7 @@ export async function runKeeperCycle<
     mode = { type: "all" },
     maxVolumesPerCycle = 50,
     batchSize = BATCH_SIZE,
+    maxBatchGas = MAX_BATCH_GAS,
     confirmations = 1,
     receiptTimeout = 60_000,
     cycleTimeout = 120_000,
@@ -208,6 +212,9 @@ export async function runKeeperCycle<
   try {
     if (!Number.isSafeInteger(batchSize) || batchSize < 1) {
       throw new Error(`batchSize must be a positive integer, got ${batchSize}`);
+    }
+    if (maxBatchGas < 1n) {
+      throw new Error(`maxBatchGas must be positive, got ${maxBatchGas}`);
     }
 
     // Pin the enumeration to one block: the active index is a swap-and-pop
@@ -334,14 +341,24 @@ export async function runKeeperCycle<
   /**
    * Trigger the head of `pending`, as many as one transaction takes, and read
    * back each volume's outcome.
+   *
+   * A batch whose limit is above `maxBatchGas` is cut to the share of it that
+   * fits, in proportion to its gas and by at least one volume, and estimated
+   * again. A single volume is sent whatever its limit.
    */
   async function sendBatch(pending: VolumeView[]): Promise<VolumeResult[]> {
-    const batch = pending.slice(0, batchSize);
-    const volumeIds = batch.map((v) => v.volumeId);
+    let batch = pending.slice(0, batchSize);
+    let volumeIds = batch.map((v) => v.volumeId);
 
     let gas: bigint;
     try {
       gas = await estimateTriggerGas(client, { registry, volumeIds });
+      while (gas > maxBatchGas && batch.length > 1) {
+        const fits = Number((BigInt(batch.length) * maxBatchGas) / gas);
+        batch = batch.slice(0, Math.max(1, Math.min(batch.length - 1, fits)));
+        volumeIds = batch.map((v) => v.volumeId);
+        gas = await estimateTriggerGas(client, { registry, volumeIds });
+      }
     } catch (err) {
       const error = `gas estimation failed: ${revertReason(err as Error)}`;
       return volumeIds.map((volumeId) => ({ volumeId, status: "failed" as const, error }));

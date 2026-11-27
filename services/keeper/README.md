@@ -1,6 +1,6 @@
 # keeper
 
-The Swarm `VolumeRegistry` keeper: one Cloudflare Worker per registry deployment. Each scheduled run enumerates the registry's active volumes, sends them through the batched `trigger(bytes32[])`, up to 8 to a transaction, and reports what the contract did to each. A batch reverts as a whole when any of its volumes does ([ADR-0007](../../docs/adr/0007-keeper-endpoints-revert-only-on-bugs.md)), so each batch's gas is estimated before it is sent, and a batch whose estimate reverts is reported with the decoded reason and not sent.
+The Swarm `VolumeRegistry` keeper: one Cloudflare Worker per registry deployment. Each scheduled run enumerates the registry's active volumes, sends them through the batched `trigger(bytes32[])`, up to 8 and 4M gas to a transaction, and reports what the contract did to each. A batch reverts as a whole when any of its volumes does ([ADR-0007](../../docs/adr/0007-keeper-endpoints-revert-only-on-bugs.md)), so each batch's gas is estimated before it is sent, and a batch whose estimate reverts is reported with the decoded reason and not sent.
 
 Cloudflare Cron Triggers are the only scheduler. GitHub Actions tests the Worker on every PR, and `keeper-deploy.yml` deploys every env in `wrangler.jsonc` when a keeper change merges to `main`.
 
@@ -43,7 +43,7 @@ Secrets, per deployment — never shared between them:
 
 | | |
 |---|---|
-| `PRIVATE_KEY` | The keeper wallet, one per deployment, created and funded by `scripts/new_wallet.py`. It only pays gas: fund it with Sepolia ETH or xDAI and nothing else. Every batch is sent with twice its gas estimate plus 1M per volume, capped at 2^24. It pays only for the gas it uses, but the node wants the whole limit covered at the fee cap (twice the base fee) up front. |
+| `PRIVATE_KEY` | The keeper wallet, one per deployment, created and funded by `scripts/new_wallet.py`. It only pays gas: fund it with Sepolia ETH or xDAI and nothing else. Every batch is sent with its `pending` gas estimate plus 5%, at most 4M unless a single volume needs more. It pays only for the gas it uses, but the node wants the whole limit covered at the fee cap (twice the base fee) up front. |
 | `RPC_URL` | Comma-separated, from independent providers. Probed every run — chain id included — and tried in order. |
 | `TELEGRAM_BOT_TOKEN` | From @BotFather. |
 | `TELEGRAM_CHAT_ID` | Numeric user or private-group chat ID. Deployments may post to the same group, but store it independently. |
@@ -54,7 +54,7 @@ Variables, in `wrangler.jsonc` per env: `DEPLOYMENT_NAME`, `CHAIN_ID`, `REGISTRY
 
 **A run must fit inside its cron interval**, so two runs never share the wallet at once: 5 s of RPC probing, plus `CYCLE_TIMEOUT_MS` (no new transaction starts after it), plus `RECEIPT_TIMEOUT_MS` for the last one, plus 5 s of slack. `test/config.test.ts` holds each env to that, and to the 15-minute Cron Trigger limit. On Sepolia that is up to 7 minutes of new transactions, roughly 35 at 12 s blocks, and up to 2 minutes for each receipt. Transactions are sent one at a time, each with up to 8 volumes, so a run reaches roughly `8 × CYCLE_TIMEOUT_MS / block time` volumes, capped at 30 by `MAX_VOLUMES_PER_CYCLE`. The rest are deferred, with a warning, and each run starts at a different point in the list so the same volumes are not deferred every time. If the active set outgrows that, raise the budget.
 
-Every RPC request counts against the platform's per-invocation subrequest cap: 50 on Workers Free, 10,000 on Workers Paid. A run spends about 20 on fixed work (probing each endpoint twice, enumeration, nonce and fees once per cycle, the balance check, the alert), then several per transaction: its gas estimate, its send, and the receipt wait. On Workers Free, when each volume took its own transaction, runs reached about 3 volumes, whatever `CYCLE_TIMEOUT_MS` allowed.
+Every RPC request counts against the platform's per-invocation subrequest cap: 50 on Workers Free, 10,000 on Workers Paid. A run spends about 20 on fixed work (probing each endpoint twice, enumeration, nonce and fees once per cycle, the balance check, the alert), then several per transaction: its gas estimate (one more each time a batch over 4M is cut down), its send, and the receipt wait. On Workers Free, when each volume took its own transaction, runs reached about 3 volumes, whatever `CYCLE_TIMEOUT_MS` allowed.
 
 ## Setting up a deployment
 

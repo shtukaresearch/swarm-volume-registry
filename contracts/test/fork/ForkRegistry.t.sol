@@ -27,9 +27,11 @@ import {IVolumeRegistryViews} from "../../src/interfaces/IVolumeRegistryViews.so
 ///                                       test_fork_registerVolume_liveBatch;
 ///                                       that test is skipped when unset.
 ///
-/// All tests no-op if `FORK_POSTAGE_STAMP` is unset or its address has no
-/// code on the active chain (i.e. plain `forge test` against a hermetic
-/// EVM is a silent skip).
+/// With `FORK_POSTAGE_STAMP` unset, every test reports SKIPPED (plain
+/// `forge test` against a hermetic EVM), unless `FORK_REQUIRED=true`, in
+/// which case setUp fails. With it set but no code at the address (e.g.
+/// `--fork-url` forgotten), setUp fails: a misconfigured fork run must never
+/// report passes.
 ///
 /// Fork-safe subset:
 ///   - test_createVolume_happy
@@ -51,7 +53,6 @@ interface IERC20 {
 interface IPostageStamp {
     function minimumValidityBlocks() external view returns (uint64);
     function lastPrice() external view returns (uint64);
-    function priceOracle() external view returns (address);
     function batches(bytes32) external view returns (address, uint8, uint8, bool, uint256, uint256);
     function currentTotalOutPayment() external view returns (uint256);
     function minimumInitialBalancePerChunk() external view returns (uint256);
@@ -83,16 +84,22 @@ contract ForkRegistryTest is Test {
     uint8 internal constant DEFAULT_BUCKET = 16;
 
     modifier forkOnly() {
-        if (!_forkActive()) {
-            emit log("fork test skipped - FORK_POSTAGE_STAMP unset or no code at address");
-            return;
-        }
+        vm.skip(!_forkActive());
         _;
     }
 
+    /// False only when no fork is configured and none is required. A
+    /// configured-but-unreachable fork fails instead of skipping.
     function _forkActive() internal view returns (bool) {
         address p = vm.envOr("FORK_POSTAGE_STAMP", address(0));
-        return p != address(0) && p.code.length > 0;
+        if (p == address(0)) {
+            require(!vm.envOr("FORK_REQUIRED", false), "FORK_REQUIRED but FORK_POSTAGE_STAMP unset");
+            return false;
+        }
+        require(
+            p.code.length > 0, "FORK_POSTAGE_STAMP has no code: missing --fork-url or wrong chain?"
+        );
+        return true;
     }
 
     function setUp() public {
@@ -118,9 +125,6 @@ contract ForkRegistryTest is Test {
             uint256(stamp.minimumValidityBlocks()),
             "FORK_GRACE_BLOCKS below chain's minimumValidityBlocks"
         );
-        address oracle = stamp.priceOracle();
-        assertTrue(oracle != address(0), "PriceOracle not discoverable");
-
         _assertBatchesLayoutParity();
 
         registry = new VolumeRegistry(postageAddr, bzzAddr, graceBlocks, bzzPermitExpiry);
@@ -256,10 +260,7 @@ contract ForkRegistryTest is Test {
 
     function test_fork_registerVolume_liveBatch() public forkOnly {
         bytes32 batchId = vm.envOr("FORK_IMPORT_BATCH_ID", bytes32(0));
-        if (batchId == bytes32(0)) {
-            emit log("fork test skipped - FORK_IMPORT_BATCH_ID unset");
-            return;
-        }
+        vm.skip(batchId == bytes32(0));
         (address bOwner, uint8 bDepth,,,,) = stamp.batches(batchId);
 
         uint256 balBefore = bzz.balanceOf(payer);

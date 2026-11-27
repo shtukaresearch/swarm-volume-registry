@@ -30,7 +30,7 @@ VolumeLifecycle.t.sol           createVolume and deleteVolume; constructor floor
 VolumeRegister.t.sol            registerVolume: snapshot from Postage, preconditions, re-registration
 fixtures/                       shared base fixture and vendored token bytecode (see fixtures/README.md)
 invariants/                     fuzzed I3, I8, I9, I14 through one shared handler (see invariants/README.md)
-fork/                           parity checks against a live chain (see fork/README.md)
+fork/                           parity checks and v1 → v2 migration against a live chain (see fork/README.md)
 ```
 
 ## Strategy
